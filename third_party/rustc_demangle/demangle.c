@@ -7,7 +7,6 @@
 #include <stddef.h>
 #include <string.h>
 #include <stdbool.h>
-#include <sys/param.h>
 #include <stdio.h>
 
 #include "demangle.h"
