@@ -114,6 +114,12 @@ if(WIN32)
   set(PECONV_LIB_INSTALL OFF CACHE BOOL "" FORCE)
   set(PECONV_LOG_VERBOSITY "NONE" CACHE STRING "" FORCE)
   add_subdirectory(third_party/libpeconv)
+  if(MSVC)
+    # Keep libPeConv on the same CRT and TCHAR ABI as the product target.
+    # Otherwise MSVC sees /MD vs /MT and char vs wchar_t symbol mismatches.
+    set_property(TARGET libpeconv PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_definitions(libpeconv PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+  endif()
   target_link_libraries(auto_refirst PRIVATE libpeconv shell32)
   target_include_directories(auto_refirst PRIVATE third_party/libpeconv/include)
 endif()
