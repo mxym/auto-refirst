@@ -99,7 +99,7 @@ def provenance_gate() -> None:
     for path in PUBLIC_FIXTURES:
         assert path in rows, f"missing P0 provenance row: {path}"
         assert rows[path]["public_ci_allowed"].lower()=="true", (path,rows[path])
-    log("[PASS P0] public fixture provenance + redistribution gate + SHA-256")
+    log("[PASS P0] public fixture provenance: 9 source-backed rows + SHA-256")
 
 def p0_formats(binary: pathlib.Path, td: pathlib.Path) -> None:
     pe=td/"minimal-pe.bin"; pe.write_bytes(minimal_pe())
