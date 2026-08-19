@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+ZIG=${ZIG:-zig}
+exec "$ZIG" cc -target x86_64-windows-gnu "$@"

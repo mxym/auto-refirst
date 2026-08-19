@@ -1,0 +1,41 @@
+name: ci-linux
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  public-core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CC: gcc-13
+      CXX: g++-13
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Record toolchain
+        run: |
+          cmake --version
+          "$CC" --version
+          "$CXX" --version
+          git rev-parse HEAD
+      - name: Configure Release
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Public P0/P1 regression
+        run: python3 tests/run_public_regression.py --binary build/auto-refirst
+      - name: Directory resource contract
+        run: python3 tests/test_bounded_directory_output.py build/auto-refirst
+      - name: Directory orchestration
+        run: python3 tests/test_directory_orchestration.py build/auto-refirst
+      - name: Runtime authorization boundary
+        run: python3 tests/test_runtime_authorization.py build/auto-refirst

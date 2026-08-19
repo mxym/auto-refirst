@@ -1,0 +1,410 @@
+#include "peconv/imports_loader.h"
+
+#include "peconv/util.h"
+#include "peconv/logger.h"
+
+using namespace peconv;
+
+class FillImportThunks : public ImportThunksCallback
+{
+public:
+    FillImportThunks(BYTE* _modulePtr, size_t _moduleSize, t_function_resolver* func_resolver)
+        : ImportThunksCallback(_modulePtr, _moduleSize), funcResolver(func_resolver)
+    {
+    }
+
+    virtual bool processThunks(LPSTR lib_name, ULONG_PTR origFirstThunkPtr, ULONG_PTR firstThunkPtr)
+    {
+        if (this->is64b) {
+#ifdef _WIN64 // loader is 64 bit, allow to load imports for 64-bit payload:
+            IMAGE_THUNK_DATA64* desc = reinterpret_cast<IMAGE_THUNK_DATA64*>(origFirstThunkPtr);
+            ULONGLONG* call_via = reinterpret_cast<ULONGLONG*>(firstThunkPtr);
+            return processThunks_tpl<ULONGLONG, IMAGE_THUNK_DATA64>(lib_name, desc, call_via, IMAGE_ORDINAL_FLAG64);
+#else
+            LOG_ERROR("Cannot fill imports into 64-bit PE via 32-bit loader.");
+            return false;
+#endif
+        }
+        else {
+#ifndef _WIN64 // loader is 32 bit, allow to load imports for 32-bit payload:
+            IMAGE_THUNK_DATA32* desc = reinterpret_cast<IMAGE_THUNK_DATA32*>(origFirstThunkPtr);
+            DWORD* call_via = reinterpret_cast<DWORD*>(firstThunkPtr);
+            return processThunks_tpl<DWORD, IMAGE_THUNK_DATA32>(lib_name, desc, call_via, IMAGE_ORDINAL_FLAG32);
+#else
+            LOG_ERROR("Cannot fill imports into 32-bit PE via 64-bit loader.");
+            return false;
+#endif 
+        }
+    }
+
+protected:
+    template <typename T_FIELD, typename T_IMAGE_THUNK_DATA>
+    bool processThunks_tpl(LPSTR lib_name, T_IMAGE_THUNK_DATA* desc, T_FIELD* call_via, T_FIELD ordinal_flag)
+    {
+        static_assert(sizeof(T_FIELD) >= sizeof(ULONG_PTR), "T_FIELD must be wide enough to hold a function pointer");
+        
+        if (!this->funcResolver) {
+            return false;
+        }
+
+        const bool is_by_ord = (desc->u1.Ordinal & ordinal_flag) != 0;
+
+        FARPROC hProc = nullptr;
+        if (is_by_ord) {
+            T_FIELD raw_ordinal = desc->u1.Ordinal & (~ordinal_flag);
+            LOG_DEBUG("raw ordinal: 0x%llx.", (unsigned long long)raw_ordinal);
+            hProc = funcResolver->resolve_func(lib_name, MAKEINTRESOURCEA(static_cast<WORD>(raw_ordinal)));
+
+        }
+        else {
+            PIMAGE_IMPORT_BY_NAME by_name = (PIMAGE_IMPORT_BY_NAME)((ULONGLONG)modulePtr + desc->u1.AddressOfData);
+            if (!validate_ptr(modulePtr, moduleSize, by_name, sizeof(IMAGE_IMPORT_BY_NAME))) {
+                LOG_ERROR("Invalid pointer to IMAGE_IMPORT_BY_NAME.");
+                return false;
+            }
+            const LPSTR func_name = reinterpret_cast<LPSTR>(by_name->Name);
+            if (!is_valid_string(modulePtr, moduleSize, func_name)) {
+                LOG_ERROR("Invalid pointer to function name.");
+                return false;
+            }
+            LOG_DEBUG("name: %s.", func_name);
+            hProc = this->funcResolver->resolve_func(lib_name, func_name);
+        }
+        if (!hProc) {
+            LOG_ERROR("Could not resolve the function.");
+            return false;
+        }
+
+        (*call_via) = reinterpret_cast<T_FIELD>(hProc);
+        return true;
+    }
+
+    //fields:
+    t_function_resolver* funcResolver;
+};
+
+//---
+
+/**
+A class defining a callback that collects all the Import Thunks
+*/
+class CollectThunksCallback : public peconv::ImportThunksCallback
+{
+public:
+    CollectThunksCallback(BYTE* _vBuf, size_t _vBufSize, std::set<DWORD>& _fields)
+        : ImportThunksCallback(_vBuf, _vBufSize), vBuf(_vBuf), vBufSize(_vBufSize),
+        fields(_fields)
+    {
+    }
+
+    virtual bool processThunks(LPSTR libName, ULONG_PTR origFirstThunkPtr, ULONG_PTR va)
+    {
+        if (!va) {
+            return false; // invalid thunk
+        }
+        const ULONGLONG module_base = reinterpret_cast<ULONGLONG>(this->vBuf);
+        if (va < module_base) {
+            return false; // not this module
+        }
+        if (va >= module_base + this->vBufSize) {
+            return false; // not this module
+        }
+        DWORD thunk_rva = MASK_TO_DWORD(va - module_base);
+        fields.insert(thunk_rva);
+        return true;
+    }
+
+    std::set<DWORD>& fields;
+    BYTE* vBuf;
+    size_t vBufSize;
+};
+
+//---
+
+class CollectImportsCallback : public ImportThunksCallback
+{
+public:
+    CollectImportsCallback(BYTE* _modulePtr, size_t _moduleSize, std::map<DWORD, ExportedFunc*> &_thunkToFunc)
+        : ImportThunksCallback(_modulePtr, _moduleSize), thunkToFunc(_thunkToFunc)
+    {
+    }
+
+    virtual bool processThunks(LPSTR lib_name, ULONG_PTR origFirstThunkPtr, ULONG_PTR firstThunkPtr)
+    {
+        if (this->is64b) {
+            IMAGE_THUNK_DATA64* desc = reinterpret_cast<IMAGE_THUNK_DATA64*>(origFirstThunkPtr);
+            ULONGLONG* call_via = reinterpret_cast<ULONGLONG*>(firstThunkPtr);
+            return processThunks_tpl<ULONGLONG, IMAGE_THUNK_DATA64>(lib_name, desc, call_via, IMAGE_ORDINAL_FLAG64);
+
+        }
+        else {
+
+            IMAGE_THUNK_DATA32* desc = reinterpret_cast<IMAGE_THUNK_DATA32*>(origFirstThunkPtr);
+            DWORD* call_via = reinterpret_cast<DWORD*>(firstThunkPtr);
+            return processThunks_tpl<DWORD, IMAGE_THUNK_DATA32>(lib_name, desc, call_via, IMAGE_ORDINAL_FLAG32);
+        }
+    }
+
+protected:
+    template <typename T_FIELD, typename T_IMAGE_THUNK_DATA>
+    bool processThunks_tpl(LPSTR lib_name, T_IMAGE_THUNK_DATA* desc, T_FIELD* call_via, T_FIELD ordinal_flag)
+    {
+        if (!call_via) {
+            return false;
+        }
+
+        const std::string short_name = peconv::get_dll_shortname(lib_name);
+        const bool is_by_ord = (desc->u1.Ordinal & ordinal_flag) != 0;
+        ExportedFunc *func = nullptr;
+
+        if (is_by_ord) {
+            T_FIELD raw_ordinal = desc->u1.Ordinal & (~ordinal_flag);
+            func = new ExportedFunc(short_name, IMAGE_ORDINAL64(raw_ordinal));
+        }
+        else {
+            PIMAGE_IMPORT_BY_NAME by_name = (PIMAGE_IMPORT_BY_NAME)((ULONGLONG)modulePtr + desc->u1.AddressOfData);
+            if (!validate_ptr(modulePtr, moduleSize, by_name, sizeof(IMAGE_IMPORT_BY_NAME))) {
+                LOG_ERROR("Invalid pointer to IMAGE_IMPORT_BY_NAME.");
+                return false;
+            }
+            const LPSTR func_name = reinterpret_cast<LPSTR>(by_name->Name);
+            if (!is_valid_string(modulePtr, moduleSize, func_name)) {
+                LOG_ERROR("Invalid pointer to function name.");
+                return false;
+            }
+            const WORD ordinal = by_name->Hint;
+            func = new ExportedFunc(short_name, func_name, ordinal);
+        }
+        if (!func) {
+            return false;
+        }
+        const DWORD rva = MASK_TO_DWORD((ULONG_PTR)call_via - (ULONG_PTR)modulePtr);
+        thunkToFunc[rva] = func;
+        return true;
+    }
+
+    std::map<DWORD, ExportedFunc*> &thunkToFunc;
+};
+
+
+//---
+
+template <typename T_FIELD, typename T_IMAGE_THUNK_DATA>
+bool process_imp_functions_tpl(BYTE* modulePtr, size_t module_size, LPSTR lib_name, DWORD call_via, DWORD thunk_addr, IN ImportThunksCallback *callback)
+{
+    static_assert(sizeof(T_FIELD) == sizeof(T_IMAGE_THUNK_DATA),"T_FIELD and T_IMAGE_THUNK_DATA must have the same size");
+
+    bool is_ok = true;
+
+    T_FIELD *thunks = (T_FIELD*)((ULONGLONG)modulePtr + thunk_addr);
+    T_FIELD *callers = (T_FIELD*)((ULONGLONG)modulePtr + call_via);
+
+    for (size_t index = 0; true; index++) {
+        T_IMAGE_THUNK_DATA* desc = reinterpret_cast<T_IMAGE_THUNK_DATA*>((LPVOID) &thunks[index]);
+        if (!validate_ptr(modulePtr, module_size, desc, sizeof(T_IMAGE_THUNK_DATA))) {
+            is_ok = false;
+            break;
+        }
+        if (desc->u1.Function == 0) {
+            LOG_DEBUG("Desc[%d], RVA = 0x%llx is empty. Finishing.", (int)index, (unsigned long long)((ULONG_PTR)&desc->u1.Function - (ULONG_PTR)modulePtr) );
+            // Probably the last record
+            break;
+        }
+        if (!validate_ptr(modulePtr, module_size, &callers[index], sizeof(T_FIELD))) {
+            is_ok = false;
+            break;
+        }
+        T_FIELD ordinal_flag = (sizeof(T_FIELD) == sizeof(ULONGLONG)) ? IMAGE_ORDINAL_FLAG64 : IMAGE_ORDINAL_FLAG32;
+        bool is_by_ord = (desc->u1.Ordinal & ordinal_flag) != 0;
+        if (!is_by_ord) {
+            PIMAGE_IMPORT_BY_NAME by_name = (PIMAGE_IMPORT_BY_NAME)((ULONGLONG)modulePtr + desc->u1.AddressOfData);
+            if (!validate_ptr(modulePtr, module_size, by_name, sizeof(IMAGE_IMPORT_BY_NAME))) {
+                is_ok = false;
+                break;
+            }
+        }
+        // Basic thunk/caller pointers are verified here.
+        // Callback may perform deeper validation of import-specific data such as names.
+        if (callback && !callback->processThunks(lib_name, (ULONG_PTR)&thunks[index], (ULONG_PTR)&callers[index])) {
+            is_ok = false;
+        }
+    }
+    return is_ok;
+}
+
+//Walk through the table of imported DLLs (starting from the given descriptor) and execute the callback each time when the new record was found
+bool process_dlls(BYTE* modulePtr, size_t module_size, IMAGE_IMPORT_DESCRIPTOR *first_desc, IN ImportThunksCallback *callback)
+{
+    bool isAllFilled = true;
+    LOG_DEBUG("---IMP---");
+    const bool is64 = is64bit((BYTE*)modulePtr);
+    IMAGE_IMPORT_DESCRIPTOR* lib_desc = nullptr;
+
+    for (size_t i = 0; true; i++) {
+        lib_desc = &first_desc[i];
+        if (!validate_ptr(modulePtr, module_size, lib_desc, sizeof(IMAGE_IMPORT_DESCRIPTOR))) {
+            break;
+        }
+        if (!lib_desc->OriginalFirstThunk && !lib_desc->FirstThunk) {
+            break;
+        }
+        LPSTR lib_name = (LPSTR)((ULONGLONG)modulePtr + lib_desc->Name);
+        if (!peconv::is_valid_import_name(modulePtr, module_size, lib_name)) {
+            //invalid name
+            return false;
+        }
+        DWORD call_via = lib_desc->FirstThunk;
+        DWORD thunk_addr = lib_desc->OriginalFirstThunk;
+        if (!thunk_addr) {
+            thunk_addr = lib_desc->FirstThunk;
+        }
+        LOG_DEBUG("Imported Lib: 0x%lx : 0x%lx : 0x%lx", lib_desc->FirstThunk, lib_desc->OriginalFirstThunk, lib_desc->Name);
+        bool all_solved = false;
+        if (is64) {
+            all_solved = process_imp_functions_tpl<ULONGLONG, IMAGE_THUNK_DATA64>(modulePtr, module_size, lib_name, call_via, thunk_addr, callback);
+        }
+        else {
+            all_solved = process_imp_functions_tpl<DWORD, IMAGE_THUNK_DATA32>(modulePtr, module_size, lib_name, call_via, thunk_addr, callback);
+        }
+        if (!all_solved) {
+            isAllFilled = false;
+        }
+    }
+    LOG_DEBUG("---------");
+    return isAllFilled;
+}
+
+bool peconv::process_import_table(IN BYTE* modulePtr, IN SIZE_T moduleSize, IN ImportThunksCallback *callback)
+{
+    if (moduleSize == 0) { //if not given, try to fetch
+        moduleSize = peconv::get_image_size((const BYTE*)modulePtr);
+    }
+    if (moduleSize == 0) return false;
+
+    IMAGE_DATA_DIRECTORY *importsDir = get_directory_entry((BYTE*)modulePtr, IMAGE_DIRECTORY_ENTRY_IMPORT);
+    if (!importsDir) {
+        return true; //no import table
+    }
+    const DWORD impAddr = importsDir->VirtualAddress;
+    IMAGE_IMPORT_DESCRIPTOR *first_desc = (IMAGE_IMPORT_DESCRIPTOR*)(impAddr + (ULONG_PTR)modulePtr);
+    if (!peconv::validate_ptr(modulePtr, moduleSize, first_desc, sizeof(IMAGE_IMPORT_DESCRIPTOR))) {
+        return false;
+    }
+    return process_dlls(modulePtr, moduleSize, first_desc, callback);
+}
+
+bool peconv::load_imports(BYTE* modulePtr, t_function_resolver* func_resolver)
+{
+    size_t moduleSize = peconv::get_image_size((const BYTE*)modulePtr);
+    if (moduleSize == 0) return false;
+
+    bool is64 = is64bit((BYTE*)modulePtr);
+    bool is_loader64 = false;
+#ifdef _WIN64
+    is_loader64 = true;
+#endif
+    if (is64 != is_loader64) {
+        LOG_ERROR("Loader/Payload bitness mismatch.");
+        return false;
+    }
+
+    default_func_resolver default_res;
+    if (!func_resolver) {
+        func_resolver = &default_res;
+    }
+
+    FillImportThunks callback(modulePtr, moduleSize, func_resolver);
+    return peconv::process_import_table(modulePtr, moduleSize, &callback);
+}
+
+// A valid name must contain printable characters. Empty name is also acceptable (may have been erased)
+bool peconv::is_valid_import_name(const PBYTE modulePtr, const size_t moduleSize, LPSTR lib_name)
+{
+    bool is_terminated = false;
+    for (size_t i = 0; i < MAX_PATH; i++) {
+        if (!peconv::validate_ptr(modulePtr, moduleSize, lib_name, sizeof(char))) {
+            return false;
+        }
+        char next_char = *lib_name;
+        if (next_char == '\0') {
+            is_terminated = true;
+            break;
+        }
+        if (next_char < 0x20 || next_char >= 0x7E) {
+            return false;
+        }
+        lib_name++;
+    }
+    return is_terminated;
+}
+
+namespace {
+    template <typename FIELD_T>
+    bool _has_valid_import_table(const PBYTE modulePtr, size_t moduleSize, size_t maxCount = 0)
+    {
+        IMAGE_DATA_DIRECTORY* importsDir = get_directory_entry((BYTE*)modulePtr, IMAGE_DIRECTORY_ENTRY_IMPORT);
+        if (!importsDir) return false;
+
+        const DWORD impAddr = importsDir->VirtualAddress;
+        if (impAddr == 0 || impAddr >= moduleSize) {
+            return false;
+        }
+        IMAGE_IMPORT_DESCRIPTOR* lib_desc = nullptr;
+        size_t parsedSize = 0;
+        size_t valid_records = 0;
+        
+        bool is_terminated = false;
+        while (parsedSize < moduleSize) { // import table size doesn't matter
+
+            if (maxCount != 0 && valid_records >= maxCount) {
+                break; // break when the hardlimit was hit
+            }
+            lib_desc = (IMAGE_IMPORT_DESCRIPTOR*)((ULONG_PTR)impAddr + parsedSize + (ULONG_PTR)modulePtr);
+            if (!peconv::validate_ptr(modulePtr, moduleSize, lib_desc, sizeof(IMAGE_IMPORT_DESCRIPTOR))) {
+                return false;
+            }
+            parsedSize += sizeof(IMAGE_IMPORT_DESCRIPTOR);
+
+            if (!lib_desc->OriginalFirstThunk && !lib_desc->FirstThunk) {
+                is_terminated = true;
+                break;
+            }
+            LPSTR lib_name = (LPSTR)((ULONGLONG)modulePtr + lib_desc->Name);
+            if (!is_valid_import_name(modulePtr, moduleSize, lib_name)) return false;
+
+            DWORD call_via = lib_desc->FirstThunk;
+            DWORD thunk_addr = lib_desc->OriginalFirstThunk;
+            if (!thunk_addr) thunk_addr = lib_desc->FirstThunk;
+
+            FIELD_T* thunks = (FIELD_T*)((ULONGLONG)modulePtr + thunk_addr);
+            if (!peconv::validate_ptr(modulePtr, moduleSize, thunks, sizeof(FIELD_T))) return false;
+
+            FIELD_T* callers = (FIELD_T*)((ULONGLONG)modulePtr + call_via);
+            if (!peconv::validate_ptr(modulePtr, moduleSize, callers, sizeof(FIELD_T))) return false;
+
+            valid_records++;
+        }
+        return is_terminated && (valid_records > 0);
+    }
+};
+
+bool peconv::has_valid_import_table(const PBYTE modulePtr, size_t moduleSize, size_t maxCount)
+{
+    if (peconv::is64bit(modulePtr)) {
+        return _has_valid_import_table<ULONGLONG>(modulePtr, moduleSize, maxCount);
+    }
+    return _has_valid_import_table<DWORD>(modulePtr, moduleSize, maxCount);
+}
+
+bool peconv::collect_thunks(IN BYTE* modulePtr, IN SIZE_T moduleSize, OUT std::set<DWORD>& thunk_rvas)
+{
+    CollectThunksCallback collector(modulePtr, moduleSize, thunk_rvas);
+    return peconv::process_import_table(modulePtr, moduleSize, &collector);
+}
+
+bool peconv::collect_imports(IN BYTE* modulePtr, IN SIZE_T moduleSize, OUT ImportsCollection &collection)
+{
+    CollectImportsCallback collector(modulePtr, moduleSize, collection.thunkToFunc);
+    return peconv::process_import_table(modulePtr, moduleSize, &collector);
+}
+

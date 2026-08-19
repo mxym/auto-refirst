@@ -1,0 +1,80 @@
+name: Bug report
+description: Report a reproducible correctness, parsing, CLI, or runtime problem
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Do not file security vulnerabilities here**; follow `SECURITY.md` and use GitHub Private Vulnerability Reporting when available.
+        Do not upload private, sensitive, malware-corpus, or copyrighted challenge attachments unless you have the right to redistribute them. Prefer a synthetic/minimal reproducer and sanitized JSON/text excerpts.
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Paste `auto-refirst --version` output or the exact commit.
+      placeholder: "0.1.0-alpha.1 / git_commit=..."
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and architecture
+      placeholder: "Ubuntu 24.04 x86-64 / Windows 11 x64"
+    validations:
+      required: true
+  - type: input
+    id: input_format
+    attributes:
+      label: Input format / ecosystem
+      description: Describe the format without attaching the original file unless redistribution is authorized.
+      placeholder: "PE64, ELF64, APK, PyInstaller, unknown binary..."
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Runtime authorization used
+      options:
+        - "Static only (no --run)"
+        - "--run"
+        - "--run --apply"
+        - "Deprecated compatibility runtime option"
+        - "Not sure"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Include the exact command and, when possible, steps/source to generate a redistributable minimal fixture.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: excerpt
+    attributes:
+      label: Sanitized JSON / text excerpt
+      description: Include only the relevant fields/logs. Remove credentials, private paths, secrets, and non-redistributable content.
+      render: text
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: checkboxes
+    id: rights
+    attributes:
+      label: Sample/privacy check
+      options:
+        - label: I have not attached material I lack the right to redistribute, and I removed secrets/private data from excerpts.
+          required: true
+        - label: This is not a security vulnerability. If it is, I will follow SECURITY.md instead of a public issue.
+          required: true

@@ -1,0 +1,61 @@
+#include "peconv/load_config_util.h"
+#include "peconv/pe_hdrs_helper.h"
+
+BYTE* peconv::get_load_config_ptr(BYTE* buffer, size_t buf_size)
+{
+    if (!buffer || !buf_size) return nullptr;
+    IMAGE_DATA_DIRECTORY* dir = peconv::get_directory_entry(buffer, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG);
+    if (!dir) {
+        return 0;
+    }
+    DWORD entry_rva = dir->VirtualAddress;
+    DWORD entry_size = dir->Size;
+    if (!peconv::validate_ptr(buffer, buf_size, buffer + entry_rva, entry_size)) {
+        return 0;
+    }
+    IMAGE_LOAD_CONFIG_DIRECTORY32* ldc = reinterpret_cast<IMAGE_LOAD_CONFIG_DIRECTORY32*>((ULONG_PTR)buffer + entry_rva);
+    return reinterpret_cast<BYTE*>(ldc);
+}
+
+peconv::t_load_config_ver peconv::get_load_config_version(BYTE* buffer, size_t buf_size, void* ld_config_ptr)
+{
+    if (!buffer || !buf_size || !ld_config_ptr) {
+        return peconv::LOAD_CONFIG_NONE;
+    }
+    if (!peconv::validate_ptr(buffer, buf_size, ld_config_ptr, sizeof(DWORD))) {
+        return peconv::LOAD_CONFIG_NONE;
+    }
+
+    DWORD* size_ptr = static_cast<DWORD*>(ld_config_ptr);
+    const size_t curr_size = (*size_ptr);
+    if (curr_size == 0) {
+        return peconv::LOAD_CONFIG_NONE;
+    }
+    if (!peconv::validate_ptr(buffer, buf_size, ld_config_ptr, curr_size)) {
+        return LOAD_CONFIG_UNK_VER;
+    }
+    const bool is64b = peconv::is64bit(buffer);
+    if (is64b) {
+        if (curr_size >= sizeof(peconv::IMAGE_LOAD_CONFIG_DIR64_W10)) {
+            return peconv::LOAD_CONFIG_W10_VER;
+        }
+        if (curr_size >= sizeof(peconv::IMAGE_LOAD_CONFIG_DIR64_W8)) {
+            return peconv::LOAD_CONFIG_W8_VER;
+        }
+        if (curr_size >= sizeof(peconv::IMAGE_LOAD_CONFIG_DIR64_W7)) {
+            return peconv::LOAD_CONFIG_W7_VER;
+        }
+    }
+    else {
+        if (curr_size >= sizeof(peconv::IMAGE_LOAD_CONFIG_DIR32_W10)) {
+            return peconv::LOAD_CONFIG_W10_VER;
+        }
+        if (curr_size >= sizeof(peconv::IMAGE_LOAD_CONFIG_DIR32_W8)) {
+            return peconv::LOAD_CONFIG_W8_VER;
+        }
+        if (curr_size >= sizeof(peconv::IMAGE_LOAD_CONFIG_DIR32_W7)) {
+            return peconv::LOAD_CONFIG_W7_VER;
+        }
+    }
+    return LOAD_CONFIG_UNK_VER;
+}

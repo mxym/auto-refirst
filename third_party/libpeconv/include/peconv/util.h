@@ -1,0 +1,85 @@
+/**
+* @file
+* @brief   Miscellaneous utility functions.
+*/
+
+#pragma once
+#include <limits>
+
+#include "file_util.h"
+#include "resource_util.h"
+
+namespace peconv {
+    /**
+    Checks if the given buffer is fully filled with the specified character.
+    \param cave_ptr : pointer to the buffer to be checked
+    \param cave_size : size of the buffer to be checked
+    \param padding_char : the required character
+    */
+    bool is_padding(const BYTE* cave_ptr, size_t cave_size, const BYTE padding_char);
+
+    /**
+    Wrapper for GetProcessId - for a backward compatibility with old versions of Windows
+    */
+    DWORD get_process_id(HANDLE hProcess);
+
+    /**
+    Verifies if the calling process has a defined access to the specified continuous range of memory, defined by areaStart and areaSize.
+    If the area includes pages that are not commited, or pages with access rights PAGE_GUARD | PAGE_NOACCESS, it is treated as inaccessible.
+    \param areaStart : A pointer to the first byte of the memory block
+    \param areaSize : The size of the memory block, in bytes. If this parameter is zero, the return value is false.
+    \param accessRights : The access rights to be checked
+    */
+    bool is_mem_accessible(LPCVOID areaStart, SIZE_T areaSize, DWORD accessRights);
+
+    /**
+    Verifies that the calling process has read access to the specified range of memory.
+    \param areaStart : A pointer to the first byte of the memory block
+    \param areaSize : The size of the memory block, in bytes. If this parameter is zero, the return value is true (bad pointer).
+    */
+    bool is_bad_read_ptr(LPCVOID areaStart, SIZE_T areaSize);
+
+    template <typename INT_TYPE>
+    INT_TYPE round_up_to_unit(const INT_TYPE size, const INT_TYPE unit)
+    {
+        if (unit == 0) return size;
+
+        INT_TYPE rem = size % unit;
+        if (rem == 0) return size;
+
+        const INT_TYPE addend = unit - rem;
+        if (size > (std::numeric_limits<INT_TYPE>::max)() - addend) {
+            return size;
+        }
+        return size + addend;
+    }
+
+    /**
+    Verifies if the string of specific type is within the given buffer and NULL terminated.
+    */
+    template <typename CHAR_T>
+    bool is_valid_string(LPVOID modulePtr, const size_t moduleSize, const CHAR_T* name_ptr, const size_t max_len = 260)
+    {
+        bool is_terminated = false;
+        size_t i = 0;
+        for (; i < max_len; i++) {
+            if (!peconv::validate_ptr(modulePtr, moduleSize, &name_ptr[i], sizeof(CHAR_T))) {
+                return false;
+            }
+            if (name_ptr[i] == 0) {
+                is_terminated = true;
+                break;
+            }
+        }
+        return is_terminated && (i != 0);
+    }
+
+    template <typename CHAR_T>
+    inline CHAR_T to_lowercase(CHAR_T c1)
+    {
+        if (c1 <= CHAR_T('Z') && c1 >= CHAR_T('A')) {
+            c1 = (c1 - CHAR_T('A')) + CHAR_T('a');
+        }
+        return c1;
+    }
+};

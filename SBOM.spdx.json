@@ -1,0 +1,135 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "auto-refirst 0.1.0-alpha.1 source SBOM",
+  "documentNamespace": "https://github.com/mxym/auto-refirst/spdx/0.1.0-alpha.1/5b10d501-8088-468c-9ff4-f9165ca4209b",
+  "creationInfo": {
+    "created": "2026-08-20T00:00:00Z",
+    "creators": [
+      "Tool: auto-refirst release provenance"
+    ]
+  },
+  "documentDescribes": [
+    "SPDXRef-Package-auto-refirst"
+  ],
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-auto-refirst",
+      "name": "auto-refirst",
+      "versionInfo": "0.1.0-alpha.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libPeConv",
+      "name": "libPeConv",
+      "versionInfo": "0fc25f680e03699d33ef3b2034a6724365f3d1a4",
+      "downloadLocation": "https://github.com/hasherezade/libpeconv",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-2-Clause",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-miniz",
+      "name": "miniz",
+      "versionInfo": "3.1.2@77d0dce8627735138c51770d1799a1ef48f2117d",
+      "downloadLocation": "https://github.com/richgel999/miniz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-tiny-AES-c",
+      "name": "tiny-AES-c",
+      "versionInfo": "1.0.0@23856752fbd139da0b8ca6e471a13d5bcc99a08d",
+      "downloadLocation": "https://github.com/kokke/tiny-AES-c",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Unlicense",
+      "licenseDeclared": "Unlicense",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-zstd",
+      "name": "Zstandard single-file decoder",
+      "versionInfo": "1.6.0-dev@82d322c4973d9e2968d94047a40892bc6d9a9bdf",
+      "downloadLocation": "https://github.com/facebook/zstd",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-rustc-demangle",
+      "name": "rustc-demangle native-c",
+      "versionInfo": "f36e2988643d7db47a6aa6e328cc7ffd61343651",
+      "downloadLocation": "https://github.com/rust-lang/rustc-demangle",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "licenseDeclared": "MIT OR Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Zydis",
+      "name": "Zydis",
+      "versionInfo": "4.1.1@a2278f1d254e492f6a6b39f6cb5d1f5d515659dc",
+      "downloadLocation": "https://github.com/zyantific/zydis",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Zycore",
+      "name": "Zycore-C",
+      "versionInfo": "1.5.2@0b2432ced0884fd152b471d97ecf0258ff4d859f",
+      "downloadLocation": "https://github.com/zyantific/zycore-c",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-Package-auto-refirst",
+      "relationshipType": "STATIC_LINK",
+      "relatedSpdxElement": "SPDXRef-Package-libPeConv"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-auto-refirst",
+      "relationshipType": "STATIC_LINK",
+      "relatedSpdxElement": "SPDXRef-Package-miniz"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-auto-refirst",
+      "relationshipType": "STATIC_LINK",
+      "relatedSpdxElement": "SPDXRef-Package-tiny-AES-c"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-auto-refirst",
+      "relationshipType": "STATIC_LINK",
+      "relatedSpdxElement": "SPDXRef-Package-zstd"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-auto-refirst",
+      "relationshipType": "STATIC_LINK",
+      "relatedSpdxElement": "SPDXRef-Package-rustc-demangle"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-auto-refirst",
+      "relationshipType": "STATIC_LINK",
+      "relatedSpdxElement": "SPDXRef-Package-Zydis"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Zydis",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Package-Zycore"
+    }
+  ]
+}
