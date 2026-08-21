@@ -71,6 +71,33 @@ def minimal_elf() -> bytes:
     return bytes(b)
 
 
+def lua53_long_string_chunk() -> bytes:
+    """Minimal valid Lua 5.3 chunk with strings that require the 0xff + size_t form."""
+    payload = b"L" * 300
+
+    def count(v: int) -> bytes:
+        return struct.pack("<I", v)
+
+    def long_string(raw: bytes) -> bytes:
+        # Lua 5.3 stores size including the terminating byte in the length field,
+        # while the serialized payload omits that terminator.
+        return b"\xff" + struct.pack("<Q", len(raw) + 1) + raw
+
+    header = (
+        b"\x1bLua" + bytes([0x53, 0]) + b"\x19\x93\r\n\x1a\n" +
+        bytes([4, 8, 4, 8, 8]) + struct.pack("<Q", 0x5678) + struct.pack("<d", 370.5)
+    )
+    proto = (
+        long_string(payload) + count(0) + count(0) + bytes([0, 0, 2]) +
+        count(0) +                     # code
+        count(1) + bytes([4]) + long_string(payload) +  # constants
+        count(0) +                     # upvalues
+        count(0) +                     # child protos
+        count(0) + count(0) + count(0) # lineinfo, locals, upvalue names
+    )
+    return header + bytes([0]) + proto
+
+
 def pyc310() -> bytes:
     def i32(v): return struct.pack("<i", v)
     def u32(v): return struct.pack("<I", v)
@@ -119,7 +146,13 @@ def p0_formats(binary: pathlib.Path, td: pathlib.Path) -> None:
     lua=analyze(binary,lua_path);
     assert any(f["family"]=="Lua bytecode" and f["state"]=="CONFIRMED" for f in lua["findings"])
     assert not lua["runtime"]["requested"]
-    log("[PASS P0] PE/ELF/JVM/DEX/Wasm/Lua static format smoke")
+    lua53_path=td/"lua53-long-string.luac"; lua53_path.write_bytes(lua53_long_string_chunk())
+    lua53=analyze(binary,lua53_path)
+    findings=[f for f in lua53["findings"] if f["family"]=="Lua bytecode"]
+    assert len(findings)==1 and findings[0]["state"]=="CONFIRMED", findings
+    assert findings[0]["variant"]=="5.3" and findings[0]["fields"]["prototypes"]=="1" and findings[0]["fields"]["constants"]=="1", findings[0]
+    assert not lua53["runtime"]["requested"]
+    log("[PASS P0] PE/ELF/JVM/DEX/Wasm/Lua static format smoke + Lua 5.3 long-string size_t form")
 
 
 def p0_relationship_guidance(binary: pathlib.Path, td: pathlib.Path) -> None:

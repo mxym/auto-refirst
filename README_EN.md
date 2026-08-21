@@ -40,7 +40,7 @@ Validated transactional installation additionally requires `--apply`:
 ./build/auto-refirst ./target --run --apply --json
 ```
 
-See [docs/CLI.md](docs/CLI.md) and [docs/BUILD.md](docs/BUILD.md).
+See [docs/CLI.md](docs/CLI.md), [docs/BUILD.md](docs/BUILD.md), and the maintainer [release checklist](docs/RELEASE_CHECKLIST.md).
 
 ## Capability groups
 
