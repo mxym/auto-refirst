@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Correct Lua 5.3 long-string decoding when the chunk uses the `0xff` marker followed by a full `size_t` length. The previous parser truncated that extended length to one byte and could reject otherwise valid chunks.
+
+### Maintenance
+
+- Add a maintainer release checklist covering provenance, clean builds, public and sanitizer gates, authorization/resource invariants, hosted CI, packaging, and post-publication verification.
+
 ## [0.1.0-alpha.1] - 2026-08-20
 
 Initial public alpha.

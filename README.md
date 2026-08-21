@@ -99,6 +99,7 @@ cmake --build build --parallel
 - [第三方与生成引用来源](docs/PROVENANCE.md)
 - [相关论文与成熟工具](docs/REFERENCES.md)
 - [反调试证据说明](docs/ANTI_DEBUG.md)
+- [发布检查清单](docs/RELEASE_CHECKLIST.md)
 
 ## 许可证
 
