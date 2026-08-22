@@ -18,8 +18,12 @@ void retarget_artifact_range_identity(RuntimeArtifact& artifact,const std::files
 }
 }}
 #ifdef _WIN32
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #include <tlhelp32.h>
 #include <peconv/remote_pe_reader.h>
@@ -499,7 +503,7 @@ void attach_packer_reference_context(RuntimeArtifact&a,const AnalysisReport&repo
         if(rr!=pf.fields.end())a.fields["pre_unpack_stub_reference"]=rr->second;
         if(ss!=pf.fields.end())a.fields["pre_unpack_stub_similarity"]=ss->second;
         if(rs->second=="REFERENCE_DIFF"){
-            for(const auto&r:pf.ranges){auto rr=r;rr.label="pre-unpack semantic diff: "+r.label;a.priority_ranges.push_back(std::move(rr));}
+            for(const auto&r:pf.ranges){auto priority_range=r;priority_range.label="pre-unpack semantic diff: "+r.label;a.priority_ranges.push_back(std::move(priority_range));}
             auto&ap=a.fields["analysis_priority"];if(!ap.empty())ap+="; ";ap+="inspect pre-unpack semantic-diff RVA range(s), which differ from the closest official packer stub reference";
         }else if(rs->second=="REFERENCE_MATCH"){
             auto&ap=a.fields["analysis_priority"];if(!ap.empty())ap+="; ";ap+="entry stub matches an embedded official semantic reference, so prioritize the later transition/materialization stage over marker checks";
@@ -717,7 +721,7 @@ void arm_module_runtime_api_hooks(PState&s,const std::wstring&module_path,LPVOID
     for(const auto&e:mp.exports){
         if(win32&&e.name=="GetProcAddress"&&e.forwarder.empty()&&e.rva){auto addr=reinterpret_cast<std::uintptr_t>(remote_base)+e.rva;if(set_resolver_api_hook(s,addr,ResolverApiKind::GetProcAddress,e.name,utf8(leaf)))++s.resolver_api_hooks_armed;}
         else if(native&&e.name=="LdrGetProcedureAddress"&&e.forwarder.empty()&&e.rva){auto addr=reinterpret_cast<std::uintptr_t>(remote_base)+e.rva;if(set_resolver_api_hook(s,addr,ResolverApiKind::LdrGetProcedureAddress,e.name,utf8(leaf)))++s.resolver_api_hooks_armed;}
-        MemoryApiKind kind;bool wanted=false;
+        MemoryApiKind kind=MemoryApiKind::VirtualProtect;bool wanted=false;
         if(win32&&e.name=="VirtualProtect"){kind=MemoryApiKind::VirtualProtect;wanted=true;}
         else if(win32&&e.name=="VirtualAlloc"){kind=MemoryApiKind::VirtualAlloc;wanted=true;}
         else if(win32&&e.name=="VirtualProtectEx"){kind=MemoryApiKind::VirtualProtectEx;wanted=true;}
@@ -780,7 +784,7 @@ bool handle_memory_api_return(PState&s,HANDLE thread,std::uintptr_t bpaddr,std::
     auto*target=target_state(all,probe);
     if(memory_api_unmap(probe.kind)){
         if(success&&target&&image_geometry_overlap(*target,probe.address,1)){
-            target->original_image_unmapped=true;target->original_image_unmap_base=probe.address;target->nx_ranges.clear();target->dynamic_nx_ranges.erase(std::remove_if(target->dynamic_nx_ranges.begin(),target->dynamic_nx_ranges.end(),[&](const Range&x){return image_geometry_overlap(*target,x);}),target->dynamic_nx_ranges.end());for(auto i=target->materialized_dumped.begin();i!=target->materialized_dumped.end();){const auto n=i->second>i->first?i->second-i->first:0;if(n&&image_geometry_overlap(*target,i->first,n))i=target->materialized_dumped.erase(i);else ++i;}
+            target->original_image_unmapped=true;target->original_image_unmap_base=probe.address;target->nx_ranges.clear();target->dynamic_nx_ranges.erase(std::remove_if(target->dynamic_nx_ranges.begin(),target->dynamic_nx_ranges.end(),[&](const Range&x){return image_geometry_overlap(*target,x);}),target->dynamic_nx_ranges.end());for(auto i=target->materialized_dumped.begin();i!=target->materialized_dumped.end();){const auto span_size=i->second>i->first?i->second-i->first:0;if(span_size&&image_geometry_overlap(*target,i->first,span_size))i=target->materialized_dumped.erase(i);else ++i;}
             if(auto*h=child_hollowing(s,target)){h->image_unmapped=true;h->unmap_api=probe.api;h->original_base=reinterpret_cast<std::uintptr_t>(target->base);}
         }
         return true;

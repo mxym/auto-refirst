@@ -17,7 +17,7 @@ namespace prts { namespace {
 constexpr std::uint8_t FLAG_REF=0x80;
 constexpr std::uint8_t TYPE_NULL='0',TYPE_NONE='N',TYPE_FALSE='F',TYPE_TRUE='T',TYPE_STOPITER='S',TYPE_ELLIPSIS='.';
 constexpr std::uint8_t TYPE_INT='i',TYPE_INT64='I',TYPE_FLOAT='f',TYPE_BINARY_FLOAT='g',TYPE_COMPLEX='x',TYPE_BINARY_COMPLEX='y',TYPE_LONG='l';
-constexpr std::uint8_t TYPE_STRING='s',TYPE_INTERNED='t',TYPE_REF='r',TYPE_TUPLE='(',TYPE_LIST='[',TYPE_DICT='{',TYPE_CODE='c',TYPE_UNICODE='u',TYPE_UNKNOWN='?',TYPE_SET='<',TYPE_FROZENSET='>';
+constexpr std::uint8_t TYPE_STRING='s',TYPE_INTERNED='t',TYPE_REF='r',TYPE_TUPLE='(',TYPE_LIST='[',TYPE_DICT='{',TYPE_CODE='c',TYPE_UNICODE='u',TYPE_SET='<',TYPE_FROZENSET='>';
 constexpr std::uint8_t TYPE_ASCII='a',TYPE_ASCII_INTERNED='A',TYPE_SMALL_TUPLE=')',TYPE_SHORT_ASCII='z',TYPE_SHORT_ASCII_INTERNED='Z',TYPE_SLICE=':';
 enum class K{NullTag,None,False,True,StopIter,Ellipsis,Int,Long,Float,Complex,Bytes,String,Tuple,List,Dict,Set,FrozenSet,Slice,Code};
 struct Node;
@@ -40,7 +40,7 @@ struct Reader {
     bool fail(std::string s,std::size_t at=std::numeric_limits<std::size_t>::max()){if(out&&out->error.empty()){out->error=std::move(s);out->error_offset=(at==std::numeric_limits<std::size_t>::max()?p:at);}return false;}
     bool need(std::size_t n){return n<=d.size()-std::min(p,d.size())||fail("marshal truncated");}
     std::uint8_t u8(){if(!need(1))return 0;return d[p++];}
-    std::uint16_t u16(){if(!need(2))return 0;auto v=std::uint16_t(d[p])|(std::uint16_t(d[p+1])<<8);p+=2;return v;}
+    std::uint16_t u16(){if(!need(2))return 0;auto v=static_cast<std::uint16_t>(std::uint16_t(d[p])|(std::uint16_t(d[p+1])<<8));p+=2;return v;}
     std::uint32_t u32(){if(!need(4))return 0;auto v=std::uint32_t(d[p])|(std::uint32_t(d[p+1])<<8)|(std::uint32_t(d[p+2])<<16)|(std::uint32_t(d[p+3])<<24);p+=4;return v;}
     std::int32_t i32(){return static_cast<std::int32_t>(u32());}
     std::uint64_t u64(){if(!need(8))return 0;std::uint64_t v=0;for(int i=0;i<8;i++)v|=std::uint64_t(d[p+i])<<(8*i);p+=8;return v;}
@@ -87,7 +87,7 @@ void put_u64(std::vector<std::uint8_t>&o,std::uint64_t v){for(int i=0;i<8;i++)o.
 void put_blob(std::vector<std::uint8_t>&o,std::span<const std::uint8_t>b){put_u64(o,b.size());o.insert(o.end(),b.begin(),b.end());}
 void canon(const NP&n,std::vector<std::uint8_t>&o,std::set<const Node*>&active);
 std::vector<std::uint8_t> canon_one(const NP&n){std::vector<std::uint8_t>o;std::set<const Node*>a;canon(n,o,a);return o;}
-void canon_seq(const std::vector<NP>&v,std::vector<std::uint8_t>&o,std::set<const Node*>&active,bool unordered=false){put_u64(o,v.size());if(unordered){std::vector<std::vector<std::uint8_t>>xs;xs.reserve(v.size());for(auto&x:v)xs.push_back(canon_one(x));std::sort(xs.begin(),xs.end());for(auto&x:xs)put_blob(o,x);}else for(auto&x:v)canon(x,o,active);}
+void canon_seq(const std::vector<NP>&v,std::vector<std::uint8_t>&o,std::set<const Node*>&active,bool unordered=false){put_u64(o,v.size());if(unordered){std::vector<std::vector<std::uint8_t>>xs;xs.reserve(v.size());for(auto&x:v)xs.push_back(canon_one(x));const auto byte_less=[](const auto&a,const auto&b){const auto n=std::min(a.size(),b.size());for(std::size_t i=0;i<n;++i){if(a[i]!=b[i])return a[i]<b[i];}return a.size()<b.size();};std::sort(xs.begin(),xs.end(),byte_less);for(auto&x:xs)put_blob(o,x);}else for(auto&x:v)canon(x,o,active);}
 void canon(const NP&n,std::vector<std::uint8_t>&o,std::set<const Node*>&active){if(!n){o.push_back(0xff);return;}if(!active.insert(n.get()).second){o.push_back(0xfe);return;}o.push_back(static_cast<std::uint8_t>(n->k));switch(n->k){
  case K::Int:case K::Long:put_u64(o,static_cast<std::uint64_t>(n->iv));put_blob(o,n->blob);break;case K::Float:case K::Complex:case K::Bytes:case K::String:put_blob(o,n->blob);break;
  case K::Tuple:case K::List:case K::Slice:canon_seq(n->seq,o,active,false);break;case K::Set:case K::FrozenSet:canon_seq(n->seq,o,active,true);break;

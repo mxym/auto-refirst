@@ -28,20 +28,84 @@ bool write_file(const std::filesystem::path&p,std::span<const std::uint8_t>d){st
 std::string output_key(const std::filesystem::path&p){auto s=p.lexically_normal().generic_string();std::transform(s.begin(),s.end(),s.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});return s;}
 std::string hex(std::span<const std::uint8_t>d){std::ostringstream o;o<<std::hex<<std::setfill('0');for(auto b:d)o<<std::setw(2)<<unsigned(b);return o.str();}
 
+std::optional<std::size_t> embedded_pck_trailer_offset(std::span<const std::uint8_t>d){
+    if(d.size()<16||!is_magic(d,d.size()-4))return{};
+    auto pack_size=le64(d,d.size()-12);
+    if(pack_size>d.size()-12)return{};
+    auto off=d.size()-12-static_cast<std::size_t>(pack_size);
+    if(!is_magic(d,off))return{};
+    return off;
+}
+
 void aes256_cfb_decrypt(std::span<const std::uint8_t>cipher,std::span<std::uint8_t>plain,const std::array<std::uint8_t,32>&key,const std::array<std::uint8_t,16>&iv){AES_ctx ctx;AES_init_ctx(&ctx,key.data());std::array<std::uint8_t,16>feedback=iv;for(std::size_t o=0;o<cipher.size();o+=16){auto stream=feedback;AES_ECB_encrypt(&ctx,stream.data());auto n=std::min<std::size_t>(16,cipher.size()-o);for(std::size_t j=0;j<n;j++)plain[o+j]=cipher[o+j]^stream[j];for(std::size_t j=0;j<n;j++)feedback[j]=cipher[o+j];}}
 struct DecStream {bool ok=false;std::vector<std::uint8_t>plain;std::size_t consumed=0;};
 DecStream decrypt_stream(std::span<const std::uint8_t>d,std::size_t o,const std::array<std::uint8_t,32>&key){DecStream r;if(o+40>d.size())return r;std::array<std::uint8_t,16>want{};std::copy_n(d.begin()+static_cast<std::ptrdiff_t>(o),16,want.begin());auto len=le64(d,o+16);if(len>512ull*1024*1024)return r;std::array<std::uint8_t,16>iv{};std::copy_n(d.begin()+static_cast<std::ptrdiff_t>(o+24),16,iv.begin());auto padded=(len+15)&~15ull;if(o+40+padded>d.size())return r;std::vector<std::uint8_t>all(padded);aes256_cfb_decrypt(d.subspan(o+40,padded),all,key,iv);all.resize(len);if(md5(all)!=want)return r;r.ok=true;r.plain=std::move(all);r.consumed=40+padded;return r;}
 
-bool parse_entries(std::span<const std::uint8_t>src,std::size_t p,std::uint32_t count,std::uint32_t version,std::uint64_t file_base,std::uint64_t pck_off,std::size_t whole_size,std::vector<GodotPckEntry>&out){if(count>1000000)return false;for(std::uint32_t i=0;i<count;i++){if(p+4>src.size())return false;auto sl=le32(src,p);p+=4;if(sl>1u<<20||p+sl>src.size())return false;auto path=trim_path(src.subspan(p,sl));p+=sl;if(path.empty()||path.size()>1u<<20)return false;if(p+8+8+16+(version>=2?4:0)>src.size())return false;auto stored=le64(src,p);p+=8;auto sz=le64(src,p);p+=8;GodotPckEntry e;e.path=std::move(path);e.size=sz;std::copy_n(src.begin()+static_cast<std::ptrdiff_t>(p),16,e.md5.begin());p+=16;if(version>=2){e.flags=le32(src,p);p+=4;}e.encrypted=e.flags&1;e.removal=e.flags&2;e.delta=e.flags&4;if(version>=3)e.offset=file_base+stored;else if(version==2)e.offset=file_base+stored;else e.offset=stored+pck_off;if(!e.removal&&!e.encrypted&&!e.delta&&e.offset+e.size>whole_size)return false;out.push_back(std::move(e));}return true;}
+bool parse_entries(std::span<const std::uint8_t>src,std::size_t p,std::uint32_t count,std::uint32_t version,std::uint64_t file_base,std::size_t whole_size,std::vector<GodotPckEntry>&out){
+    if(count>1000000)return false;
+    for(std::uint32_t i=0;i<count;i++){
+        if(p>src.size()||src.size()-p<4)return false;
+        auto sl=le32(src,p);p+=4;
+        if(sl>(1u<<20)||sl>src.size()-p)return false;
+        auto path=trim_path(src.subspan(p,sl));p+=sl;
+        if(path.empty()||path.size()>(1u<<20))return false;
+        const std::size_t fixed=8+8+16+(version>=2?4:0);
+        if(p>src.size()||fixed>src.size()-p)return false;
+        auto stored=le64(src,p);p+=8;auto sz=le64(src,p);p+=8;
+        GodotPckEntry e;e.path=std::move(path);e.size=sz;
+        std::copy_n(src.begin()+static_cast<std::ptrdiff_t>(p),16,e.md5.begin());p+=16;
+        if(version>=2){e.flags=le32(src,p);p+=4;}
+        e.encrypted=e.flags&1;e.removal=e.flags&2;e.delta=e.flags&4;
+        if(version>=2){
+            if(stored>std::numeric_limits<std::uint64_t>::max()-file_base)return false;
+            e.offset=file_base+stored;
+        }else e.offset=stored;
+        if(!e.removal&&!e.encrypted&&!e.delta){
+            if(e.offset>whole_size||e.size>whole_size-e.offset)return false;
+        }
+        out.push_back(std::move(e));
+    }
+    return true;
+}
 
 std::optional<GodotPckInfo> parse_at(std::span<const std::uint8_t>d,std::size_t off,bool allow_bad_magic,const std::optional<std::array<std::uint8_t,32>>&key={}){
-    if(off+20>d.size())return{};bool standard=is_magic(d,off);if(!standard&&!allow_bad_magic)return{};auto ver=le32(d,off+4),maj=le32(d,off+8),min=le32(d,off+12),pat=le32(d,off+16);if(ver>4||maj==0||maj>25||min>1000||pat>100000)return{};
-    GodotPckInfo r;r.pck_offset=off;r.format_version=ver;r.engine_major=maj;r.engine_minor=min;r.engine_patch=pat;r.modified_magic=!standard;std::size_t p=off+20;std::uint64_t stored_base=0;
-    if(ver>=2){if(p+12>d.size())return{};r.flags=le32(d,p);p+=4;stored_base=le64(d,p);p+=8;if(r.flags&~7u)return{};}r.encrypted_directory=r.flags&1;r.relative_filebase=r.flags&2;r.sparse_bundle=r.flags&4;r.file_base=stored_base;if(ver==3||ver==4||(ver==2&&r.relative_filebase))r.file_base+=off;
-    if(ver==3||ver==4){if(p+8>d.size())return{};r.dir_offset=le64(d,p)+off;p+=8;if(r.sparse_bundle&&r.encrypted_directory&&ver==4){if(p+32>d.size())return{};p+=32;}if(r.dir_offset==0||r.dir_offset+4>d.size())return{};p=r.dir_offset;}else{if(p+64>d.size())return{};p+=64;r.dir_offset=p;}
-    if(p+4>d.size())return{};r.file_count=le32(d,p);p+=4;if(r.file_count>1000000)return{};if(r.file_count>0&&ver>=2&&r.file_base>=d.size())return{};
-    if(r.encrypted_directory){if(!key){r.valid=true;r.validated=false;r.evidence={"PCK header/version/flags/directory offset are structurally valid","encrypted directory detected","file_count prefix is plausible: "+std::to_string(r.file_count)};return r;}auto dec=decrypt_stream(d,p,*key);if(!dec.ok)return{};if(!parse_entries(dec.plain,0,r.file_count,ver,r.file_base,off,d.size(),r.entries))return{};r.valid=r.validated=true;r.evidence={"encrypted PCK directory decrypted and MD5 verified","directory entries structurally validated"};return r;}
-    if(!parse_entries(d,p,r.file_count,ver,r.file_base,off,d.size(),r.entries))return{};r.valid=r.validated=true;r.evidence={"PCK header and directory entries structurally validated","all unencrypted file ranges are in bounds"};return r;
+    if(off>d.size()||d.size()-off<20)return{};
+    const bool standard=is_magic(d,off);if(!standard&&!allow_bad_magic)return{};
+    auto ver=le32(d,off+4),maj=le32(d,off+8),min=le32(d,off+12),pat=le32(d,off+16);
+    if(ver>4||maj==0||maj>25||min>1000||pat>100000)return{};
+    GodotPckInfo r;r.pck_offset=off;r.format_version=ver;r.engine_major=maj;r.engine_minor=min;r.engine_patch=pat;r.modified_magic=!standard;
+    std::size_t p=off+20;std::uint64_t stored_base=0;
+    if(ver>=2){
+        if(p>d.size()||d.size()-p<12)return{};
+        r.flags=le32(d,p);p+=4;stored_base=le64(d,p);p+=8;if(r.flags&~7u)return{};
+    }
+    r.encrypted_directory=r.flags&1;r.relative_filebase=r.flags&2;r.sparse_bundle=r.flags&4;r.file_base=stored_base;
+    if(ver==3||ver==4||(ver==2&&r.relative_filebase)){
+        if(stored_base>std::numeric_limits<std::uint64_t>::max()-off)return{};
+        r.file_base=stored_base+off;
+    }
+    if(ver==3||ver==4){
+        if(p>d.size()||d.size()-p<8)return{};
+        auto stored_dir=le64(d,p);p+=8;if(stored_dir>std::numeric_limits<std::uint64_t>::max()-off)return{};
+        r.dir_offset=stored_dir+off;
+        if(r.sparse_bundle&&r.encrypted_directory&&ver==4){if(p>d.size()||d.size()-p<32)return{};p+=32;}
+        if(r.dir_offset==0||r.dir_offset>d.size()||d.size()-static_cast<std::size_t>(r.dir_offset)<4)return{};
+        p=static_cast<std::size_t>(r.dir_offset);
+    }else{
+        if(p>d.size()||d.size()-p<64)return{};
+        p+=64;r.dir_offset=p;
+    }
+    if(p>d.size()||d.size()-p<4)return{};
+    r.file_count=le32(d,p);p+=4;if(r.file_count>1000000)return{};
+    if(r.file_count>0&&ver>=2&&r.file_base>=d.size())return{};
+    if(r.encrypted_directory){
+        if(!key){r.valid=true;r.validated=false;r.evidence={"PCK header/version/flags/directory offset are structurally valid","encrypted directory detected","file_count prefix is plausible: "+std::to_string(r.file_count)};return r;}
+        auto dec=decrypt_stream(d,p,*key);if(!dec.ok)return{};
+        if(!parse_entries(dec.plain,0,r.file_count,ver,r.file_base,d.size(),r.entries))return{};
+        r.valid=r.validated=true;r.evidence={"encrypted PCK directory decrypted and MD5 verified","directory entries structurally validated"};return r;
+    }
+    if(!parse_entries(d,p,r.file_count,ver,r.file_base,d.size(),r.entries))return{};
+    r.valid=r.validated=true;r.evidence={"PCK header and directory entries structurally validated","all unencrypted file ranges are in bounds"};return r;
 }
 
 std::optional<std::size_t> va_off(const PeInfo&pe,std::uint64_t va,std::size_t size){if(va<pe.image_base)return{};auto rva=va-pe.image_base;for(const auto&s:pe.sections){auto span=std::max(s.vsize,s.raw_size);if(rva>=s.rva&&rva<s.rva+std::uint64_t(span)){auto delta=rva-s.rva;if(delta+size>s.raw_size)return{};return std::size_t(s.raw_offset+delta);}}return{};}
@@ -339,6 +403,70 @@ std::string canonical_source_coordinate(const GodotNativeKeyCandidate&candidate)
 }
 }
 
+GodotLegacyEngineConfigInfo parse_godot_legacy_engine_config(std::span<const std::uint8_t>d){
+    GodotLegacyEngineConfigInfo out;
+    if(d.size()<4||std::memcmp(d.data(),"ECFG",4)!=0)return out;
+    out.candidate=true;
+    constexpr std::size_t kMaxConfigBytes=8u*1024u*1024u,kMaxProperties=100000,kMaxString=1u*1024u*1024u,kMaxStringArray=200000;
+    if(d.size()>kMaxConfigBytes){out.error="legacy engine.cfb exceeds bounded 8 MiB parser limit";return out;}
+    auto fail=[&](std::size_t off,std::string why){out.error_offset=off;out.error=std::move(why);return out;};
+    auto utf8=[](std::string_view v){
+        for(std::size_t i=0;i<v.size();){const auto c=static_cast<unsigned char>(v[i]);if(c<0x80){if(c<0x20&&c!='\t'&&c!='\n'&&c!='\r')return false;++i;continue;}std::uint32_t cp=0,min=0;unsigned n=0;if((c&0xe0u)==0xc0u){n=2;cp=c&0x1fu;min=0x80;}else if((c&0xf0u)==0xe0u){n=3;cp=c&0x0fu;min=0x800;}else if((c&0xf8u)==0xf0u){n=4;cp=c&7u;min=0x10000;}else return false;if(i+n>v.size())return false;for(unsigned z=1;z<n;++z){auto q=static_cast<unsigned char>(v[i+z]);if((q&0xc0u)!=0x80u)return false;cp=(cp<<6)|(q&0x3fu);}if(cp<min||cp>0x10ffff||(cp>=0xd800&&cp<=0xdfff))return false;i+=n;}return true;
+    };
+    auto resource_path=[&](std::string_view v){if(v.rfind("res://",0)!=0)return false;auto q=safe_path(std::string(v));return !q.empty();};
+    struct Value {std::uint32_t type=0;std::string text;std::vector<std::string> strings;};
+    auto decode=[&](std::span<const std::uint8_t>v,std::size_t base,Value&x)->bool{
+        if(v.size()<4)return false;
+        x.type=le32(v,0);
+        if(x.type==0)return v.size()==4;
+        if(x.type==1||x.type==2||x.type==3)return v.size()==8;
+        // Fixed-size Godot 2.x math/color Variants. These are validated only for
+        // exact encoded geometry so unrelated project settings can be skipped safely.
+        if(x.type==5)return v.size()==12;   // Vector2
+        if(x.type==6)return v.size()==20;   // Rect2
+        if(x.type==7)return v.size()==16;   // Vector3
+        if(x.type==8)return v.size()==28;   // Matrix32
+        if(x.type==9||x.type==10||x.type==14)return v.size()==20; // Plane / Quat / Color
+        if(x.type==11)return v.size()==28;  // AABB
+        if(x.type==12)return v.size()==40;  // Matrix3
+        if(x.type==13)return v.size()==52;  // Transform
+        if(x.type==4){
+            if(v.size()<8)return false;
+            auto n=le32(v,4);if(n>kMaxString||n>v.size()-8)return false;auto padded=(std::uint64_t(n)+3u)&~3ull;if(8+padded!=v.size())return false;
+            // Godot 2.x encode_variant advances over String alignment padding without initializing it.
+            // The canonical decode_variant consumes the padding by length and never requires zero bytes.
+            x.text.assign(reinterpret_cast<const char*>(v.data()+8),n);return x.text.find('\0')==std::string::npos&&utf8(x.text);
+        }
+        if(x.type==25){
+            if(v.size()<8)return false;
+            auto count=le32(v,4);if(count>kMaxStringArray)return false;std::size_t p=8;x.strings.reserve(count);
+            for(std::uint32_t i=0;i<count;++i){if(p>v.size()||v.size()-p<4)return false;auto n=le32(v,p);p+=4;if(n>kMaxString||n>v.size()-p)return false;std::string q(reinterpret_cast<const char*>(v.data()+p),n);if(!q.empty()&&q.back()=='\0')q.pop_back();if(q.find('\0')!=std::string::npos||!utf8(q))return false;p+=n;while(p%4){if(p>=v.size())return false;++p;}x.strings.push_back(std::move(q));}
+            return p==v.size();
+        }
+        (void)base;return false;
+    };
+    if(d.size()<8)return fail(4,"legacy engine.cfb is truncated before property count");
+    out.property_count=le32(d,4);if(out.property_count>kMaxProperties)return fail(4,"legacy engine.cfb property count exceeds bound");
+    std::size_t p=8;std::set<std::string>keys,remap_sources,autoload_names;std::vector<std::string>remap_flat;
+    for(std::uint32_t i=0;i<out.property_count;++i){
+        if(p>d.size()||d.size()-p<4)return fail(p,"legacy engine.cfb truncated before property key length");
+        auto kl=le32(d,p);auto key_off=p;p+=4;if(!kl||kl>kMaxString||kl>d.size()-p)return fail(key_off,"legacy engine.cfb property key length is invalid");
+        std::string key(reinterpret_cast<const char*>(d.data()+p),kl);p+=kl;if(key.find('\0')!=std::string::npos||!utf8(key)||!keys.insert(key).second)return fail(key_off,"legacy engine.cfb property key is invalid UTF-8, contains NUL, or is duplicated");
+        if(p>d.size()||d.size()-p<4)return fail(p,"legacy engine.cfb truncated before Variant length");
+        auto vl=le32(d,p);auto value_len_off=p;p+=4;if(vl<4||vl>d.size()-p)return fail(value_len_off,"legacy engine.cfb Variant length escapes input");
+        Value value;if(!decode(d.subspan(p,vl),p,value))return fail(p,"legacy engine.cfb contains unsupported or malformed Variant encoding for property "+key);p+=vl;
+        auto require_resource_string=[&](std::string&dest){if(value.type!=4||!resource_path(value.text))return false;dest=value.text;return true;};
+        if(key=="application/name"){if(value.type!=4)return fail(p-vl,"application/name is not a String Variant");out.application_name=value.text;}
+        else if(key=="application/main_scene"){if(!require_resource_string(out.main_scene))return fail(p-vl,"application/main_scene is not a safe res:// String");}
+        else if(key=="application/icon"){if(!require_resource_string(out.icon))return fail(p-vl,"application/icon is not a safe res:// String");}
+        else if(key=="remap/all"){if(value.type!=25||value.strings.size()%2)return fail(p-vl,"remap/all is not an even StringArray of source/target pairs");remap_flat=value.strings;}
+        else if(key.rfind("autoload/",0)==0){if(value.type!=4||value.text.empty())return fail(p-vl,"autoload property is not a non-empty String");auto name=key.substr(9);if(name.empty()||!autoload_names.insert(name).second)return fail(key_off,"autoload name is empty or duplicated");bool singleton=value.text.front()=='*';auto target=singleton?value.text.substr(1):value.text;if(!resource_path(target))return fail(p-vl,"autoload target is not a safe res:// path");out.autoloads.push_back({std::move(name),std::move(target),singleton});}
+    }
+    if(p!=d.size())return fail(p,"legacy engine.cfb has trailing bytes after declared properties");
+    for(std::size_t i=0;i<remap_flat.size();i+=2){if(!resource_path(remap_flat[i])||!resource_path(remap_flat[i+1])||!remap_sources.insert(remap_flat[i]).second)return fail(0,"remap/all contains unsafe or duplicate source paths");out.remaps.push_back({remap_flat[i],remap_flat[i+1]});}
+    out.valid=true;return out;
+}
+
 GodotNativeKeyCandidateSet discover_godot_native_key_candidates(std::span<const std::uint8_t>d,const PeInfo&pe,GodotArtifactIdentity source){
     return key_candidates(d,pe,source);
 }
@@ -509,9 +637,18 @@ GodotExternalPckMaterializeResult materialize_godot_external_pck_core(
 }
 
 GodotPckInfo detect_godot(std::span<const std::uint8_t>d,const PeInfo&pe){
-    GodotPckInfo best;std::vector<std::size_t>offs;
-    for(std::size_t i=0;;){i=detail::find_exact(d,"GDPC",i);if(i==std::string::npos)break;offs.push_back(i++);}
-    for(auto o:offs){auto x=parse_at(d,o,false);if(x&&(!best.valid||x->validated)){best=*x;if(x->validated)break;}}
+    GodotPckInfo best;
+    if(auto embedded=embedded_pck_trailer_offset(d)){
+        if(auto x=parse_at(d,*embedded,false);x&&x->validated){
+            best=std::move(*x);
+            best.evidence.push_back("terminal Godot PCK size+magic trailer resolves the exact embedded pack start");
+        }
+    }
+    if(!best.valid){
+        std::vector<std::size_t>offs;
+        for(std::size_t i=0;;){i=detail::find_exact(d,"GDPC",i);if(i==std::string::npos)break;offs.push_back(i++);}
+        for(auto o:offs){auto x=parse_at(d,o,false);if(x&&(!best.valid||x->validated)){best=*x;if(x->validated)break;}}
+    }
     // Mutation-resistant PCK header search. For standalone files always test offset 0.
     // For PE-wide scans, require independent Godot anchors first to avoid millions of
     // speculative parse attempts on unrelated large executables.

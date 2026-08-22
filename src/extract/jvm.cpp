@@ -41,7 +41,7 @@ bool weird_name(std::string_view s){if(s.empty())return false;std::size_t weird=
 struct ClassParser {
     JvmClassInfo o;std::span<const std::uint8_t>d;std::vector<Cp>cp;std::vector<BootstrapRec>bootstraps;
     explicit ClassParser(std::span<const std::uint8_t>x):d(x){}
-    bool cp_index(std::uint16_t i,std::uint8_t tag=0)const{return i>0&&i<cp.size()&&cp[i].tag&&(tag==0||cp[i].tag==tag);}
+    bool cp_index(std::uint32_t i,std::uint8_t tag=0)const{return i>0&&i<cp.size()&&cp[i].tag&&(tag==0||cp[i].tag==tag);}
     const std::string* utf(std::uint16_t i)const{return cp_index(i,1)?&cp[i].utf:nullptr;}
     std::string class_name(std::uint16_t i)const{if(!cp_index(i,7))return{};auto*s=utf(static_cast<std::uint16_t>(cp[i].a));return s?dotted(*s):std::string();}
     std::pair<std::string,std::string> nat(std::uint16_t i)const{if(!cp_index(i,12))return{};auto*n=utf(static_cast<std::uint16_t>(cp[i].a));auto*dsc=utf(static_cast<std::uint16_t>(cp[i].b));return{n?*n:"",dsc?*dsc:""};}

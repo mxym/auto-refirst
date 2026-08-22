@@ -15,7 +15,9 @@ struct RelationshipReferenceEvidence {
     std::string evidence_level;        // R2_STRUCTURAL_RELATION / R3_EXACT_DATA_DEPENDENCY
     std::string semantic_relevance;    // STRUCTURAL / DATA_DEPENDENCY
     std::string reference;
-    std::string resolution_mode;       // EXACT_RELATIVE_PATH / DECLARED_BASENAME_VALIDATED_IMAGE
+    std::string resolution_mode;       // EXACT_RELATIVE_PATH / DECLARED_BASENAME_VALIDATED_IMAGE / GODOT_RES_PATH
+    std::string target_symbol;         // optional exact exported entry required by the source contract
+    std::string feature_key;           // optional platform/architecture feature identity
     std::string source_coordinate;
     std::string evidence_basis;
     std::string evidence_source;

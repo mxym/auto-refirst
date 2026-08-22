@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.1.0-rc.1] - 2026-08-22
+
+First release candidate for exact-commit public validation. This entry describes candidate source changes; publication remains subject to the hosted CI and release-asset gates in `docs/RELEASE_CHECKLIST.md`.
+
+### Added
+
+- Add independent product/build/report-schema identity, including exact clean-source commit binding and archive fallback rules.
+- Extend bounded delivery and relationship support for Unity IL2CPP and Flutter APKs, Godot legacy PCK/GDScript/GDExtension variants, and Go 1.26 pclntab layouts.
+
+### Changed
+
+- Define the stable `0/1/2/3/4` CLI process contract while keeping findings, partial analysis, bounded refusal, and runtime observations separate from process failure.
+- Require explicit `--run` for target execution and the additional `--apply` authorization for validated transactional installation.
+- Add exact-source public gates for Linux GCC/Clang, GCC ASan+UBSan, native MSVC, strict warnings, P0/P1, provenance, and install staging.
+
 ### Fixed
 
 - Correct Lua 5.3 long-string decoding when the chunk uses the `0xff` marker followed by a full `size_t` length. The previous parser truncated that extended length to one byte and could reject otherwise valid chunks.
@@ -9,6 +24,7 @@
 ### Maintenance
 
 - Add a maintainer release checklist covering provenance, clean builds, public and sanitizer gates, authorization/resource invariants, hosted CI, packaging, and post-publication verification.
+- Bind compiled dependency declarations to exact committed/index/worktree vendored snapshots and add fail-closed mutation coverage.
 
 ## [0.1.0-alpha.1] - 2026-08-20
 

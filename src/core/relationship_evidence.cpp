@@ -1,6 +1,7 @@
 #include "prts/relationship_evidence.hpp"
 #include "prts/report.hpp"
 #include "prts/path_utf8.hpp"
+#include "prts/gdextension.hpp"
 #include "Zydis.h"
 
 #include <algorithm>
@@ -39,7 +40,8 @@ std::optional<std::string> read_bounded_text(const std::filesystem::path&p){
 std::optional<std::pair<std::string,std::size_t>> parse_quoted(std::string_view s,std::size_t at){
     while(at<s.size()&&std::isspace(static_cast<unsigned char>(s[at])))++at;
     if(at<s.size()&&(s[at]=='f'||s[at]=='F'||s[at]=='r'||s[at]=='R'))++at;
-    if(at>=s.size()||(s[at]!='\''&&s[at]!='\"'))return{};const char q=s[at++];std::string out;
+    if(at>=s.size()||(s[at]!='\''&&s[at]!='\"'))return{};
+    const char q=s[at++];std::string out;
     for(;at<s.size();++at){char c=s[at];if(c==q)return std::pair<std::string,std::size_t>{out,at+1};if(c=='\\'){if(at+1>=s.size())return{};char n=s[++at];switch(n){case 'n':out.push_back('\n');break;case 'r':out.push_back('\r');break;case 't':out.push_back('\t');break;default:out.push_back(n);break;}}else out.push_back(c);}
     return{};
 }
@@ -96,6 +98,19 @@ void extract_python(std::string_view text,std::vector<RelationshipReferenceEvide
     static const std::array<std::string_view,3> calls={"subprocess.run","subprocess.Popen","Popen"};for(auto call:calls){pos=0;while((pos=text.find(call,pos))!=std::string_view::npos){const auto start=pos;pos+=call.size();if(!python_module_level_position(text,start))continue;std::size_t p=pos;while(p<text.size()&&std::isspace(static_cast<unsigned char>(text[p])))++p;if(p>=text.size()||text[p]!='(')continue;++p;while(p<text.size()&&std::isspace(static_cast<unsigned char>(text[p])))++p;if(p>=text.size()||text[p]!='[')continue;++p;for(int item=0;item<32&&p<text.size();++item){while(p<text.size()&&(std::isspace(static_cast<unsigned char>(text[p]))||text[p]==','))++p;if(p<text.size()&&text[p]==']')break;auto q=parse_quoted(text,p);if(!q)break;p=q->second;if(!pathish_runner_word(q->first)||!sane_path_literal(q->first))continue;RelationshipReferenceEvidence f;f.kind="script_runner_argv";f.evidence_level="R2_STRUCTURAL_RELATION";f.semantic_relevance="STRUCTURAL";f.reference=q->first;f.resolution_mode=absolute_declared(f.reference)?"DECLARED_BASENAME_VALIDATED_IMAGE":"EXACT_RELATIVE_PATH";f.source_coordinate="current_input_file:line="+std::to_string(line_of(text,start))+":subprocess_argv";f.evidence_basis="literal subprocess argv member is statically exact";f.evidence_source="bounded Python subprocess list syntax";f.source_relation_role="runner";f.target_relation_role="launched_stage";f.source_priority_delta=20;f.target_priority_delta=20;f.priority_cap=30;f.target_must_be_validated_image=true;add_fact(out,seen,std::move(f));}}}
 }
 
+void extract_gdextension_descriptor(const AnalysisReport&r,std::vector<RelationshipReferenceEvidence>&out){
+    const auto&d=r.gdextension_descriptor;if(!d.valid)return;
+    for(const auto&decl:d.libraries){
+        auto normalized=normalize_gdextension_resource_path(decl.path);if(!normalized)continue;
+        RelationshipReferenceEvidence f;f.kind="godot_gdextension_library_reference";f.evidence_level="R2_STRUCTURAL_RELATION";f.semantic_relevance="STRUCTURAL";
+        f.reference=*normalized;f.resolution_mode="GODOT_RES_PATH";f.target_symbol=d.entry_symbol;f.feature_key=decl.feature_key;
+        f.source_coordinate="current_input_file:line="+std::to_string(decl.line)+":libraries."+decl.feature_key+";entry_symbol="+d.entry_symbol;
+        f.evidence_basis="strictly validated .gdextension configuration.entry_symbol plus exact safe res:// library declaration";
+        f.evidence_source="Godot GDExtension descriptor parser";f.source_relation_role="gdextension_descriptor";f.target_relation_role="native_extension";
+        f.source_priority_delta=20;f.target_priority_delta=45;f.priority_cap=50;f.target_must_be_validated_image=true;out.push_back(std::move(f));
+    }
+}
+
 void extract_linker_script(std::string_view text,std::vector<RelationshipReferenceEvidence>&out){
     static const std::regex keep_re(R"(KEEP\s*\(\s*([A-Za-z0-9_./+@-]+\.o)\s*\()",std::regex::ECMAScript);std::set<std::string> refs;
     const std::string s(text);for(std::sregex_iterator it(s.begin(),s.end(),keep_re),end;it!=end;++it){auto ref=(*it)[1].str();if(!sane_path_literal(ref)||!refs.insert(ref).second)continue;RelationshipReferenceEvidence f;f.kind="manifest_declared_member";f.evidence_level="R2_STRUCTURAL_RELATION";f.semantic_relevance="STRUCTURAL";f.reference=ref;f.resolution_mode="EXACT_RELATIVE_PATH";f.source_coordinate="current_input_file:line="+std::to_string(line_of(text,static_cast<std::size_t>(it->position())))+":GNU_ld_KEEP";f.evidence_basis="GNU ld KEEP() explicitly names this input object; bare filename resemblance is not used";f.evidence_source="bounded GNU ld linker-script syntax";f.source_relation_role="manifest_reference_source";f.target_relation_role="declared_member";f.target_priority_delta=12;f.priority_cap=20;out.push_back(std::move(f));}
@@ -132,6 +147,7 @@ std::vector<RelationshipReferenceEvidence> extract_relationship_reference_eviden
     std::vector<RelationshipReferenceEvidence> out;
     auto ext=lower_ascii(path_utf8(r.input.extension()));
     if(auto t=read_bounded_text(r.input)){if(ext==".py"||t->rfind("#!",0)==0)extract_python(*t,out);if(ext==".ld"||t->find("SECTIONS")!=std::string::npos)extract_linker_script(*t,out);}
+    extract_gdextension_descriptor(r,out);
     extract_native_elf(r,out);
     return out;
 }

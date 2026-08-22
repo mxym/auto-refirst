@@ -2,7 +2,7 @@
 
 ## Vendored code
 
-产品直接编译的 vendored 依赖及精确 revision/许可证记录在 `THIRD_PARTY_NOTICES.md`、`docs/THIRD_PARTY_PROVENANCE.csv` 和 `SBOM.spdx.json`。完整许可证文本位于 `LICENSES/`。
+产品直接编译的 vendored 依赖及声明 revision/许可证记录在 `THIRD_PARTY_NOTICES.md`、`docs/THIRD_PARTY_PROVENANCE.csv` 和 `SBOM.spdx.json`。`docs/VENDORED_SNAPSHOT_MANIFEST.json` 以规范化 path + file SHA-256 tree digest 将这些声明绑定到当前 Git committed blobs 与工作树字节；该本地绑定不构成对上游来源的独立认证。完整许可证文本位于 `LICENSES/`。
 
 主要依赖包括 libPeConv、miniz、tiny-AES-c、Zstandard single-file decoder、rustc-demangle native-c、Zydis 与其 amalgamation 中的 Zycore-C。
 

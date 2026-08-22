@@ -30,7 +30,7 @@ struct ExceptionalExecutionFact {
     std::string protected_function;
     std::string resume_semantics;
     std::string context_mutation_evidence;
-    // : evidence is explicitly tiered and plane-scoped.  Static
+    // Evidence is explicitly tiered and plane-scoped. Static
     // registration/trigger/context facts must never be presented as runtime
     // confirmation merely because they describe the same mechanism.
     std::string evidence_level; // X0..X5 for exceptional execution
@@ -64,7 +64,7 @@ struct ExceptionalExecutionExtractResult {
 
 // Platform analyzers are intentionally explicit entry points rather than
 // automatic parser side effects.  The caller supplies artifact_identity so
-// every recovered address carries the Direction-E typed provenance contract.
+// every recovered address carries the typed provenance contract.
 ExceptionalExecutionInfo analyze_pe_exception_flow(
     std::span<const std::uint8_t> data,
     const PeInfo& pe,
@@ -75,7 +75,7 @@ ExceptionalExecutionInfo analyze_elf_exception_flow(
     const std::string& artifact_identity={});
 
 
-// : cheap, bounded composition of existing exact metadata/control facts
+// Cheap, bounded composition of existing exact metadata/control facts
 // into alternate execution-surface guidance. This is static evidence only; it
 // never claims runtime dispatch/confirmation and never evaluates a DWARF VM.
 std::vector<Finding> compose_exception_execution_surfaces(

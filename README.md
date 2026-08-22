@@ -4,7 +4,7 @@
 
 `auto-refirst` 在反编译器/调试器之前完成格式识别、生态路由、容器与嵌套工件展开、关键证据提取、目录级优先级排序，以及可选的运行时物化与重建。默认模式只做静态分析；运行目标需要显式 `--run`，写回/安装需要额外的 `--apply` 授权。
 
-当前公开版本：**0.1.0-alpha.1**。
+当前公开版本：**0.1.0-rc.1**。
 
 English: [README_EN.md](README_EN.md)
 
@@ -42,7 +42,7 @@ cmake --build build --parallel
 ./build/auto-refirst ./target --run --apply --json
 ```
 
-完整参数见 [docs/CLI.md](docs/CLI.md)，构建说明见 [docs/BUILD.md](docs/BUILD.md)。
+完整参数见 [docs/CLI.md](docs/CLI.md)，精确退出码与授权契约见 [docs/CLI_CONTRACT.md](docs/CLI_CONTRACT.md)，构建说明见 [docs/BUILD.md](docs/BUILD.md)。
 
 ## 能力概览
 
@@ -94,6 +94,7 @@ cmake --build build --parallel
 - [架构与证据模型](docs/ARCHITECTURE.md)
 - [外部验证与已知缺口](docs/VALIDATION.md)
 - [CLI 与安全授权](docs/CLI.md)
+- [CLI 退出码与授权契约](docs/CLI_CONTRACT.md)
 - [构建与安装](docs/BUILD.md)
 - [公开测试](docs/PUBLIC_TESTING.md)
 - [第三方与生成引用来源](docs/PROVENANCE.md)

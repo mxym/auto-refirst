@@ -43,6 +43,34 @@ python3 tests/run_public_regression.py --binary build/auto-refirst --tier all
 
 Windows 多配置生成器需要将 `--binary` 指向实际配置目录中的 executable。
 
+候选发布构建应显式启用 warnings-as-errors，并要求 binary 内嵌的完整 commit
+与 clean source 精确一致：
+
+```sh
+cmake -S . -B build-strict -DCMAKE_BUILD_TYPE=Release \
+  -DAUTO_REFIRST_WARNINGS_AS_ERRORS=ON
+cmake --build build-strict --parallel
+python3 tests/run_public_regression.py \
+  --binary build-strict/auto-refirst --tier all --require-clean-source
+python3 tests/test_build_metadata_source_root.py
+```
+
+Windows 多配置生成器省略 `CMAKE_BUILD_TYPE`，并在 build 命令增加
+`--config Release`。`--version` 会分别报告 product version、完整 source
+commit、目标平台及 report schema version；source archive 只有在 source root
+没有 `.git` 时才接受 release harness 注入的完整 40/64 位 commit。
+
+本地 provenance 与安装 allowlist gate：
+
+```sh
+cmake --build build --target auto_refirst_public_provenance_check
+cmake --build build --target auto_refirst_public_install_stage_check
+```
+
+Windows 多配置生成器在上述命令后增加 `--config Release`。安装 gate 会把当前
+build 暂存到临时 prefix，逐字节核对 binary、README、NOTICE、项目许可证及
+`LICENSES/`，并拒绝额外文件、目录和链接。
+
 ## Sanitizer smoke
 
 GCC/Clang：

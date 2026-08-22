@@ -26,7 +26,8 @@ std::vector<NuitkaConstantBlock> parse_constant_directory(std::span<const std::u
         while(q<d.size()&&q-p<512&&d[q]){auto c=d[q];if(c<0x20||c>0x7e)return out;++q;}
         if(q>=d.size()||q-p>=512)return out;
         std::string name(reinterpret_cast<const char*>(d.data()+p),q-p);p=q+1;
-        if(p+4>d.size())return out;auto sz=u32(d,p);p+=4;if(!sz||sz>d.size()-p)return out;
+        if(p+4>d.size())return out;
+        auto sz=u32(d,p);p+=4;if(!sz||sz>d.size()-p)return out;
         out.push_back({std::move(name),h,p,sz});p+=sz;
         if(p>=d.size())break;
         // If the next header is not plausible, this was the final valid block.
@@ -34,7 +35,8 @@ std::vector<NuitkaConstantBlock> parse_constant_directory(std::span<const std::u
         if(t>=d.size()||t-p>=512||t+5>d.size())break;
         auto nsz=u32(d,t+1);if(!nsz||nsz>d.size()-(t+5))break;
     }
-    if(!out.empty())total=p-start;return out;
+    if(!out.empty())total=p-start;
+    return out;
 }
 std::optional<std::pair<std::uint64_t,std::vector<NuitkaConstantBlock>>> find_constant_blob(std::span<const std::uint8_t>d){
     constexpr std::string_view mark=".bytecode";std::size_t pos=0;
@@ -52,7 +54,7 @@ struct ConstReader {
     bool fail(std::string msg){if(out&&out->error.empty()){out->error=std::move(msg);out->error_offset=p;}return false;}
     bool need(std::size_t n){return n<=d.size()-std::min(p,d.size())||fail("constant blob truncated");}
     std::uint8_t byte(){if(!need(1))return 0;return d[p++];}
-    std::uint16_t word(){if(!need(2))return 0;auto v=std::uint16_t(d[p])|(std::uint16_t(d[p+1])<<8);p+=2;return v;}
+    std::uint16_t word(){if(!need(2))return 0;auto v=static_cast<std::uint16_t>(std::uint16_t(d[p])|(std::uint16_t(d[p+1])<<8));p+=2;return v;}
     std::uint64_t var(){std::uint64_t r=0,f=1;for(int i=0;i<10;i++){auto v=byte();if(out&&!out->error.empty())return 0;if(v&0x7f){if((v&0x7f)>std::numeric_limits<std::uint64_t>::max()/f){fail("constant varint overflow");return 0;}r+=std::uint64_t(v&0x7f)*f;}if(v<128)return r;if(f>(std::numeric_limits<std::uint64_t>::max()>>7)){fail("constant varint overflow");return 0;}f<<=7;}fail("constant varint too long");return 0;}
     std::string cstr(std::size_t max=1<<20){auto q=p;while(q<d.size()&&q-p<max&&d[q])++q;if(q>=d.size()||q-p>=max){fail("unterminated constant string");return{};}std::string x(reinterpret_cast<const char*>(d.data()+p),q-p);p=q+1;return x;}
     std::string rawstr(std::size_t n){if(n>d.size()-p){fail("constant string length out of range");return{};}std::string x(reinterpret_cast<const char*>(d.data()+p),n);p+=n;return x;}

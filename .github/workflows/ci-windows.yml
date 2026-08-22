@@ -10,15 +10,27 @@ permissions:
   contents: read
 
 jobs:
-  public-core:
+  public-static:
+    name: Native MSVC P0/P1 static
     runs-on: windows-2022
     timeout-minutes: 30
     steps:
-      - name: Checkout
+      - name: Checkout exact event commit
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Record toolchain
+      - name: Assert exact clean checkout
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $actualSha = (git rev-parse HEAD).Trim()
+          if ($actualSha -ne $env:EXPECTED_SHA) { throw "checkout mismatch: $actualSha != $env:EXPECTED_SHA" }
+          if (git status --porcelain=v1 --untracked-files=all) { throw "checkout is not clean" }
+      - name: Public source hygiene
+        run: python tests/check_public_source_hygiene.py --require-clean
+      - name: Record native MSVC toolchain
         shell: pwsh
         run: |
           cmake --version
@@ -28,14 +40,47 @@ jobs:
           } else {
             Write-Host "vswhere not found at $vswhere; CMake generator detection remains authoritative"
           }
-          git rev-parse HEAD
-      - name: Configure Release
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+      - name: Select warnings-as-errors contract
+        id: strict
+        shell: pwsh
+        run: |
+          git grep -q AUTO_REFIRST_WARNINGS_AS_ERRORS -- CMakeLists.txt cmake 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            "arg=-DAUTO_REFIRST_WARNINGS_AS_ERRORS=ON" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          } else {
+            "arg=-DCMAKE_COMPILE_WARNING_AS_ERROR=ON" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          }
+      - name: Configure strict Release
+        run: >-
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+          ${{ steps.strict.outputs.arg }}
       - name: Build
         run: cmake --build build --config Release --parallel 2
-      - name: Version smoke
-        run: .\build\Release\auto-refirst.exe --version
-      - name: Public P0/P1 regression
-        run: python tests/run_public_regression.py --binary build/Release/auto-refirst.exe
-      - name: Directory resource contract
+      - name: Verify embedded binary source identity
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $versionOutput = (& .\build\Release\auto-refirst.exe --version) -join "`n"
+          Write-Host $versionOutput
+          $embedded = ($versionOutput -split "`n" | Where-Object { $_ -like "git_commit=*" } | ForEach-Object { $_.Substring(11) })
+          if ($embedded) {
+            if ($embedded -ne $env:EXPECTED_SHA) { throw "embedded commit mismatch: $embedded != $env:EXPECTED_SHA" }
+          } else {
+            git grep -q 'git_commit=' -- src include cmake 2>$null
+            if ($LASTEXITCODE -eq 0) { throw "binary omitted git_commit although the source declares the identity contract" }
+            Write-Host "::notice::This public baseline predates embedded build identity; the RC candidate must expose git_commit and will be checked exactly."
+          }
+      - name: Public P0/P1 static regression
+        run: python tests/run_public_regression.py --binary build/Release/auto-refirst.exe --tier all --require-clean-source
+      - name: Directory resource static contract
         run: python tests/test_bounded_directory_output.py build/Release/auto-refirst.exe
+      - name: Provenance and exact install staging
+        run: >-
+          cmake --build build --config Release --parallel 2 --target
+          auto_refirst_public_provenance_check
+          auto_refirst_public_install_stage_check
+      - name: Assert source remains clean
+        shell: pwsh
+        run: |
+          if (git status --porcelain=v1 --untracked-files=all) { throw "source tree was modified by the CI gate" }

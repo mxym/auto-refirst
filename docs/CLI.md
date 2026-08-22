@@ -1,5 +1,7 @@
 # CLI 与运行时授权
 
+发布自动化所依赖的精确退出码和授权语义见 [CLI process and authorization contract](CLI_CONTRACT.md)。
+
 ## 基本形式
 
 ```text
@@ -71,6 +73,10 @@ auto-refirst target --run --apply --json
 ```
 
 `--run=unpack --apply` 仍要求显式 `--apply` 才能进入安装步骤。
+
+## 进程退出码
+
+CLI 使用固定的 `0/1/2/3/4` 契约。可疑发现、部分分析、预算拒绝或不支持的深层路线会写入报告，本身不等于进程失败。精确定义见 [docs/CLI_CONTRACT.md](CLI_CONTRACT.md)。
 
 ## 安全建议
 

@@ -1,5 +1,7 @@
 # 外部验证与已知缺口
 
+本页固定保留 `0.1.0-alpha.1` 的历史外部验证记录。以下数字、资源观测和缺口均按当时冻结的 Alpha 产品与评估口径描述，不构成 `0.1.0-rc.1` 的新验证结果，也不应被解释为 RC 当前缺口清单。RC 的实现边界见 [CAPABILITIES.md](CAPABILITIES.md)；发布门状态以冻结提交上的 hosted CI 和 `RELEASE_CHECKLIST.md` 要求为准。
+
 ## 方法
 
 公开 Alpha 的能力结论来自三类验证：
@@ -10,9 +12,9 @@
 
 产品逻辑在评估过程中不使用样本名、路径、哈希或题目身份。真实样本只作为验收 oracle，不进入公开仓库。
 
-## 36-case 外部 holdout
+## Alpha 36-case 外部 holdout
 
-最近一轮 holdout 包含 36 个新鲜外部案例，覆盖 Unity、Godot、.NET/NativeAOT、JVM/JAR、Android/Flutter、PyInstaller/direct-pyc、普通 PE/ELF 等类别。资源修复后的默认产品运行：
+该轮 Alpha holdout 包含 36 个新鲜外部案例，覆盖 Unity、Godot、.NET/NativeAOT、JVM/JAR、Android/Flutter、PyInstaller/direct-pyc、普通 PE/ELF 等类别。资源修复后的默认产品运行：
 
 ```text
 36 / 36   exit code 0
@@ -31,9 +33,9 @@ J >= 3 (route quality)       29 / 36
 D4 (evidence quality)        32 / 36
 ```
 
-这些数字描述当前样本集上的验收结果，不等同于对所有版本/产品的覆盖率承诺。
+这些数字描述该轮样本集上的验收结果，不等同于对所有版本/产品的覆盖率承诺。
 
-## 目录资源压力
+## Alpha 目录资源压力
 
 同一批次的默认资源观测：
 
@@ -48,7 +50,7 @@ max wall time                10.9 s
 
 ## 关键外部正例类型
 
-当前验证中形成较强闭包的代表性能力包括：
+该轮 Alpha 验证中形成较强闭包的代表性能力包括：
 
 - Unity Mono application payload 与 runtime 关系；
 - 多个 Unity IL2CPP metadata/native pair；
@@ -58,7 +60,7 @@ max wall time                10.9 s
 - PyInstaller CArchive -> user bytecode 物化/再分析；
 - 普通 PE/ELF/JVM/Wasm 等格式边界。
 
-## 已知缺口
+## Alpha 验证时记录的缺口
 
 ### Godot
 
@@ -68,19 +70,19 @@ max wall time                10.9 s
 
 ### Unity
 
-IL2CPP metadata/native pair 对常见命名和结构组合表现稳定；同时把 `GameAssembly` 与 `global-metadata.dat` 改成不透明名称时，backend 仍可能被确认，但精确 pair relation 会丢失。当前实现没有用特定文件名硬编码补齐这一关系。
+IL2CPP metadata/native pair 对常见命名和结构组合表现稳定；同时把 `GameAssembly` 与 `global-metadata.dat` 改成不透明名称时，backend 仍可能被确认，但精确 pair relation 会丢失。该轮 Alpha 产品没有用特定文件名硬编码补齐这一关系。
 
 ### Go
 
-普通 Go executable/runtime 结构已支持；一组 Go 1.26.6 新鲜样本的 buildinfo/runtime metadata 确认不稳定，因此不把最新 Go 版本元数据恢复描述为无条件支持。
+该轮 Alpha 产品已支持普通 Go executable/runtime 结构；一组 Go 1.26.6 新鲜样本的 buildinfo/runtime metadata 确认不稳定，因此当时不把最新 Go 版本元数据恢复描述为无条件支持。
 
 ### Dart / Flutter
 
-Flutter APK 的 native delivery surface 和 assets 可以提供可靠路线；Dart snapshot/AOT 的深层函数/对象语义恢复仍有限。
+该轮 Alpha 产品中，Flutter APK 的 native delivery surface 和 assets 可以提供可靠路线；Dart snapshot/AOT 的深层函数/对象语义恢复仍有限。
 
 ### VM / symbolic execution
 
-当前解释器边界分析用于识别 program/state/dispatch 结构和下一步路线。通用 VM solver、全程序符号执行、自动 flag 求解未进入产品。原因包括路径/状态空间增长、环境建模成本和外部样本泛化不足。需要这类能力时可与 angr、Ghidra 等下游工具组合。
+该轮 Alpha 产品的解释器边界分析用于识别 program/state/dispatch 结构和下一步路线。通用 VM solver、全程序符号执行、自动 flag 求解当时未进入产品。原因包括路径/状态空间增长、环境建模成本和外部样本泛化不足。需要这类能力时可与 angr、Ghidra 等下游工具组合。
 
 ## 过拟合防护
 

@@ -946,6 +946,7 @@ bool ascii_ieq(std::string_view a,std::string_view b){if(a.size()!=b.size())retu
 bool pe_imports_module(const PeInfo&pe,std::string_view name){if(!pe.valid)return false;return std::any_of(pe.imports.begin(),pe.imports.end(),[&](const auto&m){return ascii_ieq(m.name,name);});}
 bool pe_has_il2cpp_export(const PeInfo&pe){if(!pe.valid)return false;return std::any_of(pe.exports.begin(),pe.exports.end(),[](const auto&e){return e.name.rfind("il2cpp_",0)==0&&e.name.size()>8;});}
 }
+UnityInfo inspect_unity_il2cpp_metadata(std::span<const std::uint8_t>d){return parse_meta(d);}
 UnityInfo detect_unity(const std::filesystem::path&input,std::span<const std::uint8_t>d,const PeInfo&pe){
     UnityInfo u;
     if(d.size()>=8&&u32(d,0)==0xFAB11BAF){

@@ -142,6 +142,7 @@ struct GDExtensionBundleInfo {
 };
 
 std::optional<std::string> normalize_gdextension_resource_path(std::string_view input);
+bool gdextension_pe64_x64_feature_compatible(std::string_view feature_key);
 GDExtensionDescriptorInfo parse_gdextension_descriptor(std::span<const std::uint8_t> data);
 GDExtensionNativeInfo analyze_gdextension_pe(std::span<const std::uint8_t> data,
                                              const PeInfo& pe,

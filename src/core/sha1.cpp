@@ -12,7 +12,7 @@ struct Sha1Stream {
     std::array<std::uint32_t,5> h{0x67452301,0xefcdab89,0x98badcfe,0x10325476,0xc3d2e1f0};
     std::array<std::uint8_t,64> buf{};std::size_t used=0;std::uint64_t bytes=0;
     void update(std::span<const std::uint8_t>d){bytes+=d.size();std::size_t p=0;while(p<d.size()){auto n=std::min<std::size_t>(64-used,d.size()-p);std::copy_n(d.begin()+static_cast<std::ptrdiff_t>(p),n,buf.begin()+static_cast<std::ptrdiff_t>(used));used+=n;p+=n;if(used==64){block(h,buf.data());used=0;}}}
-    std::array<std::uint8_t,20> finish(){auto bits=bytes*8;buf[used++]=0x80;if(used>56){while(used<64)buf[used++]=0;block(h,buf.data());used=0;}while(used<56)buf[used++]=0;for(int i=7;i>=0;--i)buf[used++]=std::uint8_t(bits>>(i*8));block(h,buf.data());std::array<std::uint8_t,20>o{};for(int i=0;i<5;i++){o[i*4]=h[i]>>24;o[i*4+1]=h[i]>>16;o[i*4+2]=h[i]>>8;o[i*4+3]=h[i];}return o;}
+    std::array<std::uint8_t,20> finish(){auto bits=bytes*8;buf[used++]=0x80;if(used>56){while(used<64)buf[used++]=0;block(h,buf.data());used=0;}while(used<56)buf[used++]=0;for(int i=7;i>=0;--i)buf[used++]=std::uint8_t(bits>>(i*8));block(h,buf.data());std::array<std::uint8_t,20>o{};for(int i=0;i<5;i++){o[i*4]=static_cast<std::uint8_t>(h[i]>>24);o[i*4+1]=static_cast<std::uint8_t>(h[i]>>16);o[i*4+2]=static_cast<std::uint8_t>(h[i]>>8);o[i*4+3]=static_cast<std::uint8_t>(h[i]);}return o;}
 };
 }
 std::array<std::uint8_t,20> sha1_bytes(std::span<const std::uint8_t>d){Sha1Stream s;s.update(d);return s.finish();}

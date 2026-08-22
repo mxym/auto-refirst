@@ -189,7 +189,7 @@ std::vector<PeApiCall> pe_api_calls(std::span<const std::uint8_t>d,const PeInfo&
     }
     if(iat.empty())return out;
 
-    // scale repair: retain only the compact thunk map.  The old
+    // Scale repair: retain only the compact thunk map. The old
     // implementation stored every decoded RuntimeFunction simultaneously, which
     // amplified UnityPlayer-class images into multi-GiB RSS.  Decode one bounded
     // function at a time, discard it, then perform the call pass the same way.
@@ -281,11 +281,12 @@ struct PeCfg {
 PeCfg pe_cfg(std::span<const std::uint8_t>d,const PeInfo&pe,PeFuncRange f) {
     PeCfg g;g.ins=pe_decode_range(d,pe,f);g.edges.resize(g.ins.size());for(std::size_t i=0;i<g.ins.size();++i)g.by_rva[g.ins[i].rva]=i;
     auto edge=[&](std::size_t a,std::uint32_t r){auto it=g.by_rva.find(r);if(it!=g.by_rva.end())g.edges[a].push_back(it->second);};
-    for(std::size_t i=0;i<g.ins.size();++i){const auto&x=g.ins[i];const auto fall=i+1<g.ins.size()?std::optional<std::uint32_t>(g.ins[i+1].rva):std::nullopt;
+    for(std::size_t i=0;i<g.ins.size();++i){
+        const auto&x=g.ins[i];const bool has_fall=i+1<g.ins.size();const std::uint32_t fall=has_fall?g.ins[i+1].rva:0;
         if(x.ins.meta.category==ZYDIS_CATEGORY_RET)continue;
         if(x.ins.meta.category==ZYDIS_CATEGORY_UNCOND_BR){if(auto t=pe_rel_target(x))edge(i,*t);continue;}
-        if(x.ins.meta.category==ZYDIS_CATEGORY_COND_BR){if(auto t=pe_rel_target(x))edge(i,*t);if(fall)edge(i,*fall);continue;}
-        if(fall)edge(i,*fall);
+        if(x.ins.meta.category==ZYDIS_CATEGORY_COND_BR){if(auto t=pe_rel_target(x))edge(i,*t);if(has_fall)edge(i,fall);continue;}
+        if(has_fall)edge(i,fall);
     }
     return g;
 }
@@ -506,7 +507,7 @@ std::optional<std::pair<std::uint64_t,std::uint32_t>> elf_static_sigaction(std::
     return std::pair<std::uint64_t,std::uint32_t>{*handler,flags};
 }
 
-// : bounded stack-resident glibc sigaction recovery.  This is
+// Bounded stack-resident glibc sigaction recovery. This is
 // deliberately layout-specific (glibc x86-64, 152-byte object) and refuses
 // aliased/indexed stack objects.  It exists because optimized and hand-written
 // programs commonly build sigaction objects on the stack; treating those as
@@ -651,7 +652,7 @@ std::string linux_signal_name(int s);
 bool sane_linux_signal(std::uint64_t s);
 
 // Sectionless/static binaries may install a handler with the Linux x86-64
-// rt_sigaction syscall directly. uses an entry-rooted bounded
+// rt_sigaction syscall directly. Recovery uses an entry-rooted bounded
 // direct-control walk rather than inventing section/function boundaries: at
 // most 4096 basic blocks, 32768 instructions total, and 256 per block.
 // Indirect transfers stop a block and are never guessed.
@@ -946,8 +947,16 @@ void analyze_raw_linux_signal_surface(
 }
 
 struct ElfCfg {std::vector<ElfDecoded>ins;std::map<std::uint64_t,std::size_t>by_va;std::vector<std::vector<std::size_t>>edges;};
-ElfCfg elf_cfg(std::span<const std::uint8_t>d,const ElfInfo&elf,ElfFuncRange f){ElfCfg g;g.ins=elf_decode_range(d,elf,f);g.edges.resize(g.ins.size());for(std::size_t i=0;i<g.ins.size();++i)g.by_va[g.ins[i].va]=i;auto edge=[&](std::size_t a,std::uint64_t v){auto it=g.by_va.find(v);if(it!=g.by_va.end())g.edges[a].push_back(it->second);};
-    for(std::size_t i=0;i<g.ins.size();++i){const auto&x=g.ins[i];const auto fall=i+1<g.ins.size()?std::optional<std::uint64_t>(g.ins[i+1].va):std::nullopt;if(x.ins.meta.category==ZYDIS_CATEGORY_RET)continue;if(x.ins.meta.category==ZYDIS_CATEGORY_UNCOND_BR){if(auto t=elf_rel_target(x))edge(i,*t);continue;}if(x.ins.meta.category==ZYDIS_CATEGORY_COND_BR){if(auto t=elf_rel_target(x))edge(i,*t);if(fall)edge(i,*fall);continue;}if(fall)edge(i,*fall);}
+ElfCfg elf_cfg(std::span<const std::uint8_t>d,const ElfInfo&elf,ElfFuncRange f){
+    ElfCfg g;g.ins=elf_decode_range(d,elf,f);g.edges.resize(g.ins.size());for(std::size_t i=0;i<g.ins.size();++i)g.by_va[g.ins[i].va]=i;
+    auto edge=[&](std::size_t a,std::uint64_t v){auto it=g.by_va.find(v);if(it!=g.by_va.end())g.edges[a].push_back(it->second);};
+    for(std::size_t i=0;i<g.ins.size();++i){
+        const auto&x=g.ins[i];const bool has_fall=i+1<g.ins.size();const std::uint64_t fall=has_fall?g.ins[i+1].va:0;
+        if(x.ins.meta.category==ZYDIS_CATEGORY_RET)continue;
+        if(x.ins.meta.category==ZYDIS_CATEGORY_UNCOND_BR){if(auto t=elf_rel_target(x))edge(i,*t);continue;}
+        if(x.ins.meta.category==ZYDIS_CATEGORY_COND_BR){if(auto t=elf_rel_target(x))edge(i,*t);if(has_fall)edge(i,fall);continue;}
+        if(has_fall)edge(i,fall);
+    }
     return g;
 }
 bool elf_reachable(const ElfCfg&g,std::size_t start,std::size_t goal,std::optional<std::size_t>blocked={}){if(start>=g.ins.size()||goal>=g.ins.size()||blocked==start)return false;std::vector<std::uint8_t>seen(g.ins.size());std::vector<std::size_t>q{start};seen[start]=1;for(std::size_t p=0;p<q.size();++p){const auto u=q[p];if(u==goal)return true;for(auto v:g.edges[u])if(!seen[v]&&(!blocked||v!=*blocked)){seen[v]=1;q.push_back(v);}}return false;}
@@ -1271,7 +1280,7 @@ ContextResumeEvidence elf_siginfo_context_evidence(std::span<const std::uint8_t>
     return ev;
 }
 
-// : tiny AArch64 grammar.  This is intentionally not a general
+// Tiny AArch64 grammar. This is intentionally not a general
 // disassembler/SSA engine: fixed-width decode plus a bounded provenance set.
 struct A64Insn { std::uint64_t va=0; std::uint32_t raw=0; };
 struct A64Value { std::uint64_t value=0; std::string provenance; };
@@ -1637,7 +1646,7 @@ std::vector<Finding> compose_exception_execution_surfaces(
 
     // Linux signal/exception composition is stricter than raw plane emission.
     // X1 registration, X2 trigger, X3 dispatch, and X4 handler outcome alone do
-    // not make a MAIN-facing alternate surface.  Promote only a fully semantic
+    // not make a reported alternate surface. Promote only a fully semantic
     // X5 exceptional closure, or an X4 context-resume relation whose concrete
     // trigger and one executable/file-backed landing target are both exact.
     if(elf.valid&&elf.elf64&&elf.little_endian&&elf.machine==62&&
@@ -1710,7 +1719,7 @@ std::vector<Finding> compose_exception_execution_surfaces(
         }
     }
 
-    // AArch64 product gate: share the X contract, not the
+    // The AArch64 product gate shares the X contract, not the
     // x86 instruction grammar. Exact X4 context-resume is REVIEW. Separately,
     // an mprotect(PROT_NONE)/writable partition is REVIEW guidance only and
     // remains below X2 until a concrete fault address is proven.
@@ -1747,7 +1756,7 @@ std::vector<Finding> compose_exception_execution_surfaces(
                     f.evidence.push_back("exact "+chosen->mechanism+" registration resolves an executable exception callback at RVA "+hx(chosen->handler->offset));
                     if(strong)f.evidence.push_back("existing exceptional-flow proof closes a compatible concrete trigger to that exact registered handler: "+strong->trigger_kind);
                     else f.negative_evidence.push_back("no compatible concrete exception trigger is statically closed to the registered handler; recursive/HLT/dynamic-unwind semantics remain unresolved");
-                    f.negative_evidence.push_back("static composition does not claim VirtualAlloc success, first execution, or exception dispatch was observed; those are runtime claims");
+                    f.negative_evidence.push_back("static composition does not claim VirtualAlloc success, first execution, or observed exception dispatch; those require runtime evidence");
                     f.ranges.push_back(pe_rva_ref(cb_rva,1,"exact TLS callback target",artifact_identity));f.ranges.push_back(pe_rva_ref(alloc.callsite,alloc.instruction_size,"pre-entry executable VirtualAlloc call",artifact_identity));if(chosen->registration_site)f.ranges.push_back(*chosen->registration_site);if(chosen->handler)f.ranges.push_back(*chosen->handler);if(strong&&strong->trigger_location)f.ranges.push_back(*strong->trigger_location);
                     f.fields["surface_state"]=strong?"HIGH_ALTERNATE_SURFACE":"REVIEW_ALTERNATE_SURFACE";f.fields["semantic_state"]=strong?"STATIC_TRIGGER_HANDLER_CLOSED":"UNRESOLVED_EXCEPTION_TRIGGER_SEMANTICS";f.fields["static_control_relation"]="CONFIRMED_PRE_ENTRY_EXECUTABLE_ALLOCATION_PLUS_HANDLER_REGISTRATION";f.fields["runtime_confirmation"]="NOT_OBSERVED";f.fields["tls_callback_rva"]=hx(cb_rva);f.fields["allocation_call_rva"]=hx(alloc.callsite);f.fields["allocation_protection"]=hx(protection);f.fields["exception_mechanism"]=chosen->mechanism;f.fields["handler_rva"]=hx(chosen->handler->offset);
                     f.suggested_actions.push_back("analyze TLS/pre-entry materialization and the registered exception callback as first-class control surfaces before relying on declared entry/main");if(!strong)f.suggested_actions.push_back("use runtime tracing/debugging to confirm the concrete exception trigger and dynamically materialized unwind/handler state");out.push_back(std::move(f));}

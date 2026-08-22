@@ -10,6 +10,29 @@
 #include <string>
 #include <vector>
 namespace prts {
+struct GodotLegacyConfigRemap {
+    std::string source;
+    std::string target;
+};
+struct GodotLegacyConfigAutoload {
+    std::string name;
+    std::string path;
+    bool singleton=false;
+};
+struct GodotLegacyEngineConfigInfo {
+    bool candidate=false;
+    bool valid=false;
+    std::uint32_t property_count=0;
+    std::string application_name;
+    std::string main_scene;
+    std::string icon;
+    std::vector<GodotLegacyConfigRemap> remaps;
+    std::vector<GodotLegacyConfigAutoload> autoloads;
+    std::string error;
+    std::uint64_t error_offset=0;
+};
+GodotLegacyEngineConfigInfo parse_godot_legacy_engine_config(std::span<const std::uint8_t> data);
+
 struct GodotPckEntry {
     std::string path;
     std::uint64_t offset=0,size=0;

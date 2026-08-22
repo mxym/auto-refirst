@@ -2,11 +2,32 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <system_error>
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
 namespace prts {
+inline std::string error_message_utf8(const std::error_code& error) {
+    const auto local = error.message();
+#ifdef _WIN32
+    if (local.empty()) return "error_code=" + std::to_string(error.value());
+    const int wide_size = MultiByteToWideChar(CP_ACP, 0, local.data(), static_cast<int>(local.size()), nullptr, 0);
+    if (wide_size <= 0) return "error_code=" + std::to_string(error.value());
+    std::wstring wide(static_cast<std::size_t>(wide_size), L'\0');
+    if (MultiByteToWideChar(CP_ACP, 0, local.data(), static_cast<int>(local.size()), wide.data(), wide_size) != wide_size)
+        return "error_code=" + std::to_string(error.value());
+    const int utf8_size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(), wide_size, nullptr, 0, nullptr, nullptr);
+    if (utf8_size <= 0) return "error_code=" + std::to_string(error.value());
+    std::string utf8(static_cast<std::size_t>(utf8_size), '\0');
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(), wide_size, utf8.data(), utf8_size, nullptr, nullptr) != utf8_size)
+        return "error_code=" + std::to_string(error.value());
+    return utf8;
+#else
+    return local;
+#endif
+}
+
 inline std::string path_utf8(const std::filesystem::path& path) {
 #ifdef _WIN32
     const auto& wide = path.native();

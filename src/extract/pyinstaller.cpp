@@ -71,12 +71,14 @@ std::optional<std::vector<std::uint8_t>> zlib_dec_unknown(std::span<const std::u
 }
 
 bool parse_toc(std::span<const std::uint8_t>d,std::uint64_t start,std::uint32_t len,std::uint32_t archive_len,std::vector<PyInstEntry>&out,int&score){
-    if(start+len>d.size()||len<18)return false;std::size_t p=static_cast<std::size_t>(start),end=p+len;int good=0;
+    if(start+len>d.size()||len<18)return false;
+    std::size_t p=static_cast<std::size_t>(start),end=p+len;int good=0;
     while(p<end){if(p+18>end)return false;auto el=be32(d,p),off=be32(d,p+4),cs=be32(d,p+8),us=be32(d,p+12);auto cf=d[p+16];char tc=char(d[p+17]);if(el<18||p+el>end||el>(1u<<20))return false;if(off>archive_len||std::uint64_t(off)+cs>archive_len)return false;if(cf>1||!sane_type(tc))return false;auto nm=d.subspan(p+18,el-18);if(!sane_name(nm))return false;out.push_back({off,cs,us,cf,tc,clean_name(nm)});++good;p+=el;}
     score=good;return p==end&&good>0;
 }
 std::optional<PyInstArchiveInfo> cookie_at(std::span<const std::uint8_t>d,std::uint64_t pos,bool require_magic){
-    if(pos+COOKIE_SIZE>d.size())return std::nullopt;if(require_magic&&!std::equal(MAGIC.begin(),MAGIC.end(),d.begin()+static_cast<std::ptrdiff_t>(pos)))return std::nullopt;
+    if(pos+COOKIE_SIZE>d.size())return std::nullopt;
+    if(require_magic&&!std::equal(MAGIC.begin(),MAGIC.end(),d.begin()+static_cast<std::ptrdiff_t>(pos)))return std::nullopt;
     auto al=be32(d,pos+8),to=be32(d,pos+12),tl=be32(d,pos+16),pv=be32(d,pos+20);if(al<COOKIE_SIZE||al>pos+COOKIE_SIZE||tl<18||to>=al||std::uint64_t(to)+tl>al-COOKIE_SIZE)return std::nullopt;if(!((pv>=20&&pv<100)||(pv>=200&&pv<400)))return std::nullopt;
     auto start=pos+COOKIE_SIZE-al;std::vector<PyInstEntry> entries;int score=0;if(!parse_toc(d,start+to,tl,al,entries,score))return std::nullopt;if(score<2)return std::nullopt;
     PyInstArchiveInfo r;r.valid=true;r.standard_magic=require_magic;r.heuristic_cookie=!require_magic;r.cookie_offset=pos;r.archive_start=start;r.archive_end=pos+COOKIE_SIZE;r.archive_length=al;r.toc_offset=to;r.toc_length=tl;r.python_version=pv;r.python_library=clean_lib(d.subspan(pos+24,64));r.entries=std::move(entries);
@@ -108,7 +110,8 @@ private:
             case 'r':{auto n=i32();if(!n||*n<0||std::size_t(*n)>=refs_.size())return fail();return refs_[*n];}
             default:return fail();
         }
-        if(addref)refs_[refidx]=v;return v;
+        if(addref)refs_[refidx]=v;
+        return v;
     }
 };
 struct PyzEnt{std::string name;int type=0;std::uint32_t off=0,len=0;};
@@ -129,7 +132,8 @@ PyInstArchiveInfo detect_pyinstaller(std::span<const std::uint8_t>d){
 }
 
 std::optional<std::vector<std::uint8_t>> pyinstaller_entry_bytes(std::span<const std::uint8_t>d,const PyInstArchiveInfo&info,const PyInstEntry&e){
-    if(!info.valid)return std::nullopt;auto off=info.archive_start+e.offset;if(off+e.compressed_size>d.size())return std::nullopt;auto raw=d.subspan(off,e.compressed_size);if(e.compression_flag)return zlib_dec(raw,e.uncompressed_size);return std::vector<std::uint8_t>(raw.begin(),raw.end());
+    if(!info.valid)return std::nullopt;
+    auto off=info.archive_start+e.offset;if(off+e.compressed_size>d.size())return std::nullopt;auto raw=d.subspan(off,e.compressed_size);if(e.compression_flag)return zlib_dec(raw,e.uncompressed_size);return std::vector<std::uint8_t>(raw.begin(),raw.end());
 }
 
 PyInstPyzMemberData pyinstaller_pyz_member_bytes(std::span<const std::uint8_t>pyz,std::string_view name,std::size_t max_output_bytes){
@@ -167,7 +171,8 @@ PyInstExtractResult extract_pyinstaller(std::span<const std::uint8_t>d,const PyI
 
     std::array<std::uint8_t,4>pycmagic{};bool gotmagic=false;
     for(const auto&e:info.entries){
-        if(e.typecode!='z')continue;auto off=info.archive_start+e.offset;if(off+e.compressed_size>d.size())continue;auto raw=d.subspan(off,e.compressed_size);std::vector<std::uint8_t>tmp;std::span<const std::uint8_t>payload=raw;
+        if(e.typecode!='z')continue;
+        auto off=info.archive_start+e.offset;if(off+e.compressed_size>d.size())continue;auto raw=d.subspan(off,e.compressed_size);std::vector<std::uint8_t>tmp;std::span<const std::uint8_t>payload=raw;
         if(e.compression_flag){if(e.uncompressed_size>max_output_bytes)continue;auto dec=zlib_dec(raw,e.uncompressed_size);if(!dec)continue;tmp=std::move(*dec);payload=tmp;}
         if(payload.size()>=8&&std::memcmp(payload.data(),"PYZ\0",4)==0){std::copy_n(payload.begin()+4,4,pycmagic.begin());gotmagic=true;break;}
     }
@@ -187,7 +192,8 @@ PyInstExtractResult extract_pyinstaller(std::span<const std::uint8_t>d,const PyI
                 if(preserve_target){
                     auto target=path_with_ascii_suffix(base,target_magic?".target.pyc":".target.marshal");bool ok=false;
                     if(target_magic){auto wrapped=pyc_wrap(marshal,*target_magic,info.python_version);ok=write_budgeted(target,wrapped,role,std::string(label),priority,false,recursive);}else ok=write_budgeted(target,marshal,role,std::string(label),priority,false,recursive);
-                    if(!ok)return false;++r.target_preserved_files;
+                    if(!ok)return false;
+                    ++r.target_preserved_files;
                 }
                 auto normalized=path_with_ascii_suffix(base,".pyc");auto wrapped=pyc_wrap(norm.bytes,*official_magic,info.python_version);
                 if(!write_budgeted(normalized,wrapped,role,std::string(label),priority,true,recursive))return false;
@@ -219,7 +225,8 @@ PyInstExtractResult extract_pyinstaller(std::span<const std::uint8_t>d,const PyI
             write_code(base,payload,target_magic,e.name,role,role=="user"?"HIGH":"LOW",role=="user");continue;
         }
         if(e.typecode!='z'){
-            if(mode!=PyInstExtractMode::Full)continue;auto base=(role=="runtime_binary"?dir/path_from_utf8("runtime"):dir/path_from_utf8("bulk"))/rel;write_budgeted(base,payload,role,e.name,role=="runtime_binary"?"LOW":"BULK",false,true);continue;
+            if(mode!=PyInstExtractMode::Full)continue;
+            auto base=(role=="runtime_binary"?dir/path_from_utf8("runtime"):dir/path_from_utf8("bulk"))/rel;write_budgeted(base,payload,role,e.name,role=="runtime_binary"?"LOW":"BULK",false,true);continue;
         }
 
         auto pyz_path=dir/path_from_utf8("PYZ")/rel;if(!write_budgeted(pyz_path,payload,"pyz_archive",e.name,"HIGH",false,false))continue;
@@ -288,7 +295,8 @@ void analyze_pyinstaller_bootstrap(std::span<const std::uint8_t>d,PyInstArchiveI
                 }
             }
         }
-        if(m.name!="struct")++core_seen;a.bootstrap_modules.push_back(std::move(m));
+        if(m.name!="struct")++core_seen;
+        a.bootstrap_modules.push_back(std::move(m));
     }
     std::set<std::string> common;bool first=true;for(auto name:{"pyimod01_archive","pyimod02_importers","pyimod03_ctypes","pyimod04_pywin32"}){auto it=matched_labels.find(name);if(it==matched_labels.end()){common.clear();first=false;break;}if(first){common=it->second;first=false;}else{std::set<std::string>x;std::set_intersection(common.begin(),common.end(),it->second.begin(),it->second.end(),std::inserter(x,x.begin()));common=std::move(x);}}
     if(core_seen==4&&core_matched==4&&!common.empty()){

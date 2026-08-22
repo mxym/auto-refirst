@@ -9,7 +9,6 @@
 #include <string_view>
 namespace prts { namespace {
 double ent_counts(const std::array<std::size_t,256>&c,std::size_t n){if(!n)return 0;double e=0;for(auto x:c)if(x){double q=double(x)/double(n);e-=q*std::log2(q);}return e;}
-double ent(std::span<const std::uint8_t> v){std::array<std::size_t,256>c{};for(auto b:v)++c[b];return ent_counts(c,v.size());}
 bool printable(std::uint8_t b){return b>=0x20&&b<=0x7e;}
 enum HintMask : std::uint32_t { H_NONE=0,H_PYINSTALLER=1u<<0,H_NUITKA=1u<<1,H_GODOT=1u<<2,H_UNITY=1u<<3,H_RUST=1u<<4,H_GO=1u<<5,H_RENPY=1u<<6,H_AUTOIT=1u<<7,H_CRYPTO=1u<<8 };
 struct AnchorDef { const char* text; std::uint32_t hints; };
@@ -42,11 +41,20 @@ bool valid_pe_at(std::span<const std::uint8_t>d,std::size_t o,std::uint64_t& gue
 bool valid_elf_at(std::span<const std::uint8_t>d,std::size_t o){return o+0x34<=d.size()&&d[o]==0x7f&&d[o+1]=='E'&&d[o+2]=='L'&&d[o+3]=='F'&&(d[o+4]==1||d[o+4]==2)&&(d[o+5]==1||d[o+5]==2);}
 std::optional<std::size_t> cmp256_len(std::span<const std::uint8_t>d,std::size_t o){
     if(o>=d.size())return{};
-    if(d[o]==0x3d){if(o+5<=d.size()&&u32le(d,o+1)==256)return 5;return{};}
-    if(d[o]!=0x81||o+2>d.size())return{};auto m=d[o+1];if(((m>>3)&7)!=7)return{};auto mod=m>>6,rm=m&7;std::size_t p=o+2;
-    if(mod!=3&&rm==4){if(p>=d.size())return{};auto sib=d[p++];if(mod==0&&(sib&7)==5)p+=4;}
-    if(mod==0&&rm==5)p+=4;else if(mod==1)p+=1;else if(mod==2)p+=4;
-    if(p+4>d.size()||u32le(d,p)!=256)return{};return p+4-o;
+    if(d[o]==0x3d){if(d.size()-o>=5&&u32le(d,o+1)==256)return 5;return{};}
+    if(d[o]!=0x81||d.size()-o<2)return{};
+    auto m=d[o+1];if(((m>>3)&7)!=7)return{};
+    auto mod=m>>6,rm=m&7;std::size_t p=o+2;
+    if(mod!=3&&rm==4){
+        if(p>=d.size())return{};
+        auto sib=d[p++];
+        if(mod==0&&(sib&7)==5){if(d.size()-p<4)return{};p+=4;}
+    }
+    if(mod==0&&rm==5){if(p>d.size()||d.size()-p<4)return{};p+=4;}
+    else if(mod==1){if(p>=d.size())return{};++p;}
+    else if(mod==2){if(p>d.size()||d.size()-p<4)return{};p+=4;}
+    if(p>d.size()||d.size()-p<4||u32le(d,p)!=256)return{};
+    return p+4-o;
 }
 
 struct StringScanPart {std::uint64_t ascii=0,utf16=0;EcosystemHints hints;std::vector<StringHit> interesting;};
@@ -101,8 +109,7 @@ StaticScanReport scan_static(std::span<const std::uint8_t>d){StaticScanReport r;
     }else{sp=scan_strings_part(d);ep=scan_entropy_part(d);bp=scan_embedded_part(d);}
     r.ascii_strings=sp.ascii;r.utf16_strings=sp.utf16;r.interesting_strings=std::move(sp.interesting);r.high_entropy=std::move(ep);r.embedded=std::move(bp.embedded);r.crypto_delta_offsets=std::move(bp.crypto_delta_offsets);r.crypto_rc4_offsets=std::move(bp.crypto_rc4_offsets);r.crypto_aesni_schedule_offsets=std::move(bp.crypto_aesni_schedule_offsets);r.crypto_aesni_round_offsets=std::move(bp.crypto_aesni_round_offsets);r.hints=sp.hints;merge_hints(r.hints,bp.hints);return r;
 }
-std::vector<Finding> detect_common(std::span<const std::uint8_t>d,const PeInfo&pe,const ElfInfo&elf,const StaticScanReport&scan){std::vector<Finding> out;
-    auto bytes_text=[&](std::string_view x){return std::search(d.begin(),d.end(),x.begin(),x.end())!=d.end();};
+std::vector<Finding> detect_common(std::span<const std::uint8_t>d,const PeInfo&pe,const ElfInfo&elf,const StaticScanReport&scan){std::vector<Finding> out;(void)d;(void)pe;(void)elf;
     // Ecosystem/runtime anchors. Strong parsers will refine confidence later.
     for(auto&s:scan.interesting_strings){std::string low=s.value;std::transform(low.begin(),low.end(),low.begin(),[](unsigned char c){return char(std::tolower(c));});
         auto add=[&](std::string fam,std::string ev,double c){for(auto&x:out)if(x.family==fam)return;Finding f;f.kind="ecosystem";f.family=std::move(fam);f.state=c>=0.75?"LIKELY":"SUSPECTED";f.confidence=c;f.evidence.push_back(std::move(ev));f.ranges.push_back({s.offset,s.value.size(),"string"});out.push_back(std::move(f));};
@@ -114,7 +121,21 @@ std::vector<Finding> detect_common(std::span<const std::uint8_t>d,const PeInfo&p
         if(low.find("vmprotect")!=std::string::npos)add_protector_marker("VMProtect","VMProtect identifier string present");
         if(low.find("themida")!=std::string::npos||low.find("winlicense")!=std::string::npos)add_protector_marker("Themida/WinLicense","Oreans/Themida/WinLicense identifier string present");
     }
-    for(auto&e:scan.embedded){if(e.kind=="PYZ"){Finding f;f.kind="container";f.family="PyInstaller";f.state="LIKELY";f.confidence=0.92;f.evidence={"embedded PYZ archive"};f.ranges.push_back({e.offset,e.size,"PYZ"});f.suggested_actions={"extract:pyinstaller"};out.push_back(std::move(f));}else if(e.kind=="GodotPCK"){Finding f;f.kind="container";f.family="Godot PCK";f.state="LIKELY";f.confidence=0.95;f.evidence={"validated GDPC marker"};f.ranges.push_back({e.offset,e.size,"PCK"});f.suggested_actions={"extract:godot"};out.push_back(std::move(f));}}
+    Finding* godot_marker_finding=nullptr;std::size_t godot_marker_count=0;
+    for(auto&e:scan.embedded){
+        if(e.kind=="PYZ"){Finding f;f.kind="container";f.family="PyInstaller";f.state="LIKELY";f.confidence=0.92;f.evidence={"embedded PYZ archive"};f.ranges.push_back({e.offset,e.size,"PYZ"});f.suggested_actions={"extract:pyinstaller"};out.push_back(std::move(f));}
+        else if(e.kind=="GodotPCK"){
+            ++godot_marker_count;
+            if(!godot_marker_finding){
+                Finding f;f.kind="container_hint";f.family="Godot PCK";f.state="SUSPECTED";f.confidence=0.55;
+                f.evidence={"GDPC marker candidate; exact PCK header/directory geometry has not yet validated"};
+                f.negative_evidence={"raw GDPC bytes can occur in executable code/data and are not structural PCK confirmation"};
+                f.suggested_actions={"validate:godot-pck"};out.push_back(std::move(f));godot_marker_finding=&out.back();
+            }
+            if(godot_marker_finding->ranges.size()<16)godot_marker_finding->ranges.push_back({e.offset,e.size,"PCK marker"});
+        }
+    }
+    if(godot_marker_finding){godot_marker_finding->fields["marker_count"]=std::to_string(godot_marker_count);godot_marker_finding->fields["ranges_rendered"]=std::to_string(godot_marker_finding->ranges.size());}
     return out;
 }
 }

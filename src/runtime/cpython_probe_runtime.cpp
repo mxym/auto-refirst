@@ -14,13 +14,18 @@
 #include <string_view>
 #include <vector>
 #ifdef _WIN32
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #include <shellapi.h>
 #endif
 namespace prts { namespace {
 #include "../reference/cpython_probe_corpus.inc"
+#ifdef _WIN32
 int hexv(char c){if(c>='0'&&c<='9')return c-'0';if(c>='a'&&c<='f')return c-'a'+10;if(c>='A'&&c<='F')return c-'A'+10;return -1;}
 std::string lower_ascii(std::string s){std::transform(s.begin(),s.end(),s.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});return s;}
 std::string basename_ascii(const std::string&s){auto p=s.find_last_of("/\\");return p==std::string::npos?s:s.substr(p+1);}
@@ -30,6 +35,7 @@ bool parse_probe_output(const std::filesystem::path&p,std::vector<CPythonCompile
     if(!ok){error="compiler-probe child output lacks OK record";return false;}if(codes.empty()){error="compiler-probe child returned no code objects";return false;}return true;
 }
 bool write_bytes(const std::filesystem::path&p,std::span<const std::uint8_t>d){std::error_code ec;std::filesystem::create_directories(p.parent_path(),ec);std::ofstream o(p,std::ios::binary|std::ios::trunc);if(!o)return false;o.write(reinterpret_cast<const char*>(d.data()),static_cast<std::streamsize>(d.size()));return bool(o);}
+#endif
 }
 #ifdef _WIN32
 namespace {

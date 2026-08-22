@@ -1,0 +1,198 @@
+{
+  "schema_version": "1.0",
+  "scope": "Binds declared upstream revisions to the exact vendored snapshot bytes tracked in this repository; it does not independently authenticate upstream origin.",
+  "canonical_tree_digest": "SHA-256 over concatenated records sorted by repository-relative path; each record is UTF-8(path) + NUL + lowercase SHA-256(committed Git blob bytes) + LF.",
+  "worktree_binding": "Each worktree file is rehashed by Git as raw bytes and, when needed, with repository attributes; one form must reproduce its stage-0 index blob, and the filesystem inventory must exactly match tracked_files.",
+  "components": [
+    {
+      "component_id": "libpeconv",
+      "declared_upstream_revision": "0fc25f680e03699d33ef3b2034a6724365f3d1a4",
+      "declared_upstream_tag": "",
+      "license_files": [
+        "LICENSES/libPeConv-BSD-2-Clause.txt",
+        "third_party/libpeconv/LICENSE.libpeconv"
+      ],
+      "local_transforms": "none in vendored code",
+      "vendored_root": "third_party/libpeconv",
+      "tracked_files": [
+        "third_party/libpeconv/CMakeLists.txt",
+        "third_party/libpeconv/LICENSE.libpeconv",
+        "third_party/libpeconv/include/peconv.h",
+        "third_party/libpeconv/include/peconv/buffer_util.h",
+        "third_party/libpeconv/include/peconv/caves.h",
+        "third_party/libpeconv/include/peconv/delayed_imports_loader.h",
+        "third_party/libpeconv/include/peconv/exceptions_parser.h",
+        "third_party/libpeconv/include/peconv/exported_func.h",
+        "third_party/libpeconv/include/peconv/exports_lookup.h",
+        "third_party/libpeconv/include/peconv/exports_mapper.h",
+        "third_party/libpeconv/include/peconv/file_util.h",
+        "third_party/libpeconv/include/peconv/find_base.h",
+        "third_party/libpeconv/include/peconv/fix_imports.h",
+        "third_party/libpeconv/include/peconv/function_resolver.h",
+        "third_party/libpeconv/include/peconv/hooks.h",
+        "third_party/libpeconv/include/peconv/imports_loader.h",
+        "third_party/libpeconv/include/peconv/imports_uneraser.h",
+        "third_party/libpeconv/include/peconv/load_config_defs.h",
+        "third_party/libpeconv/include/peconv/load_config_util.h",
+        "third_party/libpeconv/include/peconv/logger.h",
+        "third_party/libpeconv/include/peconv/pe_dumper.h",
+        "third_party/libpeconv/include/peconv/pe_hdrs_helper.h",
+        "third_party/libpeconv/include/peconv/pe_loader.h",
+        "third_party/libpeconv/include/peconv/pe_mode_detector.h",
+        "third_party/libpeconv/include/peconv/pe_raw_to_virtual.h",
+        "third_party/libpeconv/include/peconv/pe_virtual_to_raw.h",
+        "third_party/libpeconv/include/peconv/peb_lookup.h",
+        "third_party/libpeconv/include/peconv/relocate.h",
+        "third_party/libpeconv/include/peconv/remote_pe_reader.h",
+        "third_party/libpeconv/include/peconv/resource_parser.h",
+        "third_party/libpeconv/include/peconv/resource_util.h",
+        "third_party/libpeconv/include/peconv/tls_parser.h",
+        "third_party/libpeconv/include/peconv/unicode.h",
+        "third_party/libpeconv/include/peconv/util.h",
+        "third_party/libpeconv/src/buffer_util.cpp",
+        "third_party/libpeconv/src/caves.cpp",
+        "third_party/libpeconv/src/delayed_imports_loader.cpp",
+        "third_party/libpeconv/src/exceptions_parser.cpp",
+        "third_party/libpeconv/src/exported_func.cpp",
+        "third_party/libpeconv/src/exports_lookup.cpp",
+        "third_party/libpeconv/src/exports_mapper.cpp",
+        "third_party/libpeconv/src/file_util.cpp",
+        "third_party/libpeconv/src/find_base.cpp",
+        "third_party/libpeconv/src/fix_dot_net_ep.cpp",
+        "third_party/libpeconv/src/fix_dot_net_ep.h",
+        "third_party/libpeconv/src/fix_imports.cpp",
+        "third_party/libpeconv/src/function_resolver.cpp",
+        "third_party/libpeconv/src/hooks.cpp",
+        "third_party/libpeconv/src/imports_loader.cpp",
+        "third_party/libpeconv/src/imports_uneraser.cpp",
+        "third_party/libpeconv/src/load_config_util.cpp",
+        "third_party/libpeconv/src/ntddk.h",
+        "third_party/libpeconv/src/pe_dumper.cpp",
+        "third_party/libpeconv/src/pe_hdrs_helper.cpp",
+        "third_party/libpeconv/src/pe_loader.cpp",
+        "third_party/libpeconv/src/pe_mode_detector.cpp",
+        "third_party/libpeconv/src/pe_raw_to_virtual.cpp",
+        "third_party/libpeconv/src/pe_virtual_to_raw.cpp",
+        "third_party/libpeconv/src/peb_lookup.cpp",
+        "third_party/libpeconv/src/relocate.cpp",
+        "third_party/libpeconv/src/remote_pe_reader.cpp",
+        "third_party/libpeconv/src/resource_parser.cpp",
+        "third_party/libpeconv/src/resource_util.cpp",
+        "third_party/libpeconv/src/tls_parser.cpp",
+        "third_party/libpeconv/src/util.cpp"
+      ],
+      "tree_sha256": "cf1e29a941febe459569f5da82380eddbbdefcd84fda6fe24173d8b65b5f757c"
+    },
+    {
+      "component_id": "miniz",
+      "declared_upstream_revision": "77d0dce8627735138c51770d1799a1ef48f2117d",
+      "declared_upstream_tag": "3.1.2",
+      "license_files": [
+        "LICENSES/miniz-MIT.txt",
+        "third_party/miniz/LICENSE.miniz"
+      ],
+      "local_transforms": "local compatibility header",
+      "vendored_root": "third_party/miniz",
+      "tracked_files": [
+        "third_party/miniz/LICENSE.miniz",
+        "third_party/miniz/miniz.c",
+        "third_party/miniz/miniz.h",
+        "third_party/miniz/miniz_common.h",
+        "third_party/miniz/miniz_export.h",
+        "third_party/miniz/miniz_tdef.c",
+        "third_party/miniz/miniz_tdef.h",
+        "third_party/miniz/miniz_tinfl.c",
+        "third_party/miniz/miniz_tinfl.h",
+        "third_party/miniz/miniz_zip.c",
+        "third_party/miniz/miniz_zip.h"
+      ],
+      "tree_sha256": "a9bf16922c51b3b205d220ee902a80ed1182d45f91ce3925d16c4c2a34abaf6a"
+    },
+    {
+      "component_id": "tiny-aes-c",
+      "declared_upstream_revision": "23856752fbd139da0b8ca6e471a13d5bcc99a08d",
+      "declared_upstream_tag": "1.0.0",
+      "license_files": [
+        "LICENSES/tiny-AES-c-Unlicense.txt",
+        "third_party/tiny_aes/UNLICENSE"
+      ],
+      "local_transforms": "none",
+      "vendored_root": "third_party/tiny_aes",
+      "tracked_files": [
+        "third_party/tiny_aes/UNLICENSE",
+        "third_party/tiny_aes/aes.c",
+        "third_party/tiny_aes/aes.h"
+      ],
+      "tree_sha256": "d8e9817555da66466435c3dffea275484cf81b386dd6a07b74e09e9521b1405c"
+    },
+    {
+      "component_id": "zstd",
+      "declared_upstream_revision": "82d322c4973d9e2968d94047a40892bc6d9a9bdf",
+      "declared_upstream_tag": "1.6.0-dev",
+      "license_files": [
+        "LICENSES/zstd-BSD-3-Clause.txt",
+        "third_party/zstd/LICENSE.zstd"
+      ],
+      "local_transforms": "none",
+      "vendored_root": "third_party/zstd",
+      "tracked_files": [
+        "third_party/zstd/LICENSE.zstd",
+        "third_party/zstd/zstddeclib.c"
+      ],
+      "tree_sha256": "2210e446ef913975ab069b3e64f7034d3ef944580927018d381531746a608e2b"
+    },
+    {
+      "component_id": "rustc-demangle",
+      "declared_upstream_revision": "f36e2988643d7db47a6aa6e328cc7ffd61343651",
+      "declared_upstream_tag": "",
+      "license_files": [
+        "LICENSES/rustc-demangle-MIT.txt",
+        "LICENSES/rustc-demangle-Apache-2.0.txt",
+        "third_party/rustc_demangle/LICENSE-MIT",
+        "third_party/rustc_demangle/LICENSE-APACHE"
+      ],
+      "local_transforms": "portable MIN/MAX fallback; no sys/param.h dependency",
+      "vendored_root": "third_party/rustc_demangle",
+      "tracked_files": [
+        "third_party/rustc_demangle/LICENSE-APACHE",
+        "third_party/rustc_demangle/LICENSE-MIT",
+        "third_party/rustc_demangle/demangle.c",
+        "third_party/rustc_demangle/demangle.h"
+      ],
+      "tree_sha256": "c9e70ab8d2e824e1853dfa1e089058f2cd5d99415b29eb64a22967e3500a07a1"
+    },
+    {
+      "component_id": "zydis",
+      "declared_upstream_revision": "a2278f1d254e492f6a6b39f6cb5d1f5d515659dc",
+      "declared_upstream_tag": "4.1.1",
+      "license_files": [
+        "LICENSES/Zydis-MIT.txt",
+        "third_party/zydis/LICENSE"
+      ],
+      "local_transforms": "generator source-path comments normalized",
+      "vendored_root": "third_party/zydis",
+      "tracked_files": [
+        "third_party/zydis/LICENSE",
+        "third_party/zydis/Zydis.c",
+        "third_party/zydis/Zydis.h"
+      ],
+      "tree_sha256": "35be1ee4fd886e42f606b5dbd16a56a35b6a818a15d5a4f8c5bc7df014b224ed"
+    },
+    {
+      "component_id": "zycore-c",
+      "declared_upstream_revision": "0b2432ced0884fd152b471d97ecf0258ff4d859f",
+      "declared_upstream_tag": "1.5.2",
+      "license_files": [
+        "LICENSES/Zycore-MIT.txt"
+      ],
+      "local_transforms": "none identified",
+      "vendored_root": "third_party/zydis",
+      "tracked_files": [
+        "third_party/zydis/LICENSE",
+        "third_party/zydis/Zydis.c",
+        "third_party/zydis/Zydis.h"
+      ],
+      "tree_sha256": "35be1ee4fd886e42f606b5dbd16a56a35b6a818a15d5a4f8c5bc7df014b224ed"
+    }
+  ]
+}
