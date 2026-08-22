@@ -232,7 +232,7 @@ def target_path(build:pathlib.Path,config:str|None,name:str) -> pathlib.Path:
 
 
 def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
-    targets=["auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit"]
+    targets=["auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit"]
     build,config=cmake_build(binary,targets)
     model=target_path(build,config,targets[0]); assert run([model]).stdout.strip()=="PASS"
     pyunit=target_path(build,config,targets[1]); p=td/"public.pyc"; p.write_bytes(pyc310())
@@ -240,7 +240,8 @@ def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
     assert out[0:4]==["1","1","3.10","TIMESTAMP"],out
     bad=td/"bad.pyc"; bad.write_bytes(p.read_bytes()[:10]); out=run([pyunit,"inspect",bad,"1"]).stdout
     assert out.startswith("1\t0\t"),out
-    log("[PASS P0] model-trust synthetic unit + direct CPython pyc trust ingress")
+    flutter=target_path(build,config,targets[2]); assert run([flutter]).stdout.strip()=="PASS"
+    log("[PASS P0] model-trust synthetic unit + direct CPython pyc trust ingress + Flutter codec")
 
 
 def p0_windows_reparse(binary:pathlib.Path) -> None:

@@ -270,6 +270,12 @@ add_executable(auto_refirst_public_python_bytecode_unit EXCLUDE_FROM_ALL
 )
 target_include_directories(auto_refirst_public_python_bytecode_unit PRIVATE include)
 
+add_executable(auto_refirst_public_flutter_codec_unit EXCLUDE_FROM_ALL
+    tests/flutter_codec_unit.cpp
+    src/extract/flutter.cpp
+)
+target_include_directories(auto_refirst_public_flutter_codec_unit PRIVATE include)
+
 add_executable(auto_refirst_public_fixture_ordinary EXCLUDE_FROM_ALL tests/public/ordinary.c)
 add_executable(auto_refirst_public_fixture_crypto EXCLUDE_FROM_ALL tests/public/crypto_tea.c)
 add_executable(auto_refirst_public_fixture_runtime_child EXCLUDE_FROM_ALL tests/public/runtime_child.c)
@@ -278,6 +284,7 @@ add_executable(auto_refirst_public_fixture_runtime_parent EXCLUDE_FROM_ALL tests
 foreach(_public_target
         auto_refirst_public_model_trust_unit
         auto_refirst_public_python_bytecode_unit
+        auto_refirst_public_flutter_codec_unit
         auto_refirst_public_fixture_ordinary
         auto_refirst_public_fixture_crypto
         auto_refirst_public_fixture_runtime_child
@@ -287,7 +294,8 @@ endforeach()
 
 foreach(_public_target
         auto_refirst_public_model_trust_unit
-        auto_refirst_public_python_bytecode_unit)
+        auto_refirst_public_python_bytecode_unit
+        auto_refirst_public_flutter_codec_unit)
     if(MSVC)
         target_compile_options(${_public_target} PRIVATE /W4 /permissive- /EHsc)
     else()

@@ -27,7 +27,8 @@ struct Value {
     std::string string;
     std::vector<std::uint8_t> bytes;
     std::vector<Value> list;
-    std::vector<std::pair<Value, Value>> map;
+    std::vector<Value> map_keys;
+    std::vector<Value> map_values;
 };
 
 struct DecodeError {
@@ -163,7 +164,7 @@ private:
                 out.kind=Kind::List;std::uint32_t n=0;if(!size(n,error))return false;if(n>kMaxNodes-nodes_){error={"StandardMessageCodec list count exceeds node budget",pos_};return false;}out.list.resize(n);for(auto&v:out.list)if(!read_value(v,depth+1,error))return false;return true;
             }
             case 13: {
-                out.kind=Kind::Map;std::uint32_t n=0;if(!size(n,error))return false;if(std::uint64_t(n)*2>kMaxNodes-nodes_){error={"StandardMessageCodec map count exceeds node budget",pos_};return false;}out.map.resize(n);for(auto&kv:out.map){if(!read_value(kv.first,depth+1,error)||!read_value(kv.second,depth+1,error))return false;}return true;
+                out.kind=Kind::Map;std::uint32_t n=0;if(!size(n,error))return false;if(std::uint64_t(n)*2>kMaxNodes-nodes_){error={"StandardMessageCodec map count exceeds node budget",pos_};return false;}out.map_keys.resize(n);out.map_values.resize(n);for(std::size_t i=0;i<n;++i){if(!read_value(out.map_keys[i],depth+1,error)||!read_value(out.map_values[i],depth+1,error))return false;}return true;
             }
             default: error={"unknown StandardMessageCodec type tag",tag_off};return false;
         }
@@ -186,34 +187,36 @@ FlutterAssetManifestInfo parse_flutter_asset_manifest(std::span<const std::uint8
     }
     out.decoded_node_count=d.nodes();out.decoded_string_bytes=d.string_bytes();
     if(root.kind!=Kind::Map){out.error="Flutter AssetManifest root is not a map";return out;}
-    if(root.map.size()>1000000){out.error="Flutter AssetManifest entry count unreasonable";return out;}
+    if(root.map_keys.size()>1000000){out.error="Flutter AssetManifest entry count unreasonable";return out;}
     std::set<std::string> keys;
-    out.entries.reserve(root.map.size());
-    for(const auto&kv:root.map){
-        if(kv.first.kind!=Kind::String||kv.first.string.empty()){out.error="Flutter AssetManifest key is not a nonempty string";return out;}
-        if(!keys.insert(kv.first.string).second){out.error="duplicate Flutter AssetManifest asset key";return out;}
-        if(kv.second.kind!=Kind::List||kv.second.list.empty()){out.error="Flutter AssetManifest value is not a nonempty variant list";return out;}
-        FlutterAssetEntry entry;entry.key=kv.first.string;std::set<std::string> variants;
-        for(const auto&item:kv.second.list){
+    out.entries.reserve(root.map_keys.size());
+    for(std::size_t i=0;i<root.map_keys.size();++i){
+        const auto&key=root.map_keys[i];const auto&value=root.map_values[i];
+        if(key.kind!=Kind::String||key.string.empty()){out.error="Flutter AssetManifest key is not a nonempty string";return out;}
+        if(!keys.insert(key.string).second){out.error="duplicate Flutter AssetManifest asset key";return out;}
+        if(value.kind!=Kind::List||value.list.empty()){out.error="Flutter AssetManifest value is not a nonempty variant list";return out;}
+        FlutterAssetEntry entry;entry.key=key.string;std::set<std::string> variants;
+        for(const auto&item:value.list){
             FlutterAssetVariant v;
             if(item.kind==Kind::String){
                 if(item.string.empty()){out.error="empty legacy Flutter asset variant";return out;}
                 v.asset=item.string;out.legacy_string_variants=true;
             }else if(item.kind==Kind::Map){
                 out.modern_metadata_variants=true;bool have_asset=false;std::set<std::string> meta_keys;
-                for(const auto&m:item.map){
-                    if(m.first.kind!=Kind::String||m.first.string.empty()){out.error="Flutter asset metadata key is not a string";return out;}
-                    if(!meta_keys.insert(m.first.string).second){out.error="duplicate Flutter asset metadata key";return out;}
-                    if(m.first.string=="asset"){
-                        if(m.second.kind!=Kind::String||m.second.string.empty()){out.error="Flutter asset metadata 'asset' is not a nonempty string";return out;}
-                        v.asset=m.second.string;have_asset=true;
-                    }else if(m.first.string=="dpr"){
-                        if(m.second.kind==Kind::Null){}
-                        else if(m.second.kind==Kind::Double&&std::isfinite(m.second.floating)&&m.second.floating>0)v.device_pixel_ratio=m.second.floating;
+                for(std::size_t z=0;z<item.map_keys.size();++z){
+                    const auto&meta_key=item.map_keys[z];const auto&meta_value=item.map_values[z];
+                    if(meta_key.kind!=Kind::String||meta_key.string.empty()){out.error="Flutter asset metadata key is not a string";return out;}
+                    if(!meta_keys.insert(meta_key.string).second){out.error="duplicate Flutter asset metadata key";return out;}
+                    if(meta_key.string=="asset"){
+                        if(meta_value.kind!=Kind::String||meta_value.string.empty()){out.error="Flutter asset metadata 'asset' is not a nonempty string";return out;}
+                        v.asset=meta_value.string;have_asset=true;
+                    }else if(meta_key.string=="dpr"){
+                        if(meta_value.kind==Kind::Null){}
+                        else if(meta_value.kind==Kind::Double&&std::isfinite(meta_value.floating)&&meta_value.floating>0)v.device_pixel_ratio=meta_value.floating;
                         else {out.error="Flutter asset metadata 'dpr' is not null or positive finite double";return out;}
                     }else{
-                        if(!scalar_metadata(m.second)){out.error="unsupported nested Flutter asset metadata value";return out;}
-                        v.unknown_metadata_keys.push_back(m.first.string);++out.unknown_metadata_key_count;
+                        if(!scalar_metadata(meta_value)){out.error="unsupported nested Flutter asset metadata value";return out;}
+                        v.unknown_metadata_keys.push_back(meta_key.string);++out.unknown_metadata_key_count;
                     }
                 }
                 if(!have_asset){out.error="Flutter asset metadata variant lacks required 'asset' key";return out;}
