@@ -77,12 +77,14 @@ For an RC/final candidate, not every routine patch:
 
 - [ ] Build final release assets from the frozen commit; do not reuse intermediate development binaries.
 - [ ] Create a custom source archive from the frozen public commit. Give it a stable release filename and exclude `.git`, ignored build output, private paths/material, and maintainer-only fixtures; do not substitute GitHub's automatically generated archive for this reviewed asset.
-- [ ] Include Linux and Windows binaries/packages, the custom source archive, `BUILD_INFO`, `SHA256SUMS`, license/notices, the release SBOM, and any other declared immutable release asset.
-- [ ] Record in `BUILD_INFO` at minimum: release tag/version, exact public source commit, report schema, clean-source state, platform artifact names and SHA-256 values, compiler/toolchain and CMake versions, relevant build flags including warnings-as-errors, exact hosted run IDs and head SHA/results, and the `SEMANTICALLY_REPRODUCIBLE` contract without a bit-reproducibility claim. Do not record a gate as PASS before its exact hosted run completes successfully.
+- [ ] Include Linux and Windows binaries/packages, the custom source archive, `BUILD_INFO.txt`, `SHA256SUMS`, license/notices, the release SBOM, and any other declared immutable release asset.
+- [ ] Record in `BUILD_INFO.txt` at minimum: release tag/version, exact public source commit, report schema, clean-source state, platform artifact names and SHA-256 values, compiler/toolchain and CMake versions, relevant build flags including warnings-as-errors, exact hosted run IDs and head SHA/results, and the `SEMANTICALLY_REPRODUCIBLE` contract without a bit-reproducibility claim. Do not record a gate as PASS before its exact hosted run completes successfully.
 - [ ] After every other uploaded asset is immutable, generate `SHA256SUMS` so it covers every uploaded immutable asset except the manifest itself.
+- [ ] Follow `docs/RELEASE_ASSETS.md` and run `tests/check_release_assets.py` once per platform against the complete staged asset directory. Both platform binaries' exact `--version` metadata must pass through native execution or an explicit runner.
 - [ ] Unpack the custom source archive in a fresh directory and re-run public/private-path and inventory hygiene checks. Without adding a `.git` directory, configure/build it with the exact full source commit supplied through `AUTO_REFIRST_SOURCE_COMMIT`, then verify the archive binary's `--version` identity.
 - [ ] Verify the release tag's peeled commit (`refs/tags/<tag>^{}`), not only its name or `targetCommitish`, equals the frozen public commit and that prerelease/stable status is intentional.
 - [ ] Download every published asset into a fresh directory and verify `SHA256SUMS` against those downloaded bytes.
+- [ ] Re-run `tests/check_release_assets.py` once per platform against that fresh download with local/remote tag checking enabled; staged-directory results do not substitute for download-back verification.
 - [ ] From the downloaded assets, re-run both platform binaries' `--version` checks (natively or through the documented compatibility runner), unpack each binary package and check its expected executable/legal-file inventory, and unpack the source archive to repeat the source hygiene and archive build/fallback checks.
 
 ## 10. Post-publication check
