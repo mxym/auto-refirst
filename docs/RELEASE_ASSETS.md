@@ -27,6 +27,36 @@ Because the archive is byte-for-byte and mode-for-mode equal to the tracked
 tree, passing the source-hygiene gate on that exact clean `HEAD` also binds the
 archive to the same private-path and tracked-inventory policy.
 
+## Custom source archive generation
+
+Generate the reviewed archive outside the clean source worktree. Use the
+full frozen commit and a single safe top-level directory:
+
+```sh
+python3 tests/create_release_source_archive.py \
+  --source-root . \
+  --expected-commit <full-frozen-commit> \
+  --archive-root auto-refirst-<product-version> \
+  --output /outside/source/tree/auto-refirst-<product-version>-source.tar.gz
+```
+
+Do not upload the direct output of `git archive`. Its member permission bits
+can depend on the host Git configuration. The generator reads committed Git
+blobs and modes, requires an exact clean `HEAD` and index, and emits canonical
+USTAR without PAX headers. Directories use mode `0755`; regular files use
+`0644` or `0755` according to the Git executable bit. Member order, owner
+fields, and timestamps are fixed; the gzip header has no filename/comment and
+uses the exact commit timestamp as its source-date epoch. Paths outside the
+portable ASCII/USTAR boundary, links/gitlinks, unsafe names, dirty state, index
+drift, and an existing or in-worktree output fail closed.
+
+When the generator contract changes, run its isolated deterministic and
+mutation suite:
+
+```sh
+python3 tests/test_release_source_archive.py
+```
+
 ## BUILD_INFO.txt contract
 
 The file is BOM-free, LF-only UTF-8. It uses the following exact field order,

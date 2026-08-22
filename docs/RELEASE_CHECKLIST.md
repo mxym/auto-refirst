@@ -76,7 +76,7 @@ For an RC/final candidate, not every routine patch:
 ## 9. Package and publish
 
 - [ ] Build final release assets from the frozen commit; do not reuse intermediate development binaries.
-- [ ] Create a custom source archive from the frozen public commit. Give it a stable release filename and exclude `.git`, ignored build output, private paths/material, and maintainer-only fixtures; do not substitute GitHub's automatically generated archive for this reviewed asset.
+- [ ] Run `python3 tests/test_release_source_archive.py`, then create the custom source archive from the frozen public commit with `tests/create_release_source_archive.py` as documented in `docs/RELEASE_ASSETS.md`. Give it a stable release filename and exclude `.git`, ignored build output, private paths/material, and maintainer-only fixtures; do not substitute direct `git archive` output or GitHub's automatically generated archive for this reviewed asset.
 - [ ] Include Linux and Windows binaries/packages, the custom source archive, `BUILD_INFO.txt`, `SHA256SUMS`, license/notices, the release SBOM, and any other declared immutable release asset.
 - [ ] Record in `BUILD_INFO.txt` at minimum: release tag/version, exact public source commit, report schema, clean-source state, platform artifact names and SHA-256 values, compiler/toolchain and CMake versions, relevant build flags including warnings-as-errors, exact hosted run IDs and head SHA/results, and the `SEMANTICALLY_REPRODUCIBLE` contract without a bit-reproducibility claim. Do not record a gate as PASS before its exact hosted run completes successfully.
 - [ ] After every other uploaded asset is immutable, generate `SHA256SUMS` so it covers every uploaded immutable asset except the manifest itself.
