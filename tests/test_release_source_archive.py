@@ -285,12 +285,17 @@ def atomic_publication_tests(root: pathlib.Path, parent: pathlib.Path) -> None:
     visible = parent / "partial-visibility.tar.gz"
     observed = False
 
-    def observe_publish(temporary: pathlib.Path, output: pathlib.Path) -> None:
+    def observe_publish(
+        temporary: pathlib.Path,
+        output: pathlib.Path,
+        descriptor: int,
+        identity: generator.OwnedIdentity,
+    ) -> generator.OwnedIdentity:
         nonlocal observed
         if output != visible or os.path.lexists(output) or temporary.stat().st_size == 0:
             raise RuntimeError("partial final filename was visible before atomic publication")
         observed = True
-        real_publish(temporary, output)
+        return real_publish(temporary, output, descriptor, identity)
 
     with mock.patch.object(generator, "publish_no_clobber", side_effect=observe_publish):
         generator.create_archive(visible, ARCHIVE_ROOT, tree, blobs, source_date_epoch)
@@ -302,9 +307,14 @@ def atomic_publication_tests(root: pathlib.Path, parent: pathlib.Path) -> None:
     raced = parent / "concurrent.tar.gz"
     sentinel = b"concurrent owner\n"
 
-    def competing_publish(temporary: pathlib.Path, output: pathlib.Path) -> None:
+    def competing_publish(
+        temporary: pathlib.Path,
+        output: pathlib.Path,
+        descriptor: int,
+        identity: generator.OwnedIdentity,
+    ) -> generator.OwnedIdentity:
         output.write_bytes(sentinel)
-        real_publish(temporary, output)
+        return real_publish(temporary, output, descriptor, identity)
 
     try:
         with mock.patch.object(generator, "publish_no_clobber", side_effect=competing_publish):
@@ -332,16 +342,66 @@ def atomic_publication_tests(root: pathlib.Path, parent: pathlib.Path) -> None:
         raise RuntimeError("exception path exposed a final file or leaked the owned temp")
     print("[PASS MUTATION] exceptional-write cleaned owned temp without final exposure")
 
-    replaced = parent / ".owned-temp.tmp"
-    replaced.write_bytes(b"owned")
-    owned_stat = replaced.lstat()
-    identity = (owned_stat.st_dev, owned_stat.st_ino)
-    replaced.unlink()
-    replaced.write_bytes(b"replacement owner")
-    if generator.unlink_owned(replaced, identity) or replaced.read_bytes() != b"replacement owner":
-        raise RuntimeError("replaced temp path was mistaken for the generator-owned file")
-    replaced.unlink()
-    print("[PASS MUTATION] replaced-temp preserved by identity-checked cleanup")
+    for index in range(16):
+        descriptor, replaced = generator.create_owned_temp(parent / f"replacement-{index}.tar.gz")
+        replacement = b"replacement-owner"
+        try:
+            os.write(descriptor, b"generator-content")
+            os.fsync(descriptor)
+            identity = generator.capture_owned_identity(replaced, descriptor)
+            if identity is None:
+                raise RuntimeError("cannot capture owned temp identity before replacement")
+            replaced.unlink()
+            replaced.write_bytes(replacement)
+            if generator.unlink_owned(replaced, descriptor, identity) or replaced.read_bytes() != replacement:
+                raise RuntimeError("replaced temp path was mistaken for the still-open generator file")
+        finally:
+            os.close(descriptor)
+            if replaced.exists():
+                replaced.unlink()
+    print("[PASS MUTATION] same-size replaced-temp preserved with open-FD guard rounds=16")
+
+    swapped = parent / "pre-link-swap.tar.gz"
+    real_link = generator.os.link
+    swapped_temporary: pathlib.Path | None = None
+
+    def swap_before_link(source: os.PathLike[str], destination: os.PathLike[str], *args: object, **kwargs: object) -> None:
+        nonlocal swapped_temporary
+        temporary_path = pathlib.Path(source)
+        size = temporary_path.stat().st_size
+        temporary_path.unlink()
+        temporary_path.write_bytes(b"x" * size)
+        swapped_temporary = temporary_path
+        real_link(source, destination, *args, **kwargs)
+
+    try:
+        with mock.patch.object(generator.os, "link", side_effect=swap_before_link):
+            generator.create_archive(swapped, ARCHIVE_ROOT, tree, blobs, source_date_epoch)
+    except SystemExit as exc:
+        if "does not bind the still-open owned temp identity" not in str(exc):
+            raise RuntimeError(f"pre-link swap rejected for unexpected reason: {exc}") from exc
+    else:
+        raise RuntimeError("pre-link temp replacement was reported as a successful publication")
+    if swapped_temporary is None or not swapped.exists() or not swapped_temporary.exists():
+        raise RuntimeError("pre-link replacement was removed instead of being left for diagnosis")
+    if swapped.read_bytes() != swapped_temporary.read_bytes():
+        raise RuntimeError("pre-link replacement diagnostic paths disagree")
+    swapped.unlink()
+    swapped_temporary.unlink()
+    print("[PASS MUTATION] pre-link same-size temp swap failed closed without foreign cleanup")
+
+    unsupported = parent / "unsupported-hardlink.tar.gz"
+    try:
+        with mock.patch.object(generator.os, "link", side_effect=OSError("injected unsupported hard link")):
+            generator.create_archive(unsupported, ARCHIVE_ROOT, tree, blobs, source_date_epoch)
+    except SystemExit as exc:
+        if "cannot atomically publish" not in str(exc):
+            raise RuntimeError(f"unsupported hard link rejected for unexpected reason: {exc}") from exc
+    else:
+        raise RuntimeError("unsupported hard link silently degraded")
+    if os.path.lexists(unsupported) or list(parent.glob(f".{unsupported.name}.*.tmp")):
+        raise RuntimeError("unsupported hard-link failure exposed a final or leaked owned temp")
+    print("[PASS MUTATION] unsupported-hardlink failed closed without fallback")
 
 
 def main() -> int:
@@ -444,7 +504,7 @@ def main() -> int:
         for failure in failures:
             print(f"  - {failure}")
         return 1
-    print("[PASS] deterministic source archive self-test: baseline=1 atomic=4 negatives=26")
+    print("[PASS] deterministic source archive self-test: baseline=1 atomic=6 negatives=26")
     return 0
 
 

@@ -9,8 +9,8 @@ import io
 import os
 import pathlib
 import re
+import secrets
 import tarfile
-import tempfile
 from collections.abc import Callable
 
 import check_release_assets as contract
@@ -27,6 +27,8 @@ WINDOWS_RESERVED_STEMS = {
     *(f"com{number}" for number in range(1, 10)),
     *(f"lpt{number}" for number in range(1, 10)),
 }
+FileIdentity = tuple[int, int, int, int, int]
+OwnedIdentity = tuple[FileIdentity, FileIdentity]
 
 
 def fail(message: str) -> None:
@@ -180,18 +182,10 @@ def create_archive(
         file_infos.append((info, data))
     descriptor: int | None = None
     temporary: pathlib.Path | None = None
-    temporary_identity: tuple[int, int] | None = None
+    temporary_identity: OwnedIdentity | None = None
     try:
-        descriptor, raw_temporary = tempfile.mkstemp(
-            prefix=f".{output.name}.",
-            suffix=".tmp",
-            dir=output.parent,
-        )
-        temporary = pathlib.Path(raw_temporary)
-        created = os.fstat(descriptor)
-        temporary_identity = (created.st_dev, created.st_ino)
-        with os.fdopen(descriptor, "wb") as raw:
-            descriptor = None
+        descriptor, temporary = create_owned_temp(output)
+        with os.fdopen(descriptor, "wb", closefd=False) as raw:
             with gzip.GzipFile(
                 filename="",
                 mode="wb",
@@ -208,39 +202,96 @@ def create_archive(
             os.fsync(raw.fileno())
         if before_publish is not None:
             before_publish()
-        publish_no_clobber(temporary, output)
-        if not unlink_owned(temporary, temporary_identity):
+        temporary_identity = capture_owned_identity(temporary, descriptor)
+        if temporary_identity is None:
+            fail("owned source archive temp identity changed before atomic publication")
+        temporary_identity = publish_no_clobber(temporary, output, descriptor, temporary_identity)
+        if not unlink_owned(temporary, descriptor, temporary_identity):
             fail("owned source archive temp path was replaced before cleanup; refusing to delete it")
         temporary = None
     except BaseException:
+        try:
+            if temporary is not None and descriptor is not None:
+                cleanup_identity = capture_owned_identity(temporary, descriptor)
+                if cleanup_identity is not None:
+                    unlink_owned(temporary, descriptor, cleanup_identity)
+        except OSError:
+            pass
+        raise
+    finally:
         if descriptor is not None:
             try:
                 os.close(descriptor)
             except OSError:
                 pass
+
+
+def create_owned_temp(output: pathlib.Path) -> tuple[int, pathlib.Path]:
+    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_BINARY", 0)
+    if os.name == "nt":
+        flags |= getattr(os, "O_TEMPORARY", 0)
+    for _ in range(128):
+        temporary = output.parent / f".{output.name}.{secrets.token_hex(16)}.tmp"
         try:
-            if temporary is not None and temporary_identity is not None:
-                unlink_owned(temporary, temporary_identity)
-        except OSError:
-            pass
-        raise
+            return os.open(temporary, flags, 0o600), temporary
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            fail(f"cannot create owned source archive temp in output directory: {exc}")
+    fail("cannot allocate a unique owned source archive temp name")
 
 
-def publish_no_clobber(temporary: pathlib.Path, output: pathlib.Path) -> None:
+def stat_identity(info: os.stat_result) -> FileIdentity:
+    return (info.st_dev, info.st_ino, info.st_ctime_ns, info.st_mtime_ns, info.st_size)
+
+
+def stable_object_identity(identity: FileIdentity) -> tuple[int, int, int, int]:
+    device, inode, _ctime_ns, mtime_ns, size = identity
+    return device, inode, mtime_ns, size
+
+
+def capture_owned_identity(path: pathlib.Path, descriptor: int) -> OwnedIdentity | None:
+    try:
+        opened = stat_identity(os.fstat(descriptor))
+        current = stat_identity(path.lstat())
+    except (FileNotFoundError, OSError):
+        return None
+    if stable_object_identity(opened) != stable_object_identity(current):
+        return None
+    return opened, current
+
+
+def owned_path_matches(path: pathlib.Path, descriptor: int, identity: OwnedIdentity) -> bool:
+    return capture_owned_identity(path, descriptor) == identity
+
+
+def publish_no_clobber(
+    temporary: pathlib.Path,
+    output: pathlib.Path,
+    descriptor: int,
+    identity: OwnedIdentity,
+) -> OwnedIdentity:
+    if not owned_path_matches(temporary, descriptor, identity):
+        fail("owned source archive temp identity changed before atomic publication")
     try:
         os.link(temporary, output)
     except FileExistsError:
         fail("source archive output appeared before atomic publication; refusing to overwrite it")
     except OSError as exc:
         fail(f"cannot atomically publish source archive with a same-directory hard link: {exc}")
-
-
-def unlink_owned(path: pathlib.Path, identity: tuple[int, int]) -> bool:
     try:
-        current = path.lstat()
-    except FileNotFoundError:
-        return True
-    if (current.st_dev, current.st_ino) != identity:
+        after = capture_owned_identity(temporary, descriptor)
+        output_after = stat_identity(output.lstat())
+    except (FileNotFoundError, OSError) as exc:
+        fail(f"cannot verify published source archive identity: {exc}")
+    if after is None or after[1] != output_after:
+        fail("published source archive does not bind the still-open owned temp identity")
+    return after
+
+
+def unlink_owned(path: pathlib.Path, descriptor: int, identity: OwnedIdentity) -> bool:
+    if not owned_path_matches(path, descriptor, identity):
         return False
     path.unlink()
     return True
