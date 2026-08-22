@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import locale
 import os
 import pathlib
 import hashlib
@@ -35,7 +36,8 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
-def run(cmd: Iterable[object], *, timeout: int = 90, check: bool = True, env=None) -> subprocess.CompletedProcess[str]:
+def run_decoded(cmd: Iterable[object], *, encoding: str, contract: str,
+                timeout: int = 90, check: bool = True, env=None) -> subprocess.CompletedProcess[str]:
     argv = [str(x) for x in cmd]
     raw = subprocess.run(argv, text=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                          timeout=timeout, env=env)
@@ -43,10 +45,10 @@ def run(cmd: Iterable[object], *, timeout: int = 90, check: bool = True, env=Non
     for stream in ("stdout", "stderr"):
         data = getattr(raw, stream)
         try:
-            decoded[stream] = data.decode("utf-8", errors="strict")
+            decoded[stream] = data.decode(encoding, errors="strict")
         except UnicodeDecodeError as exc:
             raise AssertionError(
-                f"command {stream} is not valid UTF-8 at byte {exc.start}: "
+                f"{contract} {stream} is not valid {encoding} at byte {exc.start}: "
                 f"{' '.join(argv)}"
             ) from exc
     cp = subprocess.CompletedProcess(raw.args, raw.returncode,
@@ -54,6 +56,18 @@ def run(cmd: Iterable[object], *, timeout: int = 90, check: bool = True, env=Non
     if check and cp.returncode != 0:
         raise AssertionError(f"command failed rc={cp.returncode}: {' '.join(argv)}\nstdout:\n{cp.stdout[-5000:]}\nstderr:\n{cp.stderr[-5000:]}")
     return cp
+
+
+def run(cmd: Iterable[object], *, timeout: int = 90, check: bool = True, env=None) -> subprocess.CompletedProcess[str]:
+    return run_decoded(cmd, encoding="UTF-8", contract="command",
+                       timeout=timeout, check=check, env=env)
+
+
+def run_toolchain(cmd: Iterable[object], *, timeout: int = 90, check: bool = True,
+                  env=None, encoding: str | None = None) -> subprocess.CompletedProcess[str]:
+    tool_encoding = encoding or locale.getpreferredencoding(False)
+    return run_decoded(cmd, encoding=tool_encoding, contract="toolchain command",
+                       timeout=timeout, check=check, env=env)
 
 
 def analyze(binary: pathlib.Path, path: pathlib.Path, *args: str):
@@ -232,7 +246,7 @@ def cmake_build(binary: pathlib.Path, targets: list[str]) -> tuple[pathlib.Path,
     build,config=cmake_context(binary); cmd=["cmake","--build",build]
     if config: cmd += ["--config",config]
     cmd += ["--target",*targets]
-    run(cmd,timeout=180)
+    run_toolchain(cmd,timeout=180)
     return build,config
 
 
@@ -397,7 +411,7 @@ def write_build_manifest(binary:pathlib.Path,require_clean_source:bool=False) ->
       "product_build":version_fields,
       "report_schema_version":version_fields["report_schema_version"],
       "binary_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),
-      "cmake_version":run(["cmake","--version"]).stdout.splitlines()[0],
+      "cmake_version":run_toolchain(["cmake","--version"]).stdout.splitlines()[0],
       "generator":cache_value("CMAKE_GENERATOR"),
       "configuration":config or cache_value("CMAKE_BUILD_TYPE") or "unspecified",
       "compiler":compiler_meta,

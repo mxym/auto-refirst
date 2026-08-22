@@ -29,6 +29,17 @@ def expect_decode_failure(command: list[str], stream: str) -> None:
         raise AssertionError(f"invalid UTF-8 {stream} was accepted")
 
 
+def expect_toolchain_decode_failure(command: list[str], stream: str, encoding: str) -> None:
+    try:
+        public_runner.run_toolchain(command, encoding=encoding)
+    except AssertionError as exc:
+        expected = f"toolchain command {stream} is not valid {encoding}"
+        if expected not in str(exc):
+            raise AssertionError(f"wrong toolchain decode failure for {stream}: {exc}") from exc
+    else:
+        raise AssertionError(f"invalid {encoding} toolchain {stream} was accepted")
+
+
 def main() -> int:
     # Deliberately request a legacy child locale. os.write() keeps the fixture
     # bytes exact, proving the parent decoder does not inherit a host code page.
@@ -44,7 +55,12 @@ def main() -> int:
     legacy_stdout = "编码".encode("cp936")
     expect_decode_failure(emit(stdout=legacy_stdout), "stdout")
     expect_decode_failure(emit(stderr=b"bad:\x80"), "stderr")
-    print("[PASS] public runner UTF-8 contract: legacy locale independent; invalid stdout/stderr rejected")
+
+    localized = "正在生成代码".encode("cp936")
+    tool = public_runner.run_toolchain(emit(stdout=localized), encoding="cp936")
+    assert tool.stdout == localized.decode("cp936")
+    expect_toolchain_decode_failure(emit(stderr=b"bad:\x81"), "stderr", "cp936")
+    print("[PASS] public runner decoding: product/helper UTF-8 strict; localized toolchain diagnostics separated and strict")
     return 0
 
 
