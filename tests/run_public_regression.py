@@ -125,6 +125,18 @@ def pyc310() -> bytes:
     return struct.pack("<H",3439)+b"\r\n"+u32(0)+u32(0x66010203)+u32(1)+body
 
 
+def marshal310_with_set(values: list[int]) -> bytes:
+    def i32(v): return struct.pack("<i", v)
+    def bobj(v): return b"s" + i32(len(v)) + v
+    def text(v):
+        raw=v.encode(); assert len(raw)<256; return b"z" + bytes([len(raw)]) + raw
+    def tup(xs): return b")" + bytes([len(xs)]) + b"".join(xs)
+    unordered=b"<"+i32(len(values))+b"".join(b"i"+i32(v) for v in values)
+    return (b"c"+i32(0)+i32(0)+i32(0)+i32(0)+i32(1)+i32(0)+bobj(b"d\x00S\x00")+
+            tup([b"N",unordered])+tup([])+tup([])+tup([])+tup([])+
+            text("public.py")+text("<module>")+i32(1)+bobj(b""))
+
+
 def provenance_gate() -> None:
     supply_chain = run([sys.executable, THIRD_PARTY_PROVENANCE_CHECK])
     if supply_chain.stdout.strip():
@@ -240,6 +252,13 @@ def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
     assert out[0:4]==["1","1","3.10","TIMESTAMP"],out
     bad=td/"bad.pyc"; bad.write_bytes(p.read_bytes()[:10]); out=run([pyunit,"inspect",bad,"1"]).stdout
     assert out.startswith("1\t0\t"),out
+    set_a=td/"marshal-set-a.bin";set_b=td/"marshal-set-b.bin"
+    set_a.write_bytes(marshal310_with_set([1,257,-3]));set_b.write_bytes(marshal310_with_set([-3,1,257]))
+    hash_a=run([pyunit,"marshal-hash",set_a,"310"]).stdout.strip()
+    hash_b=run([pyunit,"marshal-hash",set_b,"310"]).stdout.strip()
+    assert hash_a==hash_b and len(hash_a)==64,(hash_a,hash_b)
+    malformed=td/"marshal-set-truncated.bin";malformed.write_bytes(set_a.read_bytes()[:-1])
+    assert run([pyunit,"marshal-hash",malformed,"310"],check=False).returncode==3
     flutter=target_path(build,config,targets[2]); assert run([flutter]).stdout.strip()=="PASS"
     log("[PASS P0] model-trust synthetic unit + direct CPython pyc trust ingress + Flutter codec")
 

@@ -108,7 +108,7 @@ CPythonDispatchInfo analyze_cpython_dispatch(std::span<const std::uint8_t>d,cons
         }else if(auto it=by_rva.find(t.handler_rva);it!=by_rva.end()){
             bool sig_ok=false;for(auto*e:it->second)if(!e->signature||e->signature==t.entry_block_hash){sig_ok=true;break;}m.state=sig_ok?"PERMUTED":"PERMUTED_HANDLER_MODIFIED";++out.permuted_slots;if(!sig_ok)++out.handler_modified;assign_refs(m,it->second);
         }else if(t.entry_block_hash){
-            auto it=by_sig.find({t.entry_block_hash,t.entry_instruction_count});if(it!=by_sig.end()){std::set<std::uint32_t>rvas;for(auto*e:it->second)rvas.insert(e->handler_rva);assign_refs(m,it->second);if(rvas.size()==1){bool same=std::any_of(it->second.begin(),it->second.end(),[&](auto*e){return e->opcode==t.opcode;});m.state=same?"SEMANTIC_SLOT_MATCH":"SEMANTIC_PERMUTED";++out.semantic_mapped;if(same)++out.slot_matches;else ++out.permuted_slots;}else{m.state="AMBIGUOUS_SEMANTIC";++out.ambiguous;}}else{m.state="UNMAPPED";++out.unmapped;}
+            auto signature_it=by_sig.find({t.entry_block_hash,t.entry_instruction_count});if(signature_it!=by_sig.end()){std::set<std::uint32_t>rvas;for(auto*e:signature_it->second)rvas.insert(e->handler_rva);assign_refs(m,signature_it->second);if(rvas.size()==1){bool same=std::any_of(signature_it->second.begin(),signature_it->second.end(),[&](auto*e){return e->opcode==t.opcode;});m.state=same?"SEMANTIC_SLOT_MATCH":"SEMANTIC_PERMUTED";++out.semantic_mapped;if(same)++out.slot_matches;else ++out.permuted_slots;}else{m.state="AMBIGUOUS_SEMANTIC";++out.ambiguous;}}else{m.state="UNMAPPED";++out.unmapped;}
         }else{m.state="UNMAPPED";++out.unmapped;}
         out.mappings.push_back(std::move(m));
     }

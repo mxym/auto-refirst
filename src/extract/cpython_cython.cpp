@@ -781,7 +781,7 @@ std::vector<CapiPackedBlock> capi_packed_candidates(std::span<const std::uint8_t
         for(std::size_t j=0;j+2<=len&&streams<kMaxCapiZlibStreams;++j){
             const auto off=std::size_t(s.raw_offset)+j;const auto cmf=d[off],flg=d[off+1];
             if((cmf&0x0fu)!=8u||(cmf>>4)>7u||((std::uint32_t(cmf)<<8)|flg)%31u||(flg&0x20u))continue;
-            std::vector<unsigned char>plain(kMaxCapiDecompressed);mz_ulong plen=plain.size();mz_ulong slen=std::min<std::size_t>(kMaxCapiCompressedInput,d.size()-off);
+            std::vector<unsigned char>plain(kMaxCapiDecompressed);mz_ulong plen=static_cast<mz_ulong>(plain.size());mz_ulong slen=static_cast<mz_ulong>(std::min<std::size_t>(kMaxCapiCompressedInput,d.size()-off));
             if(mz_uncompress2(plain.data(),&plen,d.data()+off,&slen)!=MZ_OK||!plen||plen>kMaxCapiDecompressed||!slen)continue;
             ++streams;plain.resize(plen);auto rva=off_rva(pe,off);if(!rva||slen>0xffffffffu)continue;
             for(std::size_t start=0;start<plain.size();++start)if(auto c=parse_capi_packed_at(plain,start,n,expected_signature_bytes,*rva,static_cast<std::uint32_t>(slen)))out.push_back(std::move(*c));

@@ -40,7 +40,7 @@ struct Reader {
     bool fail(std::string s,std::size_t at=std::numeric_limits<std::size_t>::max()){if(out&&out->error.empty()){out->error=std::move(s);out->error_offset=(at==std::numeric_limits<std::size_t>::max()?p:at);}return false;}
     bool need(std::size_t n){return n<=d.size()-std::min(p,d.size())||fail("marshal truncated");}
     std::uint8_t u8(){if(!need(1))return 0;return d[p++];}
-    std::uint16_t u16(){if(!need(2))return 0;auto v=std::uint16_t(d[p])|(std::uint16_t(d[p+1])<<8);p+=2;return v;}
+    std::uint16_t u16(){if(!need(2))return 0;auto v=static_cast<std::uint16_t>(std::uint16_t(d[p])|(std::uint16_t(d[p+1])<<8));p+=2;return v;}
     std::uint32_t u32(){if(!need(4))return 0;auto v=std::uint32_t(d[p])|(std::uint32_t(d[p+1])<<8)|(std::uint32_t(d[p+2])<<16)|(std::uint32_t(d[p+3])<<24);p+=4;return v;}
     std::int32_t i32(){return static_cast<std::int32_t>(u32());}
     std::uint64_t u64(){if(!need(8))return 0;std::uint64_t v=0;for(int i=0;i<8;i++)v|=std::uint64_t(d[p+i])<<(8*i);p+=8;return v;}

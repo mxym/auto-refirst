@@ -58,7 +58,7 @@ std::vector<std::uint8_t> python_code_mask(std::string_view src){
     std::vector<std::uint8_t> code(src.size(),1);std::size_t i=0;
     while(i<src.size()){
         if(src[i]=='#'){
-            auto e=src.find('\n',i);if(e==std::string_view::npos)e=src.size();std::fill(code.begin()+static_cast<std::ptrdiff_t>(i),code.begin()+static_cast<std::ptrdiff_t>(e),0);i=e;continue;
+            auto e=src.find('\n',i);if(e==std::string_view::npos)e=src.size();std::fill(code.begin()+static_cast<std::ptrdiff_t>(i),code.begin()+static_cast<std::ptrdiff_t>(e),std::uint8_t{0});i=e;continue;
         }
         if(src[i]!='\''&&src[i]!='\"'){++i;continue;}
         const char q=src[i];const bool triple=i+2<src.size()&&src[i+1]==q&&src[i+2]==q;auto a=i;i+=triple?3:1;bool esc=false;
@@ -67,7 +67,7 @@ std::vector<std::uint8_t> python_code_mask(std::string_view src){
             if(triple){if(i+2<src.size()&&src[i]==q&&src[i+1]==q&&src[i+2]==q){i+=3;break;}++i;continue;}
             if(c==q){++i;break;}if(c=='\n')break;++i;
         }
-        std::fill(code.begin()+static_cast<std::ptrdiff_t>(a),code.begin()+static_cast<std::ptrdiff_t>(i),0);
+        std::fill(code.begin()+static_cast<std::ptrdiff_t>(a),code.begin()+static_cast<std::ptrdiff_t>(i),std::uint8_t{0});
     }return code;
 }
 std::size_t find_code_token(std::string_view src,std::span<const std::uint8_t>mask,std::string_view token,std::size_t start=0){

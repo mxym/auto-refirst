@@ -84,7 +84,17 @@ endfunction()
 # noise as third-party debt. Do not edit imported sources solely to satisfy
 # our warning baseline; suppress only the warning classes they generate when
 # those C translation units are compiled directly.
-if(NOT MSVC)
+if(MSVC)
+  set_source_files_properties(
+      third_party/rustc_demangle/demangle.c
+      PROPERTIES COMPILE_OPTIONS "/wd4244;/wd4457;/wd4996")
+  set_source_files_properties(
+      third_party/zydis/Zydis.c
+      PROPERTIES COMPILE_OPTIONS "/wd4201")
+  set_source_files_properties(
+      third_party/miniz/miniz_zip.c
+      PROPERTIES COMPILE_OPTIONS "/wd4127")
+else()
   set_source_files_properties(third_party/zydis/Zydis.c PROPERTIES COMPILE_OPTIONS "-Wno-unused-const-variable;-Wno-unused-function")
   set_source_files_properties(
       third_party/miniz/miniz_zip.c
@@ -215,6 +225,7 @@ if(WIN32)
     # Otherwise MSVC sees /MD vs /MT and char vs wchar_t symbol mismatches.
     set_property(TARGET libpeconv PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_compile_definitions(libpeconv PRIVATE UNICODE _UNICODE)
+    target_compile_options(libpeconv PRIVATE /utf-8 /wd4828)
   endif()
   target_link_libraries(auto_refirst PRIVATE libpeconv)
   if(MSVC)
