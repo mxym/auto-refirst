@@ -400,7 +400,8 @@ def main() -> int:
     used_license_files: set[str] = set()
     used_vendored_roots: set[str] = set()
     noassertion_ids: set[str] = set()
-    snapshot_cache: dict[str, str] = {}
+    snapshot_cache: dict[tuple[str, tuple[str, ...]], str] = {}
+    snapshot_declarations: dict[str, tuple[str, ...]] = {}
     for row in rows:
         component = row["component_id"]
         licenses = existing_paths(root, row, "license_files")
@@ -482,12 +483,18 @@ def main() -> int:
         prefix = vendored_root + "/"
         if any(not path.startswith(prefix) or decode_git_path(path.encode("utf-8")) != path for path in declared_files):
             fail(f"{component} tracked file escapes vendored root")
+        declared_file_tuple = tuple(declared_files)
+        previous_declaration = snapshot_declarations.get(vendored_root)
+        if previous_declaration is not None and previous_declaration != declared_file_tuple:
+            fail(f"{component} shared vendored root tracked_files disagree with another component")
+        snapshot_declarations[vendored_root] = declared_file_tuple
         recorded_digest = snapshot["tree_sha256"]
         if not isinstance(recorded_digest, str) or not HEX_SHA256.fullmatch(recorded_digest):
             fail(f"{component} tree_sha256 must be a lowercase SHA-256")
-        if vendored_root not in snapshot_cache:
-            snapshot_cache[vendored_root] = verify_snapshot_root(root, vendored_root, declared_files)
-        actual_digest = snapshot_cache[vendored_root]
+        cache_key = (vendored_root, declared_file_tuple)
+        if cache_key not in snapshot_cache:
+            snapshot_cache[cache_key] = verify_snapshot_root(root, vendored_root, declared_files)
+        actual_digest = snapshot_cache[cache_key]
         if actual_digest != recorded_digest:
             fail(f"{component} committed tree digest mismatch: expected={recorded_digest} actual={actual_digest}")
 
@@ -537,7 +544,7 @@ def main() -> int:
     unique_snapshot_files = len({path for component in components for path in component["tracked_files"]})
     print(
         f"[PASS] third-party provenance: {len(compiled_ids)} compiled + {len(reference_ids)} reference rows; "
-        f"snapshot_roots={len(snapshot_cache)} snapshot_files={unique_snapshot_files}; "
+        f"snapshot_roots={len(snapshot_declarations)} snapshot_files={unique_snapshot_files}; "
         "declared revisions bound to committed/index/worktree vendored bytes; "
         "no independent upstream authentication claimed"
     )

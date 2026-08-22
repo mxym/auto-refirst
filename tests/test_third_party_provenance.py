@@ -142,6 +142,17 @@ def mutate_manifest_digest(root: pathlib.Path) -> None:
     commit_all(root, "mutation: manifest digest")
 
 
+def mutate_duplicate_root_manifest_file_set(root: pathlib.Path) -> None:
+    def reduce_file_set(document: dict[str, object]) -> None:
+        component = manifest_component(document, "zycore-c")
+        tracked_files = component["tracked_files"]
+        assert isinstance(tracked_files, list) and len(tracked_files) == 3
+        component["tracked_files"] = tracked_files[:2]
+
+    update_json(root, "docs/VENDORED_SNAPSHOT_MANIFEST.json", reduce_file_set)
+    commit_all(root, "mutation: duplicate root manifest file set")
+
+
 def mutate_manifest_scope(root: pathlib.Path) -> None:
     def overstate(document: dict[str, object]) -> None:
         document["scope"] = "Independently authenticates every upstream source revision."
@@ -229,6 +240,11 @@ def main() -> int:
         ("missing-reference-notice", mutate_missing_reference_notice, "missing from THIRD_PARTY_NOTICES.md"),
         ("manifest-identity", mutate_manifest_identity, "identity disagrees with snapshot manifest"),
         ("manifest-digest", mutate_manifest_digest, "committed tree digest mismatch"),
+        (
+            "duplicate-root-manifest-file-set",
+            mutate_duplicate_root_manifest_file_set,
+            "shared vendored root tracked_files disagree",
+        ),
         ("manifest-scope-overclaim", mutate_manifest_scope, "scope changed or overstates authentication"),
         ("sbom-identity", mutate_sbom_identity, "identity disagrees with SBOM"),
         ("cmake-anchor", mutate_cmake_anchor, "not anchored by CMake marker"),
