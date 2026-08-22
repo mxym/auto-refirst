@@ -42,7 +42,7 @@ cmake --build build --parallel
 ./build/auto-refirst ./target --run --apply --json
 ```
 
-完整参数见 [docs/CLI.md](docs/CLI.md)，构建说明见 [docs/BUILD.md](docs/BUILD.md)。
+完整参数见 [docs/CLI.md](docs/CLI.md)，精确退出码与授权契约见 [docs/CLI_CONTRACT.md](docs/CLI_CONTRACT.md)，构建说明见 [docs/BUILD.md](docs/BUILD.md)。
 
 ## 能力概览
 
@@ -94,6 +94,7 @@ cmake --build build --parallel
 - [架构与证据模型](docs/ARCHITECTURE.md)
 - [外部验证与已知缺口](docs/VALIDATION.md)
 - [CLI 与安全授权](docs/CLI.md)
+- [CLI 退出码与授权契约](docs/CLI_CONTRACT.md)
 - [构建与安装](docs/BUILD.md)
 - [公开测试](docs/PUBLIC_TESTING.md)
 - [第三方与生成引用来源](docs/PROVENANCE.md)
