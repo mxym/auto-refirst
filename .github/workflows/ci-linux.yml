@@ -40,6 +40,8 @@ jobs:
           actual_sha="$(git rev-parse HEAD)"
           test "$actual_sha" = "$EXPECTED_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Public source hygiene
+        run: python3 tests/check_public_source_hygiene.py --require-clean
       - name: Record toolchain
         run: |
           cmake --version
@@ -75,14 +77,14 @@ jobs:
             echo "::notice::This public baseline predates embedded build identity; the RC candidate must expose git_commit and will be checked exactly."
           fi
       - name: Public P0/P1 static regression
-        run: python3 tests/run_public_regression.py --binary build/auto-refirst --tier all
+        run: python3 tests/run_public_regression.py --binary build/auto-refirst --tier all --require-clean-source
       - name: Directory resource static contract
         run: python3 tests/test_bounded_directory_output.py build/auto-refirst
-      - name: Install staging
-        run: |
-          cmake --install build --prefix "$RUNNER_TEMP/auto-refirst-install"
-          test -x "$RUNNER_TEMP/auto-refirst-install/bin/auto-refirst"
-          "$RUNNER_TEMP/auto-refirst-install/bin/auto-refirst" --version
+      - name: Provenance and exact install staging
+        run: >-
+          cmake --build build --parallel 2 --target
+          auto_refirst_public_provenance_check
+          auto_refirst_public_install_stage_check
       - name: Assert source remains clean
         run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
@@ -107,6 +109,8 @@ jobs:
           actual_sha="$(git rev-parse HEAD)"
           test "$actual_sha" = "$EXPECTED_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Public source hygiene
+        run: python3 tests/check_public_source_hygiene.py --require-clean
       - name: Select warnings-as-errors contract
         id: strict
         run: |

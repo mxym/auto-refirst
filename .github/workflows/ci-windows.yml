@@ -28,6 +28,8 @@ jobs:
           $actualSha = (git rev-parse HEAD).Trim()
           if ($actualSha -ne $env:EXPECTED_SHA) { throw "checkout mismatch: $actualSha != $env:EXPECTED_SHA" }
           if (git status --porcelain=v1 --untracked-files=all) { throw "checkout is not clean" }
+      - name: Public source hygiene
+        run: python tests/check_public_source_hygiene.py --require-clean
       - name: Record native MSVC toolchain
         shell: pwsh
         run: |
@@ -70,17 +72,14 @@ jobs:
             Write-Host "::notice::This public baseline predates embedded build identity; the RC candidate must expose git_commit and will be checked exactly."
           }
       - name: Public P0/P1 static regression
-        run: python tests/run_public_regression.py --binary build/Release/auto-refirst.exe --tier all
+        run: python tests/run_public_regression.py --binary build/Release/auto-refirst.exe --tier all --require-clean-source
       - name: Directory resource static contract
         run: python tests/test_bounded_directory_output.py build/Release/auto-refirst.exe
-      - name: Install staging
-        shell: pwsh
-        run: |
-          $stage = Join-Path $env:RUNNER_TEMP "auto-refirst-install"
-          cmake --install build --config Release --prefix $stage
-          $installed = Join-Path $stage "bin\auto-refirst.exe"
-          if (-not (Test-Path $installed -PathType Leaf)) { throw "installed executable is missing: $installed" }
-          & $installed --version
+      - name: Provenance and exact install staging
+        run: >-
+          cmake --build build --config Release --parallel 2 --target
+          auto_refirst_public_provenance_check
+          auto_refirst_public_install_stage_check
       - name: Assert source remains clean
         shell: pwsh
         run: |

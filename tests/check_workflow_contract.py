@@ -113,6 +113,8 @@ def assert_exact_checkout(name: str, job_name: str, job: dict) -> None:
     final_step = steps[-1]
     if final_step.get("name") != "Assert source remains clean" or "git status --porcelain=v1" not in str(final_step.get("run", "")):
         fail(f"{name}.{job_name} must finish by proving the source remains clean")
+    if "check_public_source_hygiene.py --require-clean" not in joined_runs(job):
+        fail(f"{name}.{job_name} must run public hygiene against a clean worktree")
 
 
 def assert_job_boundaries(name: str, jobs: dict) -> None:
@@ -148,8 +150,10 @@ def assert_linux(document: dict) -> None:
         "steps.strict.outputs.arg",
         "run_public_regression.py",
         "--tier all",
+        "--require-clean-source",
         "test_bounded_directory_output.py",
-        "cmake --install",
+        "auto_refirst_public_provenance_check",
+        "auto_refirst_public_install_stage_check",
         "git_commit=",
         "EXPECTED_SHA",
     ):
@@ -190,8 +194,10 @@ def assert_windows(document: dict) -> None:
         "steps.strict.outputs.arg",
         "run_public_regression.py",
         "--tier all",
+        "--require-clean-source",
         "test_bounded_directory_output.py",
-        "cmake --install",
+        "auto_refirst_public_provenance_check",
+        "auto_refirst_public_install_stage_check",
         "git_commit=",
         "EXPECTED_SHA",
     ):
@@ -241,7 +247,9 @@ def self_test(texts: dict[str, str]) -> int:
         ("PR runtime enabled", mutate(texts, "ci-linux.yml", "    if: github.event_name != 'pull_request'\n", "")),
         ("runtime in static job", mutate(texts, "ci-linux.yml", "test_bounded_directory_output.py build/auto-refirst", "test_bounded_directory_output.py build/auto-refirst --run")),
         ("missing Clang 18", mutate(texts, "ci-linux.yml", "compiler: clang-18", "compiler: clang-17")),
-        ("missing install", mutate(texts, "ci-linux.yml", "cmake --install", "cmake --build")),
+        ("missing public hygiene", mutate(texts, "ci-linux.yml", "python3 tests/check_public_source_hygiene.py --require-clean", "python3 --version")),
+        ("P0/P1 accepts dirty source", mutate(texts, "ci-linux.yml", " --tier all --require-clean-source", " --tier all")),
+        ("missing exact install checker", mutate(texts, "ci-linux.yml", "auto_refirst_public_install_stage_check", "auto_refirst")),
         ("missing strict configure", mutate(texts, "ci-linux.yml", "${{ steps.strict.outputs.arg }}", "-DCMAKE_VERBOSE_MAKEFILE=ON")),
         ("wrong sanitizer compiler", mutate(texts, "ci-sanitizers.yml", "CC: gcc-13", "CC: gcc-12")),
         ("missing sanitizer smoke", mutate(texts, "ci-sanitizers.yml", "--sanitizer-smoke", "--tier P0")),

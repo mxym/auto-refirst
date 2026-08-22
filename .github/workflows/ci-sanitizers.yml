@@ -32,6 +32,8 @@ jobs:
           actual_sha="$(git rev-parse HEAD)"
           test "$actual_sha" = "$EXPECTED_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Public source hygiene
+        run: python3 tests/check_public_source_hygiene.py --require-clean
       - name: Record GCC 13 toolchain
         run: |
           cmake --version
