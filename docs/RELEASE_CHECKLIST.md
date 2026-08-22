@@ -23,6 +23,7 @@ From a clean checkout of the frozen commit:
 
 - [ ] Build Linux x86-64 Release with the supported public toolchain.
 - [ ] Build Windows x64 Release with MSVC on the hosted Windows gate.
+- [ ] Configure release builds with `AUTO_REFIRST_WARNINGS_AS_ERRORS=ON`; warning-free compilation is required for project-owned targets.
 - [ ] Run the documented Zig Windows cross-build as an additional portability check when the maintainer toolchain is available.
 - [ ] Record commit, compiler/toolchain, CMake version, platform, and relevant build flags in release metadata.
 - [ ] Verify `auto-refirst --version` reports the intended release version on both release binaries.
@@ -30,7 +31,8 @@ From a clean checkout of the frozen commit:
 
 ## 4. Public regression gates
 
-- [ ] `python3 tests/run_public_regression.py --binary <binary> --tier all` passes.
+- [ ] `python3 tests/run_public_regression.py --binary <binary> --tier all --require-clean-source` passes and binds the binary to the exact clean candidate commit.
+- [ ] `python3 tests/test_build_metadata_source_root.py` passes for archive/source-root isolation and full-length fallback identities.
 - [ ] `python3 tests/test_bounded_directory_output.py <binary>` passes.
 - [ ] `python3 tests/test_directory_orchestration.py <binary>` passes.
 - [ ] `python3 tests/test_runtime_authorization.py <binary>` passes.

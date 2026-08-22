@@ -22,6 +22,7 @@ from typing import Iterable
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROVENANCE = ROOT / "tests" / "corpus" / "PROVENANCE.csv"
 THIRD_PARTY_PROVENANCE_CHECK = ROOT / "tests" / "check_third_party_provenance.py"
+SOURCE_ROOT_METADATA_CHECK = ROOT / "tests" / "test_build_metadata_source_root.py"
 PUBLIC_FIXTURES = (
     "tests/corpus/jvm/LambdaSample.class",
     "tests/corpus/android/LambdaSample.dex",
@@ -131,6 +132,9 @@ def provenance_gate() -> None:
     utf8_contract = run([sys.executable, ROOT / "tests" / "test_public_runner_utf8.py"])
     if utf8_contract.stdout.strip():
         log(utf8_contract.stdout.strip())
+    source_root_metadata = run([sys.executable, SOURCE_ROOT_METADATA_CHECK], timeout=180)
+    if source_root_metadata.stdout.strip():
+        log(source_root_metadata.stdout.strip())
     assert PROVENANCE.is_file(), PROVENANCE
     with PROVENANCE.open(newline="", encoding="utf-8") as f:
         rows = {r["path"]: r for r in csv.DictReader(f)}
@@ -246,13 +250,60 @@ def p0_windows_reparse(binary:pathlib.Path) -> None:
     log("[PASS P0] Windows directory/artifact-root junction reparse refusal")
 
 
+def version_contract(binary:pathlib.Path) -> tuple[str,dict[str,str]]:
+    cp=run([binary,"--version"]);lines=[x.strip() for x in cp.stdout.splitlines() if x.strip()]
+    assert lines and lines[0].startswith("auto-refirst "),lines
+    fields={}
+    for line in lines[1:]:
+        assert "=" in line,line
+        k,v=line.split("=",1);assert k and k not in fields,(k,lines);fields[k]=v
+    assert fields.get("git_commit"),fields
+    assert "/" in fields.get("build_platform",""),fields
+    assert fields.get("report_schema_version")=="1.0",fields
+    return lines[0],fields
+
+
 def p0_report_json(binary:pathlib.Path,td:pathlib.Path) -> None:
     p=td/"report-elf"; p.write_bytes(minimal_elf())
-    en=run([binary,p]).stdout; obj=json.loads(run([binary,p,"--json"]).stdout)
-    assert "auto-refirst Analysis" in en and obj["format"]["kind"]=="ELF"
+    text_cp=run([binary,p]); json_cp=run([binary,p,"--json"])
+    assert text_cp.returncode==0 and json_cp.returncode==0,(text_cp.returncode,json_cp.returncode)
+    en=text_cp.stdout; obj=json.loads(json_cp.stdout)
+    assert "auto-refirst Analysis" in en and obj["format"]["kind"]=="ELF" and obj["report_schema_version"]=="1.0"
     bad=run([binary,p,"--report-lang=xx"],check=False); assert bad.returncode==2
-    version=run([binary,"--version"]).stdout.strip(); assert version.startswith("auto-refirst ")
-    log("[PASS P0] text report / JSON / --version contract")
+    version_contract(binary)
+    d=td/"report-dir";d.mkdir();(d/"sample.bin").write_bytes(minimal_elf())
+    dobj=json.loads(run([binary,d,"--json"]).stdout)
+    assert dobj["report_schema_version"]=="1.0" and dobj["reports"] and all(x["report_schema_version"]=="1.0" for x in dobj["reports"])
+    assert run([binary],check=False).returncode==2
+    assert run([binary,"--definitely-unknown"],check=False).returncode==2
+    assert run([binary,p,"--definitely-unknown"],check=False).returncode==2
+    assert run([binary,p,"--search="],check=False).returncode==2
+    assert run([binary,td/"definitely-missing"],check=False).returncode==3
+    empty=td/"empty-dir";empty.mkdir();assert run([binary,empty,"--json"],check=False).returncode==3
+    assert run([binary,p,"--search=definitely-absent"],check=False).returncode==1
+    bad_temp=td/"not-a-temp-directory";bad_temp.write_bytes(b"x")
+    fatal_env=dict(os.environ);fatal_env.update({"TMPDIR":str(bad_temp),"TMP":str(bad_temp),"TEMP":str(bad_temp)})
+    fatal=run([binary,d,"--json"],check=False,env=fatal_env)
+    assert fatal.returncode==4 and "temporary" in fatal.stderr.lower(),fatal.stderr
+    output_cases=[[binary,"--help"],[binary,"--version"],[binary,p],[binary,p,"--json"],
+                  [binary,p,"--search=ELF"],[binary,p,"--search=definitely-absent"],
+                  [binary,d],[binary,d,"--json"]]
+    if os.name!="nt":
+        full=pathlib.Path("/dev/full");assert full.exists(),full
+        for argv in output_cases:
+            with full.open("wb",buffering=0) as sink:
+                cp=subprocess.run([str(x) for x in argv],stdout=sink,stderr=subprocess.PIPE,timeout=90)
+            assert cp.returncode==4,(argv,cp.returncode,cp.stderr[-1000:])
+            diagnostic=cp.stderr.lower()
+            assert b"output" in diagnostic and b"failed" in diagnostic,(argv,cp.stderr[-1000:])
+    else:
+        read_fd,write_fd=os.pipe();os.close(read_fd)
+        with os.fdopen(write_fd,"wb",buffering=0) as sink:
+            cp=subprocess.run([str(binary),"--version"],stdout=sink,stderr=subprocess.PIPE,timeout=90)
+        assert cp.returncode==4,(cp.returncode,cp.stderr[-1000:])
+        diagnostic=cp.stderr.lower()
+        assert b"output" in diagnostic and b"failed" in diagnostic,cp.stderr[-1000:]
+    log("[PASS P0] text/JSON/version + CLI exit-code contract")
 
 
 def p1_generated(binary:pathlib.Path,td:pathlib.Path) -> None:
@@ -271,7 +322,24 @@ def p1_generated(binary:pathlib.Path,td:pathlib.Path) -> None:
     log(f"[PASS P1] source-generated {fmt} ordinary/crypto/runtime-child/runtime-parent + deterministic pyc fixture (static analysis only)")
 
 
-def write_build_manifest(binary:pathlib.Path) -> pathlib.Path:
+def git_source_identity(root:pathlib.Path) -> dict:
+    commit_cp=run(["git","-C",root,"rev-parse","HEAD"],check=False)
+    if commit_cp.returncode!=0:
+        return {"commit":os.environ.get("AUTO_REFIRST_SOURCE_COMMIT","archive-or-unknown"),"tree_state":"UNKNOWN","dirty_entry_count":None,"porcelain_sha256":""}
+    status_cp=run(["git","-C",root,"status","--porcelain=v1","--untracked-files=all"],check=False)
+    if status_cp.returncode!=0:
+        return {"commit":commit_cp.stdout.strip(),"tree_state":"UNKNOWN","dirty_entry_count":None,"porcelain_sha256":""}
+    raw=status_cp.stdout.encode("utf-8",errors="surrogatepass")
+    entries=[line for line in status_cp.stdout.splitlines() if line]
+    return {
+      "commit":commit_cp.stdout.strip(),
+      "tree_state":"CLEAN" if not entries else "DIRTY",
+      "dirty_entry_count":len(entries),
+      "porcelain_sha256":hashlib.sha256(raw).hexdigest(),
+    }
+
+
+def write_build_manifest(binary:pathlib.Path,require_clean_source:bool=False) -> pathlib.Path:
     build,config=cmake_context(binary)
     cache=(build/"CMakeCache.txt").read_text(errors="replace")
     def cache_value(name:str) -> str:
@@ -290,13 +358,24 @@ def write_build_manifest(binary:pathlib.Path) -> pathlib.Path:
             "version":cmake_set(f"CMAKE_{lang}_COMPILER_VERSION"),
             "target":cmake_set(f"CMAKE_{lang}_COMPILER_TARGET"),
         }
-    git_commit=run(["git","-C",ROOT,"rev-parse","HEAD"],check=False)
-    commit=git_commit.stdout.strip() if git_commit.returncode==0 else os.environ.get("AUTO_REFIRST_SOURCE_COMMIT","archive-or-unknown")
-    version=run([binary,"--version"]).stdout.strip()
+    source=git_source_identity(ROOT)
+    if require_clean_source and source["tree_state"]!="CLEAN":
+        raise AssertionError(f"release manifest requires a clean source tree; state={source['tree_state']} dirty_entry_count={source['dirty_entry_count']}")
+    version,version_fields=version_contract(binary)
+    build_source_match=version_fields.get("git_commit")==source["commit"] and not version_fields.get("git_commit","").endswith("-dirty")
+    if require_clean_source and not build_source_match:
+        raise AssertionError(f"release manifest requires binary/source commit identity; binary={version_fields.get('git_commit','')} source={source['commit']}")
     data={
       "contract":"SEMANTICALLY_REPRODUCIBLE",
-      "source_commit":commit,
+      "source_commit":source["commit"],
+      "source_tree_state":source["tree_state"],
+      "source_dirty_entry_count":source["dirty_entry_count"],
+      "source_porcelain_sha256":source["porcelain_sha256"],
+      "source_identity_complete":source["tree_state"]=="CLEAN" and source["commit"] not in ("","archive-or-unknown"),
+      "binary_source_commit_match":build_source_match,
       "product_version":version,
+      "product_build":version_fields,
+      "report_schema_version":version_fields["report_schema_version"],
       "binary_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),
       "cmake_version":run(["cmake","--version"]).stdout.splitlines()[0],
       "generator":cache_value("CMAKE_GENERATOR"),
@@ -307,8 +386,12 @@ def write_build_manifest(binary:pathlib.Path) -> pathlib.Path:
         "cxx":cache_value("CMAKE_CXX_FLAGS"),"cxx_release":cache_value("CMAKE_CXX_FLAGS_RELEASE"),
         "exe_linker":cache_value("CMAKE_EXE_LINKER_FLAGS"),"exe_linker_release":cache_value("CMAKE_EXE_LINKER_FLAGS_RELEASE"),
       },
+      "cmake_options":{
+        "auto_refirst_warnings_as_errors":cache_value("AUTO_REFIRST_WARNINGS_AS_ERRORS"),
+        "auto_refirst_product_version":cache_value("AUTO_REFIRST_PRODUCT_VERSION"),
+      },
       "bit_reproducible_claim":False,
-      "notes":"Public build manifest records source identity and toolchain/flags. Compiler timestamps, PE/PDB paths and runner image updates can change bytes; semantic assertions are the release gate."
+      "notes":"Public release contract records commit and source-tree cleanliness, toolchain/CMake identity, release/link flags and the strict-warning option. Compiler timestamps, PE/PDB paths and runner image updates can change bytes; semantic assertions are the release gate."
     }
     out=build/"public-build-manifest.json";out.write_text(json.dumps(data,indent=2)+"\n",encoding="utf-8")
     log(f"[PASS META] release build manifest: {out}")
@@ -338,7 +421,15 @@ def main() -> int:
     ap.add_argument("--binary",type=pathlib.Path,default=ROOT/"build"/("auto-refirst.exe" if os.name=="nt" else "auto-refirst"))
     ap.add_argument("--tier",choices=("P0","P1","all"),default="all")
     ap.add_argument("--sanitizer-smoke",action="store_true")
+    ap.add_argument("--require-clean-source",action="store_true",help="fail manifest generation unless git source state is CLEAN")
     args=ap.parse_args(); binary=args.binary.resolve(); assert binary.is_file(),binary
+    if args.require_clean_source:
+        source=git_source_identity(ROOT)
+        if source["tree_state"]!="CLEAN":
+            raise AssertionError(f"release gate requires a clean source tree; state={source['tree_state']} dirty_entry_count={source['dirty_entry_count']}")
+        _,build_fields=version_contract(binary)
+        if build_fields.get("git_commit")!=source["commit"] or build_fields.get("git_commit","").endswith("-dirty"):
+            raise AssertionError(f"release gate requires binary/source commit identity; binary={build_fields.get('git_commit','')} source={source['commit']}")
     with tempfile.TemporaryDirectory(prefix="auto-refirst-public-") as raw:
         td=pathlib.Path(raw)
         if args.sanitizer_smoke:
@@ -347,7 +438,7 @@ def main() -> int:
             provenance_gate(); p0_formats(binary,td); p0_relationship_guidance(binary,td); p0_interpreter_and_runtime_modality(binary,td)
             p0_nested_and_graph(binary,td); p0_model_and_pyc(binary,td); p0_report_json(binary,td); p0_windows_reparse(binary)
         if args.tier in ("P1","all"): p1_generated(binary,td)
-        write_build_manifest(binary)
+        write_build_manifest(binary,args.require_clean_source)
     log(f"[PASS] public regression tier={args.tier}; static-only; self-contained")
     return 0
 

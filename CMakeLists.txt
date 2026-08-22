@@ -1,5 +1,58 @@
 cmake_minimum_required(VERSION 3.20)
 project(AutoRefirst VERSION 0.1.0 LANGUAGES C CXX)
+
+set(AUTO_REFIRST_PRODUCT_VERSION "0.1.0-alpha+k" CACHE STRING "Product version reported by auto-refirst --version")
+if(NOT AUTO_REFIRST_PRODUCT_VERSION MATCHES "^[0-9A-Za-z.+-]+$")
+  message(FATAL_ERROR "AUTO_REFIRST_PRODUCT_VERSION contains unsupported characters")
+endif()
+
+set(AUTO_REFIRST_BUILD_ID "unknown")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+  execute_process(
+    COMMAND git rev-parse HEAD
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE _auto_refirst_git_commit
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE _auto_refirst_git_result
+  )
+  string(LENGTH "${_auto_refirst_git_commit}" _auto_refirst_git_commit_len)
+  if(_auto_refirst_git_result EQUAL 0 AND _auto_refirst_git_commit MATCHES "^[0-9A-Fa-f]+$" AND (_auto_refirst_git_commit_len EQUAL 40 OR _auto_refirst_git_commit_len EQUAL 64))
+    set(AUTO_REFIRST_BUILD_ID "${_auto_refirst_git_commit}")
+    execute_process(
+      COMMAND git status --porcelain=v1 --untracked-files=all
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      OUTPUT_VARIABLE _auto_refirst_git_status
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET
+      RESULT_VARIABLE _auto_refirst_git_status_result
+    )
+    if(NOT _auto_refirst_git_status_result EQUAL 0)
+      string(APPEND AUTO_REFIRST_BUILD_ID "-status-unknown")
+    elseif(NOT _auto_refirst_git_status STREQUAL "")
+      string(APPEND AUTO_REFIRST_BUILD_ID "-dirty")
+    endif()
+  endif()
+else()
+  # Source archives have no source-root .git marker. Do not let Git discover an
+  # unrelated ancestor repository: archive identity must come only from the
+  # release harness fallback, and never overrides a live checkout/worktree.
+  set(_auto_refirst_source_commit "$ENV{AUTO_REFIRST_SOURCE_COMMIT}")
+  string(LENGTH "${_auto_refirst_source_commit}" _auto_refirst_source_commit_len)
+  if(_auto_refirst_source_commit MATCHES "^[0-9A-Fa-f]+$" AND (_auto_refirst_source_commit_len EQUAL 40 OR _auto_refirst_source_commit_len EQUAL 64))
+    set(AUTO_REFIRST_BUILD_ID "${_auto_refirst_source_commit}")
+  endif()
+endif()
+if(CMAKE_SYSTEM_PROCESSOR)
+  set(AUTO_REFIRST_BUILD_PLATFORM "${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}")
+else()
+  set(AUTO_REFIRST_BUILD_PLATFORM "${CMAKE_SYSTEM_NAME}/unknown")
+endif()
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_metadata.hpp.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/prts/build_metadata.hpp"
+  @ONLY
+)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
@@ -15,6 +68,37 @@ function(auto_refirst_enable_msvc_utf8 target)
     target_compile_options(${target} PRIVATE /utf-8)
   endif()
 endfunction()
+
+option(AUTO_REFIRST_WARNINGS_AS_ERRORS "Treat warnings as errors for release/CI product gates" OFF)
+function(auto_refirst_enable_warnings_as_errors target)
+  if(AUTO_REFIRST_WARNINGS_AS_ERRORS)
+    if(MSVC)
+      target_compile_options(${target} PRIVATE /WX)
+    else()
+      target_compile_options(${target} PRIVATE -Werror)
+    endif()
+  endif()
+endfunction()
+
+# Keep product warning policy strict while treating vendored implementation
+# noise as third-party debt. Do not edit imported sources solely to satisfy
+# our warning baseline; suppress only the warning classes they generate when
+# those C translation units are compiled directly.
+if(NOT MSVC)
+  set_source_files_properties(third_party/zydis/Zydis.c PROPERTIES COMPILE_OPTIONS "-Wno-unused-const-variable;-Wno-unused-function")
+  set_source_files_properties(
+      third_party/miniz/miniz_zip.c
+      third_party/miniz/miniz_tinfl.c
+      third_party/miniz/miniz_tdef.c
+      third_party/miniz/miniz.c
+      PROPERTIES COMPILE_OPTIONS "-Wno-unused-function")
+endif()
+if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+  set_source_files_properties(
+      third_party/rustc_demangle/demangle.c
+      PROPERTIES COMPILE_OPTIONS "-Wno-gnu-zero-variadic-macro-arguments;-Wno-missing-field-initializers")
+  set_property(SOURCE third_party/zydis/Zydis.c APPEND PROPERTY COMPILE_OPTIONS "-Wno-newline-eof")
+endif()
 
 add_executable(auto_refirst
     src/main.cpp
@@ -107,7 +191,8 @@ add_executable(auto_refirst
     third_party/miniz/miniz_tdef.c
     third_party/miniz/miniz.c
 )
-target_include_directories(auto_refirst PRIVATE include third_party/miniz third_party/tiny_aes third_party/zydis)
+target_include_directories(auto_refirst PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated" include third_party/tiny_aes third_party/zydis)
+target_include_directories(auto_refirst SYSTEM PRIVATE third_party/miniz)
 set_target_properties(auto_refirst PROPERTIES OUTPUT_NAME "auto-refirst")
 auto_refirst_enable_msvc_utf8(auto_refirst)
 if(MSVC)
@@ -117,6 +202,7 @@ if(MSVC)
 else()
   target_compile_options(auto_refirst PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+auto_refirst_enable_warnings_as_errors(auto_refirst)
 
 target_compile_definitions(auto_refirst PRIVATE AES256=1 ZYDIS_STATIC_BUILD=1 ZYAN_STATIC_BUILD=1)
 
@@ -207,6 +293,7 @@ foreach(_public_target
     else()
         target_compile_options(${_public_target} PRIVATE -Wall -Wextra -Wpedantic)
     endif()
+    auto_refirst_enable_warnings_as_errors(${_public_target})
 endforeach()
 
 # Parser-only sanitizer surface. It deliberately excludes runtime execution paths and
@@ -225,10 +312,12 @@ add_executable(auto_refirst_public_malformed_sanitizer EXCLUDE_FROM_ALL
     third_party/miniz/miniz_tdef.c
     third_party/miniz/miniz.c
 )
-target_include_directories(auto_refirst_public_malformed_sanitizer PRIVATE include third_party/miniz)
+target_include_directories(auto_refirst_public_malformed_sanitizer PRIVATE include)
+target_include_directories(auto_refirst_public_malformed_sanitizer SYSTEM PRIVATE third_party/miniz)
 auto_refirst_enable_msvc_utf8(auto_refirst_public_malformed_sanitizer)
 if(MSVC)
     target_compile_options(auto_refirst_public_malformed_sanitizer PRIVATE /W4 /permissive- /EHsc)
 else()
     target_compile_options(auto_refirst_public_malformed_sanitizer PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+auto_refirst_enable_warnings_as_errors(auto_refirst_public_malformed_sanitizer)
