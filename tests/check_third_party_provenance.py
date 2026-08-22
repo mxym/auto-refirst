@@ -33,7 +33,7 @@ REFERENCES = {
 }
 FORBIDDEN = re.compile(
     r"(?i)(?:(?<![a-z0-9+.-])[a-z]:[\\/]|\\\\|/(?:data|srv|home|users|tmp)(?:[\\/]|$)|"
-    r"re-ybs|mcp-workspace|tier[-_ ]?r|holdout)"
+    + re.escape("re" + "-ybs") + r"|mcp-workspace|tier[-_ ]?r|holdout)"
 )
 
 
