@@ -12,7 +12,7 @@ This checklist is the maintainer gate for public auto-refirst prereleases and re
 ## 2. Provenance and supply chain
 
 - [ ] Revalidate `tests/corpus/PROVENANCE.csv`: every tracked fixture has a documented source/rights basis and matching SHA-256.
-- [ ] `python3 tests/check_third_party_provenance.py` passes and reconciles compiled/reference rows with CMake, vendored roots, license files, notices, and the SBOM.
+- [ ] `python3 tests/check_third_party_provenance.py` passes and reconciles compiled/reference rows with CMake, vendored roots, license files, notices, the SBOM, and the committed/worktree digests in `docs/VENDORED_SNAPSHOT_MANIFEST.json`.
 - [ ] Review all newly added fixtures and generated references for source, version/revision, redistribution basis, generator/acquisition path, transformations, and hash.
 - [ ] Reconcile `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, `LICENSES/`, `docs/PROVENANCE.md`, and `SBOM.spdx.json` with the bytes actually shipped.
 - [ ] Review dependency/revision changes explicitly; do not silently substitute vendored sources during packaging.
