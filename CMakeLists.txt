@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(AutoRefirst VERSION 0.1.0 LANGUAGES C CXX)
 
-set(AUTO_REFIRST_PRODUCT_VERSION "0.1.0-alpha+k" CACHE STRING "Product version reported by auto-refirst --version")
+set(AUTO_REFIRST_PRODUCT_VERSION "0.1.0-rc.1" CACHE STRING "Product version reported by auto-refirst --version")
 if(NOT AUTO_REFIRST_PRODUCT_VERSION MATCHES "^[0-9A-Za-z.+-]+$")
   message(FATAL_ERROR "AUTO_REFIRST_PRODUCT_VERSION contains unsupported characters")
 endif()
