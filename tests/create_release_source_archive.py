@@ -10,6 +10,8 @@ import os
 import pathlib
 import re
 import tarfile
+import tempfile
+from collections.abc import Callable
 
 import check_release_assets as contract
 
@@ -64,6 +66,7 @@ def output_path(candidate: pathlib.Path, root: pathlib.Path) -> pathlib.Path:
         fail("output parent must be an existing real directory without link/reparse traversal")
     output = parent / lexical.name
     contract.safe_asset_name(output.name, "source archive filename")
+    validate_portable_component(output.name, "source archive filename")
     if not output.name.endswith(".tar.gz"):
         fail("source archive filename must end in .tar.gz")
     if output == root or root in output.parents:
@@ -74,7 +77,24 @@ def output_path(candidate: pathlib.Path, root: pathlib.Path) -> pathlib.Path:
 
 
 def validate_archive_root(value: str) -> str:
-    return contract.safe_asset_name(value, "source archive root")
+    root = contract.safe_asset_name(value, "source archive root")
+    validate_portable_component(root, "source archive root")
+    return root
+
+
+def validate_portable_component(value: str, label: str) -> None:
+    try:
+        raw = value.encode("ascii", errors="strict")
+    except UnicodeEncodeError:
+        fail(f"{label} is not canonical printable ASCII: {value!r}")
+    if not raw or any(byte < 0x20 or byte > 0x7E for byte in raw):
+        fail(f"{label} contains non-printable bytes: {value!r}")
+    if not PORTABLE_COMPONENT.fullmatch(value):
+        fail(f"{label} is outside the portable archive character set: {value!r}")
+    if value.endswith((" ", ".")):
+        fail(f"{label} has a cross-platform-unsafe trailing character: {value!r}")
+    if value.split(".", 1)[0].casefold() in WINDOWS_RESERVED_STEMS:
+        fail(f"{label} uses a cross-platform-reserved component: {value!r}")
 
 
 def split_ustar_name(value: str) -> tuple[bytes, bytes]:
@@ -98,20 +118,9 @@ def validate_tree_paths(tree: dict[str, tuple[str, str]], archive_root: str) -> 
     for relative in tree:
         pure = pathlib.PurePosixPath(relative)
         for part in pure.parts:
-            try:
-                raw_part = part.encode("ascii", errors="strict")
-            except UnicodeEncodeError:
-                fail(f"tracked path is not canonical printable ASCII: {relative!r}")
-            if not raw_part or any(byte < 0x20 or byte > 0x7E for byte in raw_part):
-                fail(f"tracked path contains non-printable bytes: {relative!r}")
-            if not PORTABLE_COMPONENT.fullmatch(part):
-                fail(f"tracked path is outside the portable archive character set: {relative!r}")
+            validate_portable_component(part, f"tracked path component in {relative!r}")
             if part.casefold() == ".git":
                 fail(f"tracked path contains forbidden Git metadata component: {relative!r}")
-            if part.endswith((" ", ".")):
-                fail(f"tracked path has a cross-platform-unsafe trailing character: {relative!r}")
-            if part.split(".", 1)[0].casefold() in WINDOWS_RESERVED_STEMS:
-                fail(f"tracked path uses a cross-platform-reserved component: {relative!r}")
         folded_name = relative.casefold()
         previous = folded.get(folded_name)
         if previous is not None and previous != relative:
@@ -149,6 +158,7 @@ def create_archive(
     tree: dict[str, tuple[str, str]],
     blobs: dict[str, bytes],
     source_date_epoch: int,
+    before_publish: Callable[[], None] | None = None,
 ) -> None:
     directories = directory_names(archive_root, tree)
     directory_infos = [
@@ -168,8 +178,20 @@ def create_archive(
         info.size = len(data)
         info.tobuf(format=tarfile.USTAR_FORMAT, encoding="ascii", errors="strict")
         file_infos.append((info, data))
+    descriptor: int | None = None
+    temporary: pathlib.Path | None = None
+    temporary_identity: tuple[int, int] | None = None
     try:
-        with output.open("xb") as raw:
+        descriptor, raw_temporary = tempfile.mkstemp(
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+            dir=output.parent,
+        )
+        temporary = pathlib.Path(raw_temporary)
+        created = os.fstat(descriptor)
+        temporary_identity = (created.st_dev, created.st_ino)
+        with os.fdopen(descriptor, "wb") as raw:
+            descriptor = None
             with gzip.GzipFile(
                 filename="",
                 mode="wb",
@@ -182,12 +204,46 @@ def create_archive(
                         archive.addfile(info)
                     for info, data in file_infos:
                         archive.addfile(info, io.BytesIO(data))
+            raw.flush()
+            os.fsync(raw.fileno())
+        if before_publish is not None:
+            before_publish()
+        publish_no_clobber(temporary, output)
+        if not unlink_owned(temporary, temporary_identity):
+            fail("owned source archive temp path was replaced before cleanup; refusing to delete it")
+        temporary = None
     except BaseException:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
         try:
-            output.unlink(missing_ok=True)
+            if temporary is not None and temporary_identity is not None:
+                unlink_owned(temporary, temporary_identity)
         except OSError:
             pass
         raise
+
+
+def publish_no_clobber(temporary: pathlib.Path, output: pathlib.Path) -> None:
+    try:
+        os.link(temporary, output)
+    except FileExistsError:
+        fail("source archive output appeared before atomic publication; refusing to overwrite it")
+    except OSError as exc:
+        fail(f"cannot atomically publish source archive with a same-directory hard link: {exc}")
+
+
+def unlink_owned(path: pathlib.Path, identity: tuple[int, int]) -> bool:
+    try:
+        current = path.lstat()
+    except FileNotFoundError:
+        return True
+    if (current.st_dev, current.st_ino) != identity:
+        return False
+    path.unlink()
+    return True
 
 
 def main() -> int:
@@ -209,11 +265,19 @@ def main() -> int:
         fail("source HEAD tree changed while preparing the archive")
     validate_tree_paths(tree, archive_root)
     blobs = contract.batch_blob_contents(root, (oid for _, oid in tree.values()))
-    create_archive(output, archive_root, tree, blobs, source_date_epoch)
-    post_tree, post_source_date_epoch = exact_head(root, args.expected_commit)
-    if post_tree != head_tree or post_source_date_epoch != source_date_epoch:
-        output.unlink(missing_ok=True)
-        fail("source commit changed while creating the archive")
+    def validate_before_publish() -> None:
+        post_tree, post_source_date_epoch = exact_head(root, args.expected_commit)
+        if post_tree != head_tree or post_source_date_epoch != source_date_epoch:
+            fail("source commit changed while creating the archive")
+
+    create_archive(
+        output,
+        archive_root,
+        tree,
+        blobs,
+        source_date_epoch,
+        before_publish=validate_before_publish,
+    )
     digest = contract.hash_file(output)
     print(hygiene_summary)
     print(

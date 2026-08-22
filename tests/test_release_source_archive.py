@@ -11,6 +11,7 @@ import sys
 import tarfile
 import tempfile
 from collections.abc import Callable
+from unittest import mock
 
 import check_release_assets as contract
 import create_release_source_archive as generator
@@ -252,6 +253,97 @@ def direct_boundary_negatives() -> None:
         print(f"[PASS MUTATION] {name} rejected")
 
 
+def archive_root_negatives() -> None:
+    cases = (
+        ("root-dot", ".", "safe basename"),
+        ("root-dot-dot", "..", "safe basename"),
+        ("root-reserved-con", "CON", "reserved component"),
+        ("root-reserved-nul", "nul.txt", "reserved component"),
+        ("root-trailing-dot", "release.", "trailing character"),
+        ("root-trailing-space", "release ", "safe basename"),
+        ("root-separator", "release/root", "safe basename"),
+        ("root-colon", "release:root", "safe basename"),
+        ("root-control", "release\nroot", "safe basename"),
+    )
+    for name, value, expected in cases:
+        try:
+            generator.validate_archive_root(value)
+        except SystemExit as exc:
+            if expected not in str(exc):
+                raise RuntimeError(f"{name} rejected for unexpected reason: {exc}") from exc
+        else:
+            raise RuntimeError(f"{name} was accepted")
+        print(f"[PASS MUTATION] {name} rejected")
+
+
+def atomic_publication_tests(root: pathlib.Path, parent: pathlib.Path) -> None:
+    tree = contract.git_tree(root)
+    blobs = contract.batch_blob_contents(root, (oid for _, oid in tree.values()))
+    source_date_epoch = int(git(root, "show", "-s", "--format=%ct", "HEAD").decode("ascii"))
+    real_publish = generator.publish_no_clobber
+
+    visible = parent / "partial-visibility.tar.gz"
+    observed = False
+
+    def observe_publish(temporary: pathlib.Path, output: pathlib.Path) -> None:
+        nonlocal observed
+        if output != visible or os.path.lexists(output) or temporary.stat().st_size == 0:
+            raise RuntimeError("partial final filename was visible before atomic publication")
+        observed = True
+        real_publish(temporary, output)
+
+    with mock.patch.object(generator, "publish_no_clobber", side_effect=observe_publish):
+        generator.create_archive(visible, ARCHIVE_ROOT, tree, blobs, source_date_epoch)
+    if not observed or not visible.is_file() or list(parent.glob(f".{visible.name}.*.tmp")):
+        raise RuntimeError("atomic publication did not leave exactly one complete final file")
+    visible.unlink()
+    print("[PASS MUTATION] partial-final-invisible until atomic publication")
+
+    raced = parent / "concurrent.tar.gz"
+    sentinel = b"concurrent owner\n"
+
+    def competing_publish(temporary: pathlib.Path, output: pathlib.Path) -> None:
+        output.write_bytes(sentinel)
+        real_publish(temporary, output)
+
+    try:
+        with mock.patch.object(generator, "publish_no_clobber", side_effect=competing_publish):
+            generator.create_archive(raced, ARCHIVE_ROOT, tree, blobs, source_date_epoch)
+    except SystemExit as exc:
+        if "appeared before atomic publication" not in str(exc):
+            raise RuntimeError(f"concurrent publication rejected for unexpected reason: {exc}") from exc
+    else:
+        raise RuntimeError("concurrent final creation was overwritten")
+    if raced.read_bytes() != sentinel or list(parent.glob(f".{raced.name}.*.tmp")):
+        raise RuntimeError("concurrent owner's final file changed or generator temp leaked")
+    raced.unlink()
+    print("[PASS MUTATION] concurrent-final preserved and owned temp removed")
+
+    broken = parent / "exception.tar.gz"
+    try:
+        with mock.patch.object(generator.gzip, "GzipFile", side_effect=RuntimeError("injected write failure")):
+            generator.create_archive(broken, ARCHIVE_ROOT, tree, blobs, source_date_epoch)
+    except RuntimeError as exc:
+        if "injected write failure" not in str(exc):
+            raise
+    else:
+        raise RuntimeError("injected archive failure was accepted")
+    if os.path.lexists(broken) or list(parent.glob(f".{broken.name}.*.tmp")):
+        raise RuntimeError("exception path exposed a final file or leaked the owned temp")
+    print("[PASS MUTATION] exceptional-write cleaned owned temp without final exposure")
+
+    replaced = parent / ".owned-temp.tmp"
+    replaced.write_bytes(b"owned")
+    owned_stat = replaced.lstat()
+    identity = (owned_stat.st_dev, owned_stat.st_ino)
+    replaced.unlink()
+    replaced.write_bytes(b"replacement owner")
+    if generator.unlink_owned(replaced, identity) or replaced.read_bytes() != b"replacement owner":
+        raise RuntimeError("replaced temp path was mistaken for the generator-owned file")
+    replaced.unlink()
+    print("[PASS MUTATION] replaced-temp preserved by identity-checked cleanup")
+
+
 def main() -> int:
     failures: list[str] = []
     try:
@@ -265,6 +357,7 @@ def main() -> int:
             require_success(invoke(seed, second), "second generation")
             verify_canonical_archive(seed, first, second)
             print("[PASS] deterministic source archive baseline: generations=2 bytes=identical verifier=accepted")
+            atomic_publication_tests(seed, parent)
 
             dirty = clone_repository(seed, parent / "dirty")
             write_file(dirty, "README.md", b"dirty\n")
@@ -343,6 +436,7 @@ def main() -> int:
             )
 
             direct_boundary_negatives()
+            archive_root_negatives()
     except Exception as exc:
         failures.append(str(exc))
     if failures:
@@ -350,7 +444,7 @@ def main() -> int:
         for failure in failures:
             print(f"  - {failure}")
         return 1
-    print("[PASS] deterministic source archive self-test: baseline=1 negatives=17")
+    print("[PASS] deterministic source archive self-test: baseline=1 atomic=4 negatives=26")
     return 0
 
 
