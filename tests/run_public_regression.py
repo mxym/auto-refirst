@@ -36,8 +36,20 @@ def log(msg: str) -> None:
 
 def run(cmd: Iterable[object], *, timeout: int = 90, check: bool = True, env=None) -> subprocess.CompletedProcess[str]:
     argv = [str(x) for x in cmd]
-    cp = subprocess.run(argv, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                        timeout=timeout, env=env)
+    raw = subprocess.run(argv, text=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         timeout=timeout, env=env)
+    decoded: dict[str, str] = {}
+    for stream in ("stdout", "stderr"):
+        data = getattr(raw, stream)
+        try:
+            decoded[stream] = data.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise AssertionError(
+                f"command {stream} is not valid UTF-8 at byte {exc.start}: "
+                f"{' '.join(argv)}"
+            ) from exc
+    cp = subprocess.CompletedProcess(raw.args, raw.returncode,
+                                     stdout=decoded["stdout"], stderr=decoded["stderr"])
     if check and cp.returncode != 0:
         raise AssertionError(f"command failed rc={cp.returncode}: {' '.join(argv)}\nstdout:\n{cp.stdout[-5000:]}\nstderr:\n{cp.stderr[-5000:]}")
     return cp
@@ -116,6 +128,9 @@ def provenance_gate() -> None:
     supply_chain = run([sys.executable, THIRD_PARTY_PROVENANCE_CHECK])
     if supply_chain.stdout.strip():
         log(supply_chain.stdout.strip())
+    utf8_contract = run([sys.executable, ROOT / "tests" / "test_public_runner_utf8.py"])
+    if utf8_contract.stdout.strip():
+        log(utf8_contract.stdout.strip())
     assert PROVENANCE.is_file(), PROVENANCE
     with PROVENANCE.open(newline="", encoding="utf-8") as f:
         rows = {r["path"]: r for r in csv.DictReader(f)}

@@ -7,6 +7,15 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+function(auto_refirst_enable_msvc_utf8 target)
+  if(MSVC)
+    # Keep source and execution character sets deterministic on Windows hosts
+    # whose active code page is not UTF-8. Apply this only to project-owned
+    # targets; do not change flags on vendored subdirectory targets.
+    target_compile_options(${target} PRIVATE /utf-8)
+  endif()
+endfunction()
+
 add_executable(auto_refirst
     src/main.cpp
     src/core/sha256.cpp
@@ -100,6 +109,7 @@ add_executable(auto_refirst
 )
 target_include_directories(auto_refirst PRIVATE include third_party/miniz third_party/tiny_aes third_party/zydis)
 set_target_properties(auto_refirst PROPERTIES OUTPUT_NAME "auto-refirst")
+auto_refirst_enable_msvc_utf8(auto_refirst)
 if(MSVC)
   target_compile_options(auto_refirst PRIVATE /W4 /permissive- /EHsc)
   target_compile_definitions(auto_refirst PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
@@ -181,6 +191,16 @@ add_executable(auto_refirst_public_fixture_runtime_parent EXCLUDE_FROM_ALL tests
 
 foreach(_public_target
         auto_refirst_public_model_trust_unit
+        auto_refirst_public_python_bytecode_unit
+        auto_refirst_public_fixture_ordinary
+        auto_refirst_public_fixture_crypto
+        auto_refirst_public_fixture_runtime_child
+        auto_refirst_public_fixture_runtime_parent)
+    auto_refirst_enable_msvc_utf8(${_public_target})
+endforeach()
+
+foreach(_public_target
+        auto_refirst_public_model_trust_unit
         auto_refirst_public_python_bytecode_unit)
     if(MSVC)
         target_compile_options(${_public_target} PRIVATE /W4 /permissive- /EHsc)
@@ -206,6 +226,7 @@ add_executable(auto_refirst_public_malformed_sanitizer EXCLUDE_FROM_ALL
     third_party/miniz/miniz.c
 )
 target_include_directories(auto_refirst_public_malformed_sanitizer PRIVATE include third_party/miniz)
+auto_refirst_enable_msvc_utf8(auto_refirst_public_malformed_sanitizer)
 if(MSVC)
     target_compile_options(auto_refirst_public_malformed_sanitizer PRIVATE /W4 /permissive- /EHsc)
 else()
