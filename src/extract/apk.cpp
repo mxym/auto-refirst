@@ -1,4 +1,5 @@
 #include "prts/apk.hpp"
+#include "prts/unity.hpp"
 #include "prts/elf.hpp"
 
 #define MINIZ_NO_ZLIB_APIS
@@ -146,6 +147,17 @@ bool is_nested_archive(std::string_view name) {
     return ends_with_ci(name, ".apk") || ends_with_ci(name, ".jar") || ends_with_ci(name, ".zip");
 }
 
+bool is_godot_legacy_engine_config_resource_path(std::string_view name) {
+    return lower_ascii(name) == "assets/engine.cfb";
+}
+
+bool is_unity_il2cpp_metadata_resource_path(std::string_view name) {
+    const auto low = lower_ascii(name);
+    if (!low.starts_with("assets/")) return false;
+    return low.ends_with("/managed/metadata/global-metadata.dat") ||
+           low.ends_with("/il2cpp_data/metadata/global-metadata.dat");
+}
+
 bool has_analysis_extension(std::string_view name) {
     const auto slash = name.find_last_of('/');
     const auto leaf = slash == std::string_view::npos ? name : name.substr(slash + 1);
@@ -166,6 +178,8 @@ std::uint8_t analysis_priority_for(const ApkEntryInfo& e, std::string_view logic
     if (e.manifest || e.resources_arsc) return 0;
     if (e.dex) return 100;
     if (e.native_library || e.nested_archive) return 95;
+    if (e.godot_legacy_engine_config_candidate) return 92;
+    if (e.unity_il2cpp_metadata_candidate) return 90;
     if (logical.starts_with("res/raw/") || logical.starts_with("res/xml/")) return 80;
     if (e.asset && has_analysis_extension(logical)) return 75;
     if ((logical.starts_with("META-INF/services/") || logical.starts_with("META-INF/com/android/build/gradle/")) &&
@@ -1235,6 +1249,8 @@ ApkInfo detect_apk(std::span<const std::uint8_t> data) {
     constexpr std::uint64_t kMaxNativeDeepEntryBytes = 64ull * 1024 * 1024;
     constexpr std::uint64_t kMaxNativeDeepTotalBytes = 128ull * 1024 * 1024;
     std::uint64_t native_deep_budget_left = kMaxNativeDeepTotalBytes;
+    constexpr std::uint32_t kMaxUnityMetadataParses = 8;
+    constexpr std::uint64_t kMaxUnityMetadataParseBytes = 128ull * 1024 * 1024;
 
     for (std::uint32_t i = 0; i < out.entry_count; ++i) {
         mz_zip_archive_file_stat st{};
@@ -1364,6 +1380,8 @@ ApkInfo detect_apk(std::span<const std::uint8_t> data) {
         e.v1_signature_file = is_v1_signing_file(logical);
         e.nested_archive = is_nested_archive(logical);
         e.native_library = is_native_library_path(logical, e.abi);
+        e.godot_legacy_engine_config_candidate = is_godot_legacy_engine_config_resource_path(logical);
+        e.unity_il2cpp_metadata_candidate = is_unity_il2cpp_metadata_resource_path(logical);
         if (!e.directory && e.safe_path && !e.symlink && !e.encrypted && e.supported && !e.duplicate_path) {
             e.analysis_priority = analysis_priority_for(e, logical);
         }
@@ -1461,6 +1479,35 @@ ApkInfo detect_apk(std::span<const std::uint8_t> data) {
             }
             push_interesting(out, e.name);
         }
+        if (e.unity_il2cpp_metadata_candidate && !e.directory && e.safe_path && !e.symlink && !e.encrypted && e.supported && !e.duplicate_path) {
+            ++out.unity_il2cpp_metadata_candidate_count;
+            constexpr std::uint64_t kMaxUnityMetadataBytes = 64ull * 1024 * 1024;
+            const bool aggregate_budget = out.unity_il2cpp_metadata_parse_bytes <= kMaxUnityMetadataParseBytes &&
+                                          e.uncompressed_size <= kMaxUnityMetadataParseBytes - out.unity_il2cpp_metadata_parse_bytes;
+            if (out.unity_il2cpp_metadata_parse_count >= kMaxUnityMetadataParses || !aggregate_budget) {
+                e.unity_il2cpp_metadata_parse_skipped_budget = true;
+                e.unity_il2cpp_metadata_error = "Unity IL2CPP metadata candidate parse deferred by bounded candidate/aggregate-byte budget";
+                e.analysis_priority = 0;out.unity_il2cpp_metadata_parse_budget_exhausted = true;
+            } else if (e.uncompressed_size > kMaxUnityMetadataBytes) {
+                e.unity_il2cpp_metadata_error = "Unity IL2CPP metadata candidate exceeds bounded 64 MiB parser limit";
+                e.analysis_priority = 0;
+            } else {
+                ++out.unity_il2cpp_metadata_parse_count;out.unity_il2cpp_metadata_parse_bytes += e.uncompressed_size;
+                const auto full = entry_full_bounded(zip, e, kMaxUnityMetadataBytes, data);
+                if (full.empty() && e.uncompressed_size != 0) {
+                    e.unity_il2cpp_metadata_error = "Unity IL2CPP metadata candidate extraction/CRC validation failed";
+                    e.analysis_priority = 0;
+                } else {
+                    const auto unity = inspect_unity_il2cpp_metadata(full);
+                    e.unity_il2cpp_metadata_valid = unity.valid && unity.il2cpp && unity.metadata_valid;
+                    e.unity_il2cpp_metadata_version = unity.metadata_version;
+                    e.unity_il2cpp_metadata_layout = unity.metadata_layout;
+                    e.unity_il2cpp_metadata_error = unity.error;
+                    if (!e.unity_il2cpp_metadata_valid) e.analysis_priority = 0;
+                }
+            }
+            push_interesting(out, e.name);
+        }
         if (e.asset && !e.directory) ++out.asset_count;
         if (e.resource && !e.directory) ++out.resource_count;
         if (e.v1_signature_file && !e.directory) out.has_v1_signature_files = true;
@@ -1517,6 +1564,46 @@ ApkInfo detect_apk(std::span<const std::uint8_t> data) {
         out.entries.push_back(std::move(e));
     }
 
+    // Godot 2.x Android exports place the binary project config at the canonical
+    // assets/engine.cfb path. Parse only that exact structured member after duplicate
+    // reconciliation metadata is known; referenced resources are promoted only through
+    // exact application/main_scene/autoload + remap/all identities from the validated ECFG.
+    {
+        ApkEntryInfo* config_entry=nullptr;
+        for(auto&e:out.entries)if(e.godot_legacy_engine_config_candidate&&!e.duplicate_path&&e.safe_path&&!e.symlink&&!e.encrypted&&e.supported){
+            ++out.godot_legacy_engine_config_candidate_count;if(!config_entry)config_entry=&e;
+        }
+        if(out.godot_legacy_engine_config_candidate_count==1&&config_entry){
+            constexpr std::uint64_t kMaxGodotLegacyConfigBytes=8ull*1024ull*1024ull;
+            auto full=entry_full_bounded(zip,*config_entry,kMaxGodotLegacyConfigBytes,data);
+            if(full.empty()&&config_entry->uncompressed_size){config_entry->godot_legacy_engine_config_error="canonical assets/engine.cfb extraction/CRC validation failed";config_entry->analysis_priority=0;}
+            else{
+                auto cfg=parse_godot_legacy_engine_config(full);config_entry->godot_legacy_engine_config_valid=cfg.valid;config_entry->godot_legacy_engine_config_error=cfg.error;
+                if(cfg.valid){out.godot_legacy_config=std::move(cfg);out.godot_legacy_engine_config_valid_count=1;}else config_entry->analysis_priority=0;
+            }
+        }
+        if(out.godot_legacy_config.valid){
+            std::map<std::string,std::string>remap;for(const auto&r:out.godot_legacy_config.remaps)remap.emplace(r.source,r.target);
+            auto resolved=[&](const std::string&source){auto it=remap.find(source);return it==remap.end()?source:it->second;};
+            auto apk_asset=[&](const std::string&resource)->std::string{if(resource.rfind("res://",0)!=0)return{};return "assets/"+resource.substr(6);};
+            std::set<std::string>main_targets,autoload_targets;
+            auto main_asset=apk_asset(resolved(out.godot_legacy_config.main_scene));if(!main_asset.empty())main_targets.insert(main_asset);
+            for(const auto&a:out.godot_legacy_config.autoloads){auto target=apk_asset(resolved(a.path));if(!target.empty())autoload_targets.insert(std::move(target));}
+            for(auto&e:out.entries){
+                if(e.duplicate_path||!e.safe_path||e.symlink||e.encrypted||!e.supported)continue;
+                if(main_targets.count(e.normalized_name))e.analysis_priority=std::max<std::uint8_t>(e.analysis_priority,89);
+                if(autoload_targets.count(e.normalized_name))e.analysis_priority=std::max<std::uint8_t>(e.analysis_priority,88);
+            }
+        }
+        // Priority can change after the complete config/remap table is parsed. Recompute
+        // candidate accounting from final admitted entries rather than incrementally guessing.
+        out.analysis_candidate_bytes=0;out.analysis_candidate_files=0;
+        for(const auto&e:out.entries)if(!e.directory&&e.safe_path&&e.supported&&!e.encrypted&&!e.symlink&&!e.duplicate_path&&e.analysis_priority){
+            if(out.analysis_candidate_bytes>std::numeric_limits<std::uint64_t>::max()-e.uncompressed_size){out.error="APK analysis-candidate size overflow";return out;}
+            out.analysis_candidate_bytes+=e.uncompressed_size;++out.analysis_candidate_files;
+        }
+    }
+
     // Reconcile critical Android paths only after the complete central directory is known.
     // A later case/backslash-normalized duplicate invalidates both spellings for confirmation.
     out.validated_dex_count = 0;
@@ -1533,7 +1620,9 @@ ApkInfo detect_apk(std::span<const std::uint8_t> data) {
     out.native_fde_count = 0;
     std::size_t manifest_entries = 0, resources_entries = 0;
     bool unique_manifest_valid = false, unique_resources_valid = false;
+    out.unity_il2cpp_metadata_valid_count = 0;
     for (const auto& e : out.entries) {
+        if(e.unity_il2cpp_metadata_valid&&!e.duplicate_path)++out.unity_il2cpp_metadata_valid_count;
         const auto low = lower_ascii(e.normalized_name);
         if (low == "androidmanifest.xml") {
             ++manifest_entries;
@@ -1699,6 +1788,13 @@ Finding apk_finding(const ApkInfo& info) {
     f.fields["native_jni_onload"] = std::to_string(info.native_jni_onload_count);
     f.fields["native_abi_mismatch"] = std::to_string(info.native_abi_mismatch_count);
     f.fields["native_deep_skipped_budget"] = std::to_string(info.native_deep_skipped_budget_count);
+    f.fields["godot_legacy_engine_config_candidates"] = std::to_string(info.godot_legacy_engine_config_candidate_count);
+    f.fields["godot_legacy_engine_config_valid"] = std::to_string(info.godot_legacy_engine_config_valid_count);
+    f.fields["unity_il2cpp_metadata_candidates"] = std::to_string(info.unity_il2cpp_metadata_candidate_count);
+    f.fields["unity_il2cpp_metadata_valid"] = std::to_string(info.unity_il2cpp_metadata_valid_count);
+    f.fields["unity_il2cpp_metadata_parsed"] = std::to_string(info.unity_il2cpp_metadata_parse_count);
+    f.fields["unity_il2cpp_metadata_parse_bytes"] = std::to_string(info.unity_il2cpp_metadata_parse_bytes);
+    f.fields["unity_il2cpp_metadata_parse_budget_exhausted"] = info.unity_il2cpp_metadata_parse_budget_exhausted ? "true" : "false";
     f.fields["native_imports"] = std::to_string(info.native_import_count);
     f.fields["native_exports"] = std::to_string(info.native_export_count);
     f.fields["native_relocations"] = std::to_string(info.native_relocation_count);

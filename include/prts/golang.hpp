@@ -34,7 +34,8 @@ struct GoInfo {
     std::vector<std::string> modules;
     std::vector<std::string> build_settings;
     std::string pclntab_layout;
-    std::uint64_t pclntab_offset=0,pclntab_va=0;
+    std::uint64_t pclntab_offset=0,pclntab_va=0,pclntab_text_base=0;
+    std::string pclntab_text_base_source;
     std::uint64_t moduledata_va=0,types_va=0,etypes_va=0,typelinks_va=0,itablinks_va=0;
     std::uint64_t typelinks_count=0,itablinks_count=0;
     std::string moduledata_layout;

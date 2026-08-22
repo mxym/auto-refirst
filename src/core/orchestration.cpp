@@ -2,6 +2,8 @@
 #include "prts/path_utf8.hpp"
 #include "prts/report.hpp"
 #include "prts/relationship_evidence.hpp"
+#include "prts/gdextension.hpp"
+#include "prts/report_schema.hpp"
 
 #include <algorithm>
 #include <array>
@@ -143,7 +145,7 @@ RuntimePlan build_runtime_plan(const AnalysisReport& report,const RuntimePlannin
         plan.steps.push_back(make_step("unpack_reconstruction",false,"runtime execution was not authorized",request.timeout_ms));
         plan.steps.push_back(make_step("cpython_compiler_probe",false,"runtime execution was not authorized",request.timeout_ms));
         plan.steps.push_back(make_step("post_unpack_static_reanalysis",false,"no runtime reconstruction was requested",request.timeout_ms));
-        plan.steps.push_back(make_step("exceptional_runtime_correlation",false,"standalone static evidence plane; no runtime correlation consumer is integrated",request.timeout_ms));
+        plan.steps.push_back(make_step("exceptional_runtime_correlation",false,"standalone static exceptional-flow evidence is available; no runtime-correlation consumer is integrated",request.timeout_ms));
         plan.steps.push_back(make_step("validated_transactional_install",false,"--apply was not requested",request.timeout_ms,true));
         return plan;
     }
@@ -181,7 +183,7 @@ RuntimePlan build_runtime_plan(const AnalysisReport& report,const RuntimePlannin
     if(probe_selected)plan.steps.back().evidence.push_back("probe is auxiliary; failure does not invalidate the main runtime run");
 
     plan.steps.push_back(make_step("post_unpack_static_reanalysis",materialize,materialize?"if runtime produces a validated installed image, rerun static/ecosystem analysis against the authoritative bytes":"no deep reconstruction is selected",request.timeout_ms));
-    plan.steps.push_back(make_step("exceptional_runtime_correlation",false,"standalone static evidence plane; no runtime correlation consumer is integrated",request.timeout_ms));
+    plan.steps.push_back(make_step("exceptional_runtime_correlation",false,"standalone static exceptional-flow evidence is available; no runtime-correlation consumer is integrated",request.timeout_ms));
     plan.steps.push_back(make_step("validated_transactional_install",install&&materialize,install&&materialize?"--apply explicitly authorizes transactional installation after strict validation":(request.apply_requested?plan.runtime_eligibility_reason:"installation is not authorized; reconstructed/standalone-validated candidates remain separate artifacts"),request.timeout_ms,true));
     return plan;
 }
@@ -277,6 +279,7 @@ void refine_directory_candidate(DirectoryCandidate& c,const AnalysisReport& r){
     else if(r.unity.valid)add_reason(c,10,"Unity family evidence is present but backend-specific structure is unresolved in this file");
     if(r.dotnet.valid&&r.dotnet.unity_managed){add_reason(c,40,"validated Unity-managed CLR payload (ECMA-335 plus UnityEngine AssemblyRef)");c.role="managed_payload_candidate";}
     if(r.godot.valid)add_reason(c,30,"validated Godot PCK structure");
+    if(r.gdextension_descriptor.valid){add_reason(c,45,"validated standalone Godot GDExtension descriptor with exact entry symbol and safe res:// library declarations");c.role="gdextension_descriptor";}
     if(r.apk.valid)add_reason(c,25,"validated APK structure");
     if(r.jar.valid)add_reason(c,20,"validated JAR/JVM container structure");
     if(r.dex.valid)add_reason(c,20,"validated DEX structure");
@@ -291,8 +294,10 @@ void refine_directory_candidate(DirectoryCandidate& c,const AnalysisReport& r){
 
 DirectoryReportIndex make_directory_report_index(const AnalysisReport& r){
     DirectoryReportIndex x;x.input=r.input;
-    x.pe_valid=r.pe.valid;x.pe_dll=r.pe.dll;
+    x.pe_valid=r.pe.valid;x.pe_dll=r.pe.dll;x.pe64=r.pe.pe64;x.pe_machine=r.pe.machine;
     x.pe_imports.reserve(r.pe.imports.size());for(const auto&m:r.pe.imports)x.pe_imports.push_back({m.name,m.descriptor_rva});
+    constexpr std::size_t kMaxCompactNamedPeExports=8192;
+    for(const auto&e:r.pe.exports)if(!e.name.empty()){++x.pe_named_export_count;if(x.pe_exports.size()<kMaxCompactNamedPeExports)x.pe_exports.push_back({e.name,e.rva,!e.forwarder.empty()});else x.pe_exports_truncated=true;}
     x.elf_valid=r.elf.valid;x.elf_type=r.elf.type;x.elf_entry=r.elf.entry;x.elf_interpreter=r.elf.interpreter;x.elf_soname=r.elf.abi.soname;x.elf_soname_file_offset=r.elf.abi.soname_file_offset;x.elf_needed=r.elf.needed;
     x.mono_runtime_export_surface=exact_mono_runtime_exports(r);
     x.pyinstaller_valid=r.pyinstaller.valid;x.godot_valid=r.godot.valid;x.apk_valid=r.apk.valid;x.jar_valid=r.jar.valid;x.nuitka_valid=r.nuitka.valid;x.cpython_runtime_present=!r.cpython_runtimes.empty();x.implicit_high_priority_count=r.implicit_exec.high_priority_count;
@@ -467,6 +472,17 @@ void build_directory_relationships(DirectoryPlan& plan,std::vector<DirectoryRepo
             std::vector<std::size_t> matches;
             if(ref.resolution_mode=="EXACT_RELATIVE_PATH"){
                 auto target=r.input.parent_path()/path_from_utf8(ref.reference);auto it=index.find(path_key(target));++plan.relationship_candidate_lookups;if(it!=index.end()&&it->second!=src)matches.push_back(it->second);
+            }else if(ref.resolution_mode=="GODOT_RES_PATH"){
+                auto rel=ref.reference;if(rel.rfind("res://",0)==0)rel.erase(0,6);
+                if(!rel.empty()){
+                    const auto root_key=path_key(plan.root);auto base=r.input.parent_path();
+                    for(std::size_t depth=0;depth<128;++depth){
+                        const auto base_key=path_key(base);if(base_key!=root_key&&!path_is_under(base,plan.root))break;
+                        auto target=base/path_from_utf8(rel);auto it=index.find(path_key(target));++plan.relationship_candidate_lookups;if(it!=index.end()&&it->second!=src)matches.push_back(it->second);
+                        if(base_key==root_key)break;
+                        auto parent=base.parent_path();if(parent==base)break;base=std::move(parent);
+                    }
+                }
             }else if(ref.resolution_mode=="EXACT_ABSOLUTE_PATH"){
                 auto it=index.find(path_key(path_from_utf8(ref.reference)));++plan.relationship_candidate_lookups;if(it!=index.end()&&it->second!=src)matches.push_back(it->second);
             }else if(ref.resolution_mode=="DECLARED_BASENAME_VALIDATED_IMAGE"){
@@ -474,7 +490,31 @@ void build_directory_relationships(DirectoryPlan& plan,std::vector<DirectoryRepo
             }
             std::sort(matches.begin(),matches.end());matches.erase(std::unique(matches.begin(),matches.end()),matches.end());
             if(matches.size()>1){emit_ambiguous(r.input,matches,ref.kind,plan.candidates[src].role,ref.evidence_basis,ref.evidence_source,ref.source_coordinate,ref.evidence_level,ref.semantic_relevance,"exact source reference has multiple admissible targets; automatic relationship priority is refused");continue;}
-            if(matches.empty())continue;const auto dst=matches.front();
+            if(matches.empty())continue;
+            const auto dst=matches.front();
+            if(ref.kind=="godot_gdextension_library_reference"&&ref.resolution_mode=="GODOT_RES_PATH"){
+                const auto tk=path_key(plan.candidates[dst].path);const auto ri=report_index.find(tk);const DirectoryReportIndex*tr=ri==report_index.end()?nullptr:ri->second;
+                const bool native_shape=tr&&tr->pe_valid&&tr->pe_dll&&tr->pe64&&tr->pe_machine==0x8664&&gdextension_pe64_x64_feature_compatible(ref.feature_key);
+                const DirectoryPeExportFact*entry=nullptr;std::size_t entry_matches=0;
+                if(tr)for(const auto&e:tr->pe_exports)if(e.name==ref.target_symbol){++entry_matches;if(!entry)entry=&e;}
+                const bool entry_closed=native_shape&&tr&&!tr->pe_exports_truncated&&entry_matches==1&&entry&&!entry->forwarded;
+                std::string target_coord="artifact_path:"+path_utf8(plan.candidates[dst].path);
+                std::string basis=ref.evidence_basis+"; exact res:// path resolves through exactly one directory ancestor";
+                std::string scope="static Godot descriptor/native relationship only; target code is not executed and engine load success is not asserted";
+                if(entry_closed){
+                    std::ostringstream tc;tc<<target_coord<<";PE_export="<<ref.target_symbol<<";rva=0x"<<std::hex<<entry->rva;target_coord=tc.str();
+                    basis+="; declared feature key is PE64/x86-64 Windows-compatible; target is a validated PE DLL; entry_symbol resolves to exactly one non-forwarded export";
+                    plan.candidates[dst].role="native_extension";
+                    auto x=make_relation(r.input,plan.candidates[dst].path,true,ref.kind,"CONFIRMED","gdextension_descriptor","native_extension",basis,ref.evidence_source,ref.source_coordinate,target_coord,scope,true,"validated GDExtension descriptor uniquely binds this native DLL and its configured entry export; prioritize the native extension as the application reverse-engineering surface");
+                    x.evidence_level="R4_SEMANTIC_APPLICATION_RELATION";x.semantic_relevance="APPLICATION";x.first_relation_role=ref.source_relation_role;x.second_relation_role=ref.target_relation_role;x.ambiguity="NONE";
+                    emit(std::move(x),ref.source_priority_delta,ref.target_priority_delta,true,ref.priority_cap);
+                }else{
+                    std::string why;if(!tr||!tr->pe_valid)why="target path is exact but target is not a validated PE image";else if(!tr->pe_dll||!tr->pe64||tr->pe_machine!=0x8664)why="target path is exact but target is not a PE64 x86-64 DLL";else if(!gdextension_pe64_x64_feature_compatible(ref.feature_key))why="target path is exact but descriptor feature key conflicts with PE64 x86-64 Windows format";else if(tr->pe_exports_truncated)why="target path is exact but compact export inventory is truncated; entry uniqueness is unresolved";else if(entry_matches!=1)why="target path is exact but entry_symbol does not resolve to exactly one export";else why="target path and entry_symbol match, but the export is forwarded";
+                    auto x=make_relation(r.input,plan.candidates[dst].path,true,ref.kind,"BOUNDED","gdextension_descriptor",plan.candidates[dst].role,basis+"; "+why,ref.evidence_source,ref.source_coordinate,target_coord,scope,false,"descriptor path reference is exact, but native entry closure is incomplete; do not promote the target automatically");
+                    x.evidence_level="R2_STRUCTURAL_RELATION";x.semantic_relevance="STRUCTURAL";x.first_relation_role=ref.source_relation_role;x.second_relation_role=ref.target_relation_role;x.ambiguity="NATIVE_ENTRY_UNRESOLVED";emit(std::move(x));
+                }
+                continue;
+            }
             std::string target_coord=ref.resolution_mode=="DECLARED_BASENAME_VALIDATED_IMAGE"?"validated_direct_sibling_basename:"+path_utf8(plan.candidates[dst].path.filename())+";declared_runtime_path="+ref.reference:"artifact_path:"+path_utf8(plan.candidates[dst].path);
             std::string scope="static source relationship only; referenced sidecar/stage is not executed and runtime success is not asserted";
             auto x=make_relation(r.input,plan.candidates[dst].path,true,ref.kind,"BOUNDED",plan.candidates[src].role,plan.candidates[dst].role,ref.evidence_basis,ref.evidence_source,ref.source_coordinate,target_coord,scope,true,"structured source evidence closes to exactly one admitted target; prioritize the relationship before incidental secondary findings");
@@ -667,7 +707,7 @@ static bool render_directory_json_impl(std::ostream& o,const DirectoryPlan& plan
         o<<"]";
     };
 
-    o<<"{\n  \"directory_summary\": {\"root\":\""<<q(path_utf8(plan.root))
+    o<<"{\n  \"report_schema_version\": \""<<kReportSchemaVersion<<"\",\n  \"directory_summary\": {\"root\":\""<<q(path_utf8(plan.root))
      <<"\",\"total_files\":"<<summary.total_files<<",\"discovered_regular_files\":"<<summary.discovered_regular_files<<",\"candidate_omitted_count\":"<<summary.candidate_omitted_count
      <<",\"partial\":"<<(summary.partial?"true":"false")<<",\"partial_reasons\":[";for(std::size_t i=0;i<summary.partial_reasons.size();++i){if(i)o<<',';o<<'"'<<q(summary.partial_reasons[i])<<'"';}o<<"]"
      <<",\"analyzed_files\":"<<summary.analyzed_files<<",\"skipped_files\":"<<summary.skipped_files<<",\"total_bytes\":"<<summary.total_bytes
@@ -762,10 +802,9 @@ static bool render_directory_json_impl(std::ostream& o,const DirectoryPlan& plan
     if(!o){error="directory report output write failed";return false;}return true;
 }
 
-void render_directory_json(std::ostream& o,const DirectoryPlan& plan,const DirectorySummary& summary,const std::vector<AnalysisReport>& reports){
-    std::string error;
-    const auto writer=[&](std::ostream&out,std::size_t i,std::string&){render_json(out,reports[i]);return bool(out);};
-    (void)render_directory_json_impl(o,plan,summary,reports.size(),writer,nullptr,nullptr,error);
+bool render_directory_json(std::ostream& o,const DirectoryPlan& plan,const DirectorySummary& summary,const std::vector<AnalysisReport>& reports,std::string& error){
+    const auto writer=[&](std::ostream&out,std::size_t i,std::string&why){render_json(out,reports[i]);if(!out){why="directory report output write failed";return false;}return true;};
+    return render_directory_json_impl(o,plan,summary,reports.size(),writer,nullptr,nullptr,error);
 }
 
 bool render_directory_json_spooled(std::ostream& o,const DirectoryPlan& plan,const DirectorySummary& summary,const std::vector<std::filesystem::path>& report_paths,const DirectoryReportRendering& rendering,const DirectoryArtifactRendering& artifact_rendering,std::string& error){
@@ -779,7 +818,8 @@ bool render_directory_json_spooled(std::ostream& o,const DirectoryPlan& plan,con
 
 std::string render_directory_json(const DirectoryPlan& plan,const DirectorySummary& summary,const std::vector<AnalysisReport>& reports){
     std::ostringstream o;
-    render_directory_json(o,plan,summary,reports);
+    std::string error;
+    (void)render_directory_json(o,plan,summary,reports,error);
     return o.str();
 }
 

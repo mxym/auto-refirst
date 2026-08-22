@@ -247,7 +247,9 @@ NestedExecutableReuseDecision select_nested_executable_reuse(const NestedExecuta
     if(out.matching_indexes.empty())return out;
     auto less=[&](std::size_t a,std::size_t b){
         const auto&A=candidates[a],&B=candidates[b];const bool ah=A.priority=="HIGH",bh=B.priority=="HIGH";
-        if(ah!=bh)return ah>bh;if(A.source!=B.source)return A.source<B.source;if(A.relation!=B.relation)return A.relation<B.relation;
+        if(ah!=bh)return ah>bh;
+        if(A.source!=B.source)return A.source<B.source;
+        if(A.relation!=B.relation)return A.relation<B.relation;
         return A.path.lexically_normal().generic_string()<B.path.lexically_normal().generic_string();
     };
     std::stable_sort(out.matching_indexes.begin(),out.matching_indexes.end(),less);

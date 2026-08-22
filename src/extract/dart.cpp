@@ -35,14 +35,18 @@ constexpr std::int64_t DT_SYMENT = 11;
 constexpr std::int64_t DT_GNU_HASH = 0x6ffffef5;
 
 std::string snapshot_kind_name(std::int64_t kind) {
+    // Snapshot::Kind integer values changed in May 2026 when the VM isolate and
+    // kFullCore/kNone enum members were removed.  Preserve the raw value and use
+    // an epoch-honest label here; AOT/code semantics are established later from
+    // symbol roles + snapshot structure rather than guessed from this integer.
     switch (kind) {
-        case 0: return "None";
-        case 1: return "Full";
-        case 2: return "FullAOT";
-        case 3: return "FullJIT";
-        case 4: return "Message";
-        case 5: return "Module";
-        case 6: return "Invalid";
+        case 0: return "Full";
+        case 1: return "FullCore-or-FullJIT (enum-epoch dependent)";
+        case 2: return "FullJIT-or-FullAOT (enum-epoch dependent)";
+        case 3: return "FullAOT-or-Module (enum-epoch dependent)";
+        case 4: return "Module-or-Invalid (enum-epoch dependent)";
+        case 5: return "None (legacy enum)";
+        case 6: return "Invalid (legacy enum)";
         default: return "Unknown";
     }
 }
@@ -590,10 +594,12 @@ bool target_hash_resolves(std::span<const std::uint8_t> data, const ElfInfo& elf
 }
 
 bool target_symbol(std::string_view name) {
-    static constexpr std::array<std::string_view, 8> names = {
+    static constexpr std::array<std::string_view, 12> names = {
         "_kDartSnapshotData", "_kDartSnapshotText", "_kDartSnapshotBuildId", "_kDartSnapshotBss",
         "kDartVmSnapshotData", "kDartVmSnapshotInstructions",
-        "kDartIsolateSnapshotData", "kDartIsolateSnapshotInstructions"
+        "kDartIsolateSnapshotData", "kDartIsolateSnapshotInstructions",
+        "_kDartVmSnapshotData", "_kDartVmSnapshotInstructions",
+        "_kDartIsolateSnapshotData", "_kDartIsolateSnapshotInstructions"
     };
     return std::find(names.begin(), names.end(), name) != names.end();
 }
@@ -602,6 +608,15 @@ const DartAotSymbol* symbol(const DartAotInfo& aot, std::string_view name) {
     const auto it = std::find_if(aot.symbols.begin(), aot.symbols.end(),
                                  [&](const DartAotSymbol& x) { return x.name == name; });
     return it == aot.symbols.end() ? nullptr : &*it;
+}
+
+const DartAotSymbol* snapshot_symbol(const DartAotInfo& aot, std::string_view name) {
+    if (const auto* x = symbol(aot, name)) return x;
+    if (!name.empty() && name.front() != '_') {
+        std::string underscored;underscored.reserve(name.size()+1);underscored.push_back('_');underscored.append(name);
+        return symbol(aot, underscored);
+    }
+    return nullptr;
 }
 
 bool validate_symbol_geometry(DartAotInfo& out, const DartElfLayout& layout,
@@ -643,8 +658,14 @@ bool validate_aot_data_symbol(DartAotInfo& out, std::span<const std::uint8_t> da
         out.snapshots.push_back(std::move(snap));
         return false;
     }
-    if (snap.kind != 2) {
-        out.error = std::string(role) + " snapshot kind is not FullAOT";
+    const bool product = std::find(snap.feature_tokens.begin(), snap.feature_tokens.end(), "product") != snap.feature_tokens.end();
+    // Known Dart AOT enum epochs encode FullAOT as raw kind 3 (through Dart
+    // 3.12.x) or raw kind 2 (after the 2026 VM-isolate removal).  Raw kind 3 is
+    // also the newer Module value, which is code-bearing.  The surrounding
+    // validated AOT snapshot symbol + RX instruction-pair contract is therefore
+    // the semantic gate; do not attach one timeless enum name to the raw value.
+    if ((snap.kind != 2 && snap.kind != 3) || !product) {
+        out.error = std::string(role) + " is not a supported product AOT/code snapshot (expected raw kind 2/3 plus product feature)";
         out.error_offset = s.file_offset + 12;
         out.snapshots.push_back(std::move(snap));
         return false;
@@ -1304,8 +1325,8 @@ DartSnapshotInfo parse_dart_snapshot(std::span<const std::uint8_t> data,
         out.error_offset = file_offset + 4;
         return out;
     }
-    if (out.kind < 1 || out.kind > 5) {
-        out.error = "unsupported/invalid Dart snapshot kind";
+    if (out.kind < 0 || out.kind > 5) {
+        out.error = "unsupported Dart snapshot raw kind";
         out.error_offset = file_offset + 12;
         return out;
     }
@@ -1599,10 +1620,10 @@ DartInfo detect_dart(std::span<const std::uint8_t> data, const ElfInfo& elf) {
 
     const auto* standalone_data = symbol(aot, "_kDartSnapshotData");
     const auto* standalone_text = symbol(aot, "_kDartSnapshotText");
-    const auto* vm_data = symbol(aot, "kDartVmSnapshotData");
-    const auto* vm_text = symbol(aot, "kDartVmSnapshotInstructions");
-    const auto* isolate_data = symbol(aot, "kDartIsolateSnapshotData");
-    const auto* isolate_text = symbol(aot, "kDartIsolateSnapshotInstructions");
+    const auto* vm_data = snapshot_symbol(aot, "kDartVmSnapshotData");
+    const auto* vm_text = snapshot_symbol(aot, "kDartVmSnapshotInstructions");
+    const auto* isolate_data = snapshot_symbol(aot, "kDartIsolateSnapshotData");
+    const auto* isolate_text = snapshot_symbol(aot, "kDartIsolateSnapshotInstructions");
     aot.standalone = standalone_data || standalone_text;
     aot.flutter_symbols = vm_data || vm_text || isolate_data || isolate_text;
 
@@ -1645,6 +1666,19 @@ DartInfo detect_dart(std::span<const std::uint8_t> data, const ElfInfo& elf) {
                 if (!validate_aot_data_symbol(aot, data, *isolate_data, "kDartIsolateSnapshotData") ||
                     !validate_aot_text_symbol(aot, *isolate_text, "kDartIsolateSnapshotInstructions")) {
                     any_pair = false;
+                }
+            }
+            if (aot.error.empty() && vm_data && isolate_data) {
+                const auto by_offset=[&](const DartAotSymbol*sym)->const DartSnapshotInfo*{
+                    if(!sym)return nullptr;
+                    for(const auto&snap:aot.snapshots)if(snap.valid&&snap.file_offset==sym->file_offset)return &snap;
+                    return nullptr;
+                };
+                const auto*vm=by_offset(vm_data);const auto*iso=by_offset(isolate_data);
+                if(!vm||!iso||vm->snapshot_hash!=iso->snapshot_hash||vm->kind!=iso->kind||vm->features!=iso->features){
+                    aot.error="Flutter VM/isolate data snapshots disagree on version hash, raw kind, or feature contract";
+                    aot.error_offset=isolate_data->file_offset;
+                    any_pair=false;
                 }
             }
             if (aot.error.empty() && any_pair) {

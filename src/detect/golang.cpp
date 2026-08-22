@@ -17,7 +17,24 @@ template<class T> bool read_le(std::span<const std::uint8_t>d,std::size_t o,T&v)
 std::uint32_t u32(std::span<const std::uint8_t>d,std::size_t o,bool le=true){if(o+4>d.size())return 0;if(le)return std::uint32_t(d[o])|(std::uint32_t(d[o+1])<<8)|(std::uint32_t(d[o+2])<<16)|(std::uint32_t(d[o+3])<<24);return (std::uint32_t(d[o])<<24)|(std::uint32_t(d[o+1])<<16)|(std::uint32_t(d[o+2])<<8)|d[o+3];}
 std::uint64_t uptr(std::span<const std::uint8_t>d,std::size_t o,std::uint32_t ps,bool le){if(ps==4)return u32(d,o,le);if(o+8>d.size())return 0;std::uint64_t v=0;if(le){for(int i=7;i>=0;--i)v=(v<<8)|d[o+i];}else{for(int i=0;i<8;++i)v=(v<<8)|d[o+i];}return v;}
 std::optional<std::pair<std::uint64_t,std::uint64_t>> decode_uvarint(std::span<const std::uint8_t>d,std::size_t o){std::uint64_t x=0;unsigned s=0;for(std::size_t i=o;i<d.size()&&i<o+10;++i){auto b=d[i];if(b<0x80){if(i-o==9&&b>1)return{};return std::pair{x|std::uint64_t(b)<<s,std::uint64_t(i-o+1)};}x|=std::uint64_t(b&0x7f)<<s;s+=7;}return{};}
-std::string zstr(std::span<const std::uint8_t>d,std::size_t o,std::size_t max=1024){if(o>=d.size())return{};std::string s;for(;o<d.size()&&s.size()<max&&d[o];++o){auto c=d[o];if(c<0x20||c>0x7e)return{};s.push_back(char(c));}return s;}
+std::string zstr(std::span<const std::uint8_t>d,std::size_t o,std::size_t max=1024){
+    if(o>=d.size())return{};
+    std::string s;
+    while(o<d.size()&&s.size()<max){
+        auto c=d[o];if(c==0)return s;if(c<0x20||c==0x7f)return{};
+        if(c<0x80){s.push_back(static_cast<char>(c));++o;continue;}
+        std::size_t n=0;std::uint32_t cp=0;
+        if((c&0xe0)==0xc0){n=2;cp=c&0x1f;if(cp<2)return{};}
+        else if((c&0xf0)==0xe0){n=3;cp=c&0x0f;}
+        else if((c&0xf8)==0xf0){n=4;cp=c&0x07;}
+        else return{};
+        if(n>d.size()-o||n>max-s.size())return{};
+        for(std::size_t i=1;i<n;++i){auto x=d[o+i];if((x&0xc0)!=0x80)return{};cp=(cp<<6)|(x&0x3f);}
+        if((n==2&&cp<0x80)||(n==3&&cp<0x800)||(n==4&&cp<0x10000)||cp>0x10ffff||(cp>=0xd800&&cp<=0xdfff))return{};
+        s.append(reinterpret_cast<const char*>(d.data()+o),n);o+=n;
+    }
+    return{};
+}
 std::optional<std::size_t> va_to_off(std::uint64_t va,const PeInfo&pe,const ElfInfo&elf,std::size_t fsize){
     if(pe.valid){std::uint64_t rva=va;if(va>=pe.image_base)rva=va-pe.image_base;if(rva<pe.headers_size&&rva<fsize)return std::size_t(rva);for(const auto&s:pe.sections){auto n=std::max(s.vsize,s.raw_size);if(rva>=s.rva&&rva<std::uint64_t(s.rva)+n){auto delta=rva-s.rva;if(delta>=s.raw_size)return{};auto o=std::uint64_t(s.raw_offset)+delta;if(o<fsize)return std::size_t(o);}}}
     if(elf.valid){
@@ -44,32 +61,130 @@ bool executable_va(std::uint64_t va,const PeInfo&pe,const ElfInfo&elf){
 std::string package_of(const std::string&name){auto slash=name.rfind('/');auto dot=name.find('.',slash==std::string::npos?0:slash+1);if(dot==std::string::npos)return{};return name.substr(0,dot);}
 bool user_like(const std::string&name,const std::string&module){if(name.rfind("main.",0)==0)return true;if(!module.empty()&&name.rfind(module,0)==0)return true;return false;}
 void parse_build_lines(const std::string&raw,GoInfo&g){std::istringstream in(raw);std::string line;while(std::getline(in,line)){if(line.rfind("path\t",0)==0)g.module_path=line.substr(5);else if(line.rfind("mod\t",0)==0){std::istringstream ls(line.substr(4));std::string x;if(std::getline(ls,x,'\t')&&!x.empty()){g.modules.push_back(x);if(g.module_path.empty())g.module_path=x;}}else if(line.rfind("dep\t",0)==0){std::istringstream ls(line.substr(4));std::string x;if(std::getline(ls,x,'\t')&&!x.empty())g.modules.push_back(x);}else if(line.rfind("build\t",0)==0)g.build_settings.push_back(line.substr(6));}}
+std::optional<int> go_minor_number(std::string_view version){
+    auto p=version.find("go1.");if(p==std::string_view::npos)return{};p+=4;
+    auto e=p;while(e<version.size()&&std::isdigit(static_cast<unsigned char>(version[e])))++e;
+    if(e==p)return{};
+    int value=0;for(auto i=p;i<e;++i){if(value>1000)return{};value=value*10+(version[i]-'0');}
+    return value;
+}
 void detect_buildinfo(std::span<const std::uint8_t>d,const PeInfo&pe,const ElfInfo&elf,GoInfo&g){
-    for(std::size_t pos=0;;){auto it=std::search(d.begin()+static_cast<std::ptrdiff_t>(pos),d.end(),kBuildMagic.begin(),kBuildMagic.end());if(it==d.end())return;auto o=std::size_t(it-d.begin());pos=o+1;if(o+32>d.size())continue;auto ps=d[o+14];auto fl=d[o+15];if(ps!=4&&ps!=8)continue;std::string vers,mod;
-        if(fl&2){auto a=decode_uvarint(d,o+32);if(!a)continue;auto [n,nbytes]=*a;if(n>d.size()-(o+32+nbytes))continue;vers.assign(reinterpret_cast<const char*>(d.data()+o+32+nbytes),std::size_t(n));auto mo=o+32+nbytes+n;auto b=decode_uvarint(d,mo);if(b){auto [m,mb]=*b;if(m<=d.size()-(mo+mb))mod.assign(reinterpret_cast<const char*>(d.data()+mo+mb),std::size_t(m));}}
-        else {bool le=(fl&1)==0;auto vp=uptr(d,o+16,ps,le),mp=uptr(d,o+16+ps,ps,le);auto read_go_string=[&](std::uint64_t p){std::string r;auto so=va_to_off(p,pe,elf,d.size());if(!so||*so+2*ps>d.size())return r;auto dp=uptr(d,*so,ps,le),ln=uptr(d,*so+ps,ps,le);auto doff=va_to_off(dp,pe,elf,d.size());if(!doff||ln>d.size()-*doff||ln>(1u<<25))return r;r.assign(reinterpret_cast<const char*>(d.data()+*doff),std::size_t(ln));return r;};vers=read_go_string(vp);mod=read_go_string(mp);}
-        if(vers.rfind("go1.",0)!=0&&vers.find(" go1.")==std::string::npos)continue;g.version=vers;g.pointer_size=ps;if(mod.size()>=33&&mod[mod.size()-17]=='\n')mod=mod.substr(16,mod.size()-32);parse_build_lines(mod,g);return;
+    for(std::size_t pos=0;;){
+        auto it=std::search(d.begin()+static_cast<std::ptrdiff_t>(pos),d.end(),kBuildMagic.begin(),kBuildMagic.end());
+        if(it==d.end())return;
+        auto o=std::size_t(it-d.begin());pos=o+1;
+        if(o>d.size()||d.size()-o<32)continue;
+        auto ps=d[o+14],fl=d[o+15];if(ps!=4&&ps!=8)continue;
+        std::string vers,mod;
+        if(fl&2){
+            const auto inline_off=o+32;auto a=decode_uvarint(d,inline_off);if(!a)continue;
+            auto [n,nbytes]=*a;if(nbytes>d.size()-inline_off||n>d.size()-(inline_off+nbytes))continue;
+            auto vo=inline_off+static_cast<std::size_t>(nbytes);
+            vers.assign(reinterpret_cast<const char*>(d.data()+vo),std::size_t(n));
+            auto mo=vo+std::size_t(n);auto b=decode_uvarint(d,mo);
+            if(b){auto [m,mb]=*b;if(mb<=d.size()-mo&&m<=d.size()-(mo+mb))mod.assign(reinterpret_cast<const char*>(d.data()+mo+mb),std::size_t(m));}
+        }else{
+            const bool le=(fl&1)==0;auto vp=uptr(d,o+16,ps,le),mp=uptr(d,o+16+ps,ps,le);
+            auto read_go_string=[&](std::uint64_t ptr){
+                std::string r;auto so=va_to_off(ptr,pe,elf,d.size());if(!so||*so>d.size()||2*ps>d.size()-*so)return r;
+                auto dp=uptr(d,*so,ps,le),ln=uptr(d,*so+ps,ps,le);auto doff=va_to_off(dp,pe,elf,d.size());
+                if(!doff||*doff>d.size()||ln>d.size()-*doff||ln>(1u<<25))return r;
+                r.assign(reinterpret_cast<const char*>(d.data()+*doff),std::size_t(ln));return r;
+            };
+            vers=read_go_string(vp);mod=read_go_string(mp);
+        }
+        if(vers.rfind("go1.",0)!=0&&vers.find(" go1.")==std::string::npos)continue;
+        g.version=vers;g.pointer_size=ps;
+        if(mod.size()>=33&&mod[mod.size()-17]=='\n')mod=mod.substr(16,mod.size()-32);
+        parse_build_lines(mod,g);return;
     }
 }
 enum class PVer{V12,V116,V118,V120};
-struct ParsedPcln { bool valid=false;PVer ver=PVer::V120;std::uint64_t off=0,va=0;std::uint32_t ps=0,q=0;bool le=true;std::vector<GoFunction> funcs;int score=0; };
+struct ParsedPcln {
+    bool valid=false;PVer ver=PVer::V120;std::uint64_t off=0,va=0,text_base=0;std::uint32_t ps=0,q=0;
+    bool le=true,external_text_base=false;std::vector<GoFunction> funcs;int score=0;
+};
 std::string ver_name(PVer v){switch(v){case PVer::V12:return"1.2-1.15";case PVer::V116:return"1.16-1.17";case PVer::V118:return"1.18-1.19";case PVer::V120:return"1.20+";}return"unknown";}
 ParsedPcln parse_pcln_at(std::span<const std::uint8_t>d,std::size_t base,const PeInfo&pe,const ElfInfo&elf,const GoInfo&bi){
-    ParsedPcln r;if(base+16>d.size())return r;auto ml=u32(d,base,true),mb=u32(d,base,false);PVer v;bool le=true;if(ml==0xfffffffb)v=PVer::V12;else if(ml==0xfffffffa)v=PVer::V116;else if(ml==0xfffffff0)v=PVer::V118;else if(ml==0xfffffff1)v=PVer::V120;else if(mb==0xfffffffb){v=PVer::V12;le=false;}else if(mb==0xfffffffa){v=PVer::V116;le=false;}else if(mb==0xfffffff0){v=PVer::V118;le=false;}else if(mb==0xfffffff1){v=PVer::V120;le=false;}else return r;if(d[base+4]||d[base+5]||(d[base+6]!=1&&d[base+6]!=2&&d[base+6]!=4)||(d[base+7]!=4&&d[base+7]!=8))return r;auto q=d[base+6],ps=d[base+7];auto word=[&](unsigned w)->std::uint64_t{return uptr(d,base+8+std::size_t(w)*ps,ps,le);};std::uint64_t nfunc=0,fnbase=0,funcbase=0,text=0;if(v==PVer::V118||v==PVer::V120){if(base+8+8ull*ps>d.size())return r;nfunc=word(0);text=word(2);auto fno=word(3),pcln=word(7);if(!text||!executable_va(text,pe,elf)||!va_to_off(text,pe,elf,d.size())||fno>=d.size()-base||pcln>=d.size()-base)return r;fnbase=base+fno;funcbase=base+pcln;}else if(v==PVer::V116){if(base+8+7ull*ps>d.size())return r;nfunc=word(0);auto fno=word(2),pcln=word(6);if(fno>=d.size()-base||pcln>=d.size()-base)return r;fnbase=base+fno;funcbase=base+pcln;}else{nfunc=uptr(d,base+8,ps,le);fnbase=base;funcbase=base;}
-    if(nfunc<10||nfunc>350000)return r;auto fieldsz=(v==PVer::V118||v==PVer::V120)?4u:ps;auto ftab=(v==PVer::V12)?base+8+ps:funcbase;auto tablebytes=(nfunc*2+1)*fieldsz;if(ftab>d.size()||tablebytes>d.size()-ftab)return r;if(!(v==PVer::V118||v==PVer::V120))text=text_start(pe,elf);r.funcs.reserve(std::size_t(nfunc));std::size_t good=0;bool has_runtime=false,has_main=false;
-    for(std::uint64_t i=0;i<nfunc;++i){auto getfield=[&](std::uint64_t idx)->std::uint64_t{auto o=ftab+std::size_t(idx)*fieldsz;return fieldsz==4?u32(d,o,le):uptr(d,o,fieldsz,le);};auto ep=getfield(2*i),fo=getfield(2*i+1),next=getfield(2*(i+1));std::uint64_t start=(v==PVer::V118||v==PVer::V120)?text+ep:ep,end=(v==PVer::V118||v==PVer::V120)?text+next:next;if(end<start||!fo||fo>=d.size()-funcbase)continue;auto fd=funcbase+fo;auto nameoff_pos=fd+((v==PVer::V118||v==PVer::V120)?4:ps);if(nameoff_pos+4>d.size())continue;auto no=u32(d,nameoff_pos,le);if(no>=d.size()-fnbase)continue;auto name=zstr(d,fnbase+no,2048);if(name.empty())continue;++good;if(name.rfind("runtime.",0)==0)has_runtime=true;if(name.rfind("main.",0)==0)has_main=true;GoFunction f;f.start_va=start;f.end_va=end;f.name=std::move(name);f.package=package_of(f.name);f.user_like=user_like(f.name,bi.module_path);if(pe.valid&&start>=pe.image_base){f.start_rva=start-pe.image_base;f.end_rva=end>=pe.image_base?end-pe.image_base:0;}else{f.start_rva=start;f.end_rva=end;}r.funcs.push_back(std::move(f));}
-    if(good<10||good*100<nfunc*70||!has_runtime)return r;r.valid=true;r.ver=v;r.off=base;r.va=off_to_va(base,pe,elf);r.ps=ps;r.q=q;r.le=le;r.score=int(good)+(has_main?5000:0);return r;
+    ParsedPcln r;if(base>d.size()||d.size()-base<16)return r;
+    auto ml=u32(d,base,true),mb=u32(d,base,false);PVer v;bool le=true;
+    if(ml==0xfffffffb)v=PVer::V12;else if(ml==0xfffffffa)v=PVer::V116;else if(ml==0xfffffff0)v=PVer::V118;else if(ml==0xfffffff1)v=PVer::V120;
+    else if(mb==0xfffffffb){v=PVer::V12;le=false;}else if(mb==0xfffffffa){v=PVer::V116;le=false;}else if(mb==0xfffffff0){v=PVer::V118;le=false;}else if(mb==0xfffffff1){v=PVer::V120;le=false;}else return r;
+    if(d[base+4]||d[base+5]||(d[base+6]!=1&&d[base+6]!=2&&d[base+6]!=4)||(d[base+7]!=4&&d[base+7]!=8))return r;
+    auto q=d[base+6],ps=d[base+7];
+    auto word=[&](unsigned w)->std::uint64_t{return uptr(d,base+8+std::size_t(w)*ps,ps,le);};
+    std::uint64_t nfunc=0,fnbase=0,funcbase=0,text=0;bool external_text=false;
+    if(v==PVer::V118||v==PVer::V120){
+        if(8ull+8ull*ps>d.size()-base)return r;
+        nfunc=word(0);text=word(2);auto fno=word(3),pcln=word(7);
+        if(v==PVer::V120&&text==0){
+            auto minor=go_minor_number(bi.version);if(!minor||*minor<26)return r;
+            text=text_start(pe,elf);external_text=true;
+        }
+        if(!text||!executable_va(text,pe,elf)||!va_to_off(text,pe,elf,d.size()))return r;
+        if(fno>=d.size()-base||pcln>=d.size()-base)return r;
+        fnbase=base+std::size_t(fno);funcbase=base+std::size_t(pcln);
+    }else if(v==PVer::V116){
+        if(8ull+7ull*ps>d.size()-base)return r;
+        nfunc=word(0);auto fno=word(2),pcln=word(6);if(fno>=d.size()-base||pcln>=d.size()-base)return r;
+        fnbase=base+std::size_t(fno);funcbase=base+std::size_t(pcln);
+    }else{
+        nfunc=uptr(d,base+8,ps,le);fnbase=base;funcbase=base;
+    }
+    if(nfunc<10||nfunc>350000)return r;
+    auto fieldsz=(v==PVer::V118||v==PVer::V120)?4u:ps;auto ftab=(v==PVer::V12)?base+8+ps:funcbase;
+    auto table_fields=nfunc*2+1;auto tablebytes=table_fields*fieldsz;if(ftab>d.size()||tablebytes>d.size()-ftab)return r;
+    if(!(v==PVer::V118||v==PVer::V120))text=text_start(pe,elf);
+    r.funcs.reserve(std::size_t(nfunc));std::size_t good=0;bool has_runtime=false,has_main=false;
+    auto getfield=[&](std::uint64_t idx)->std::uint64_t{auto o=ftab+std::size_t(idx)*fieldsz;return fieldsz==4?u32(d,o,le):uptr(d,o,fieldsz,le);};
+    for(std::uint64_t i=0;i<nfunc;++i){
+        auto ep=getfield(2*i),fo=getfield(2*i+1),next=getfield(2*(i+1));std::uint64_t start=ep,end=next;
+        if(v==PVer::V118||v==PVer::V120){
+            if(ep>std::numeric_limits<std::uint64_t>::max()-text||next>std::numeric_limits<std::uint64_t>::max()-text)continue;
+            start=text+ep;end=text+next;
+        }
+        if(end<start||!fo||fo>=d.size()-funcbase)continue;
+        auto fd=funcbase+std::size_t(fo);
+        const std::size_t name_delta=(v==PVer::V118||v==PVer::V120)?4u:ps;
+        if(fd>d.size()||name_delta>d.size()-fd||4>d.size()-(fd+name_delta))continue;
+        auto no=u32(d,fd+name_delta,le);if(no>=d.size()-fnbase)continue;
+        auto name=zstr(d,fnbase+no,2048);if(name.empty())continue;
+        ++good;if(name.rfind("runtime.",0)==0)has_runtime=true;if(name.rfind("main.",0)==0)has_main=true;
+        GoFunction f;f.start_va=start;f.end_va=end;f.name=std::move(name);f.package=package_of(f.name);f.user_like=user_like(f.name,bi.module_path);
+        if(pe.valid&&start>=pe.image_base){f.start_rva=start-pe.image_base;f.end_rva=end>=pe.image_base?end-pe.image_base:0;}else{f.start_rva=start;f.end_rva=end;}
+        r.funcs.push_back(std::move(f));
+    }
+    if(good<10||good*100<nfunc*70||!has_runtime)return r;
+    r.valid=true;r.ver=v;r.off=base;r.va=off_to_va(base,pe,elf);r.text_base=text;r.external_text_base=external_text;r.ps=ps;r.q=q;r.le=le;r.score=int(good)+(has_main?5000:0);return r;
 }
 ParsedPcln find_pcln(std::span<const std::uint8_t>d,const PeInfo&pe,const ElfInfo&elf,const GoInfo&bi){ParsedPcln best;static constexpr std::array<std::array<std::uint8_t,4>,4> sigs={{{0xfb,0xff,0xff,0xff},{0xfa,0xff,0xff,0xff},{0xf0,0xff,0xff,0xff},{0xf1,0xff,0xff,0xff}}};for(auto sig:sigs){std::size_t pos=0;while(pos+8<=d.size()){auto it=std::search(d.begin()+static_cast<std::ptrdiff_t>(pos),d.end(),sig.begin(),sig.end());if(it==d.end())break;auto o=std::size_t(it-d.begin());auto p=parse_pcln_at(d,o,pe,elf,bi);if(p.valid&&p.score>best.score)best=std::move(p);pos=o+4;}}return best;}
 struct ModuleLayout { std::string name; std::size_t text=0,types=0,etypes=0,typelinks=0,itablinks=0; };
-std::string go_minor_version(const std::string&v){auto p=v.find("go1.");if(p==std::string::npos)return{};p+=2;auto e=v.find_first_not_of("0123456789.",p);auto x=v.substr(p,e==std::string::npos?std::string::npos:e-p);auto dot=x.find('.',2);if(dot!=std::string::npos)x.resize(dot);return x;}
-std::optional<ModuleLayout> module_layout(const std::string&version,std::uint32_t ps){auto v=go_minor_version(version);if(v.empty()||ps!=4&&ps!=8)return{};int minor=0;try{auto p=v.find('.');minor=std::stoi(v.substr(p+1));}catch(...){return{};}ModuleLayout x;auto set=[&](std::string n,std::size_t text64,std::size_t types64,std::size_t etypes64,std::size_t tl64,std::size_t it64){x.name=std::move(n);if(ps==8){x.text=text64;x.types=types64;x.etypes=etypes64;x.typelinks=tl64;x.itablinks=it64;}else{x.text=text64/2;x.types=types64/2;x.etypes=etypes64/2;x.typelinks=tl64/2;x.itablinks=it64/2;}};
-    if(minor>=26)set("1.22-layout",176,296,304,360,384);else if(minor>=21)set("1.21-layout",176,296,304,352,376);else if(minor==20)set("1.20-layout",176,296,304,352,376);else if(minor>=18)set("1.18-layout",176,280,288,336,360);else if(minor>=16)set("1.16-layout",176,280,288,320,344);else if(minor>=8)set("1.8-layout",96,200,208,240,264);else if(minor==7)set("1.7-layout",96,200,208,216,240);else return{};return x;}
+std::optional<ModuleLayout> module_layout(const std::string&version,std::uint32_t ps){
+    auto minor=go_minor_number(version);if(!minor||(ps!=4&&ps!=8))return{};
+    ModuleLayout x;auto set=[&](std::string n,std::size_t text64,std::size_t types64,std::size_t etypes64,std::size_t tl64,std::size_t it64){x.name=std::move(n);if(ps==8){x.text=text64;x.types=types64;x.etypes=etypes64;x.typelinks=tl64;x.itablinks=it64;}else{x.text=text64/2;x.types=types64/2;x.etypes=etypes64/2;x.typelinks=tl64/2;x.itablinks=it64/2;}};
+    if(*minor>=26)set("1.26-layout",176,296,304,360,384);
+    else if(*minor>=21)set("1.21-layout",176,296,304,352,376);
+    else if(*minor==20)set("1.20-layout",176,296,304,352,376);
+    else if(*minor>=18)set("1.18-layout",176,280,288,336,360);
+    else if(*minor>=16)set("1.16-layout",176,280,288,320,344);
+    else if(*minor>=8)set("1.8-layout",96,200,208,240,264);
+    else if(*minor==7)set("1.7-layout",96,200,208,216,240);
+    else return{};
+    return x;
+}
 struct ModuleDataLite {bool valid=false;std::uint64_t va=0,text=0,types=0,etypes=0,typelinks=0,typelinks_len=0,typelinks_cap=0,itablinks=0,itablinks_len=0,itablinks_cap=0;std::string layout;};
 std::vector<std::size_t> find_ptr_occurrences(std::span<const std::uint8_t>d,std::uint64_t v,std::uint32_t ps,bool le){std::array<std::uint8_t,8>b{};for(std::uint32_t i=0;i<ps;i++){auto shift=le?8*i:8*(ps-1-i);b[i]=std::uint8_t(v>>shift);}std::vector<std::size_t>r;std::size_t p=0;while(p+ps<=d.size()){auto it=std::search(d.begin()+static_cast<std::ptrdiff_t>(p),d.end(),b.begin(),b.begin()+ps);if(it==d.end())break;r.push_back(std::size_t(it-d.begin()));p=r.back()+1;}return r;}
 std::uint64_t read_signed32_as_addr(std::span<const std::uint8_t>d,std::size_t o,bool le,std::uint64_t base){auto u=u32(d,o,le);auto s=static_cast<std::int32_t>(u);return static_cast<std::uint64_t>(static_cast<std::int64_t>(base)+s);}
 struct GoName {bool valid=false;std::string name,tag;std::uint8_t flags=0;};
-GoName read_go_name(std::span<const std::uint8_t>d,std::uint64_t va,const PeInfo&pe,const ElfInfo&elf,const std::string&version){GoName n;auto o=va_to_off(va,pe,elf,d.size());if(!o||*o>=d.size())return n;n.flags=d[*o];auto v=go_minor_version(version);int minor=0;try{minor=std::stoi(v.substr(v.find('.')+1));}catch(...){return n;}std::size_t p=*o+1;std::uint64_t len=0;if(minor>=17){auto x=decode_uvarint(d,p);if(!x)return n;len=x->first;p+=x->second;}else{if(p+2>d.size())return n;len=(std::uint64_t(d[p])<<8)|d[p+1];p+=2;}if(!len||len>4096||len>d.size()-p)return n;n.name.assign(reinterpret_cast<const char*>(d.data()+p),std::size_t(len));p+=std::size_t(len);if(n.flags&2){std::uint64_t tl=0;if(minor>=17){auto x=decode_uvarint(d,p);if(!x)return n;tl=x->first;p+=x->second;}else{if(p+2>d.size())return n;tl=(std::uint64_t(d[p])<<8)|d[p+1];p+=2;}if(tl>65536||tl>d.size()-p)return n;n.tag.assign(reinterpret_cast<const char*>(d.data()+p),std::size_t(tl));}n.valid=true;return n;}
+GoName read_go_name(std::span<const std::uint8_t>d,std::uint64_t va,const PeInfo&pe,const ElfInfo&elf,const std::string&version){
+    GoName n;auto o=va_to_off(va,pe,elf,d.size());if(!o||*o>=d.size())return n;n.flags=d[*o];auto minor=go_minor_number(version);if(!minor)return n;
+    std::size_t p=*o+1;std::uint64_t len=0;
+    if(*minor>=17){auto x=decode_uvarint(d,p);if(!x)return n;len=x->first;p+=x->second;}else{if(p>d.size()||d.size()-p<2)return n;len=(std::uint64_t(d[p])<<8)|d[p+1];p+=2;}
+    if(!len||len>4096||p>d.size()||len>d.size()-p)return n;
+    n.name.assign(reinterpret_cast<const char*>(d.data()+p),std::size_t(len));p+=std::size_t(len);
+    if(n.flags&2){std::uint64_t tl=0;if(*minor>=17){auto x=decode_uvarint(d,p);if(!x)return n;tl=x->first;p+=x->second;}else{if(p>d.size()||d.size()-p<2)return n;tl=(std::uint64_t(d[p])<<8)|d[p+1];p+=2;}if(tl>65536||p>d.size()||tl>d.size()-p)return n;n.tag.assign(reinterpret_cast<const char*>(d.data()+p),std::size_t(tl));}
+    n.valid=true;return n;
+}
 const char* go_kind_name(std::uint8_t k){static constexpr const char* names[]={"Invalid","Bool","Int","Int8","Int16","Int32","Int64","Uint","Uint8","Uint16","Uint32","Uint64","Uintptr","Float32","Float64","Complex64","Complex128","Array","Chan","Func","Interface","Map","Pointer","Slice","String","Struct","UnsafePointer"};k&=0x1f;return k<std::size(names)?names[k]:"Invalid";}
 bool go_user_type(const std::string&name,const GoInfo&g){if(name.rfind("main.",0)==0||name.rfind("*main.",0)==0)return true;if(!g.module_path.empty()&&(name.rfind(g.module_path,0)==0||name.rfind("*"+g.module_path,0)==0))return true;return false;}
 struct RTypeLite {bool valid=false;std::uint64_t va=0,size=0;std::uint8_t tflag=0,kind=0;std::int32_t str_off=0;std::string name,tag;};
@@ -80,7 +195,7 @@ void parse_struct_fields(std::span<const std::uint8_t>d,GoTypeInfo&t,const RType
 void recover_go_types(std::span<const std::uint8_t>d,const PeInfo&pe,const ElfInfo&elf,GoInfo&g){auto m=find_moduledata(d,pe,elf,g);if(!m.valid){g.type_error="moduledata/typelinks not structurally recovered";return;}g.moduledata_va=m.va;g.moduledata_layout=m.layout;g.types_va=m.types;g.etypes_va=m.etypes;g.typelinks_va=m.typelinks;g.typelinks_count=m.typelinks_len;g.itablinks_va=m.itablinks;g.itablinks_count=m.itablinks_len;auto tl=va_to_off(m.typelinks,pe,elf,d.size());if(!tl)return;std::set<std::uint64_t>seen;std::function<void(std::uint64_t,int)> add=[&](std::uint64_t va,int depth){if(depth>64||!seen.insert(va).second)return;auto rt=parse_rtype(d,va,m,pe,elf,g);if(!rt.valid)return;GoTypeInfo t;t.va=va;t.size=rt.size;t.name=rt.name;t.kind=go_kind_name(rt.kind);t.tflag=rt.tflag;t.user_like=go_user_type(t.name,g);parse_struct_fields(d,t,rt,m,pe,elf,g);auto kind=rt.kind&0x1f;auto ps=g.pointer_size;std::uint64_t base=ps==8?48ull:32ull;std::vector<std::uint64_t> children;if(auto o=va_to_off(va+base,pe,elf,d.size())){if(kind==22||kind==23||kind==18){auto x=uptr(d,*o,ps,g.little_endian);if(x)children.push_back(x);}else if(kind==17){auto elem=uptr(d,*o,ps,g.little_endian),slice=uptr(d,*o+ps,ps,g.little_endian);if(elem)children.push_back(elem);if(slice)children.push_back(slice);}else if(kind==21){auto key=uptr(d,*o,ps,g.little_endian),elem=uptr(d,*o+ps,ps,g.little_endian);if(key)children.push_back(key);if(elem)children.push_back(elem);}}for(const auto&sf:t.fields)if(sf.type_va)children.push_back(sf.type_va);g.types.push_back(std::move(t));for(auto c:children)add(c,depth+1);};for(std::uint64_t i=0;i<m.typelinks_len;i++){auto va=read_signed32_as_addr(d,*tl+std::size_t(i*4),g.little_endian,m.types);add(va,0);}if(g.types.empty())g.type_error="typelinks located but no valid runtime types parsed";}
 std::string csv_quote(const std::string&s){std::string r="\"";for(char c:s){if(c=='\"')r+="\"\"";else r+=c;}r+='\"';return r;}
 }
-GoInfo detect_golang(std::span<const std::uint8_t>d,const PeInfo&pe,const ElfInfo&elf){GoInfo g;if(!pe.valid&&!elf.valid)return g;detect_buildinfo(d,pe,elf,g);auto p=find_pcln(d,pe,elf,g);if(!p.valid){if(!g.version.empty()){g.valid=true;g.error="Go build info present but pclntab function recovery failed";}return g;}g.valid=true;g.pclntab_layout=ver_name(p.ver);g.pclntab_offset=p.off;g.pclntab_va=p.va;g.pointer_size=p.ps;g.quantum=p.q;g.little_endian=p.le;g.functions=std::move(p.funcs);recover_go_types(d,pe,elf,g);return g;}
-Finding golang_finding(const GoInfo&g){Finding f;f.kind="runtime";f.family="Go";if(!g.valid){f.state="FAILED";return f;}f.state=g.functions.empty()?"LIKELY":"CONFIRMED";if(f.state=="LIKELY")f.confidence=.90;f.variant=g.version;f.fields["version"]=g.version;f.fields["module"]=g.module_path;f.fields["pclntab_layout"]=g.pclntab_layout;f.fields["function_count"]=std::to_string(g.functions.size());f.fields["type_count"]=std::to_string(g.types.size());if(g.moduledata_va){std::ostringstream x;x<<"0x"<<std::hex<<g.moduledata_va;f.fields["moduledata_va"]=x.str();f.fields["moduledata_layout"]=g.moduledata_layout;f.fields["typelinks_count"]=std::to_string(g.typelinks_count);}if(!g.version.empty())f.evidence.push_back("Go linker build-info structure parsed");if(!g.functions.empty())f.evidence.push_back("pclntab structurally parsed and function names/RVAs recovered");if(!g.types.empty()){f.evidence.push_back("moduledata/typelinks structurally recovered and runtime type names parsed");std::size_t user=0,fields=0,tags=0;std::string hints;for(const auto&t:g.types){if(t.user_like){++user;if(hints.size()<1200){if(!hints.empty())hints+=" | ";hints+=t.kind+":"+t.name;}for(const auto&sf:t.fields){++fields;if(!sf.tag.empty())++tags;}}}f.fields["user_type_count"]=std::to_string(user);f.fields["user_struct_fields"]=std::to_string(fields);f.fields["user_struct_tags"]=std::to_string(tags);if(!hints.empty())f.fields["user_type_hints"]=hints;}if(!g.type_error.empty())f.negative_evidence.push_back(g.type_error);if(!g.error.empty())f.negative_evidence.push_back(g.error);return f;}
+GoInfo detect_golang(std::span<const std::uint8_t>d,const PeInfo&pe,const ElfInfo&elf){GoInfo g;if(!pe.valid&&!elf.valid)return g;detect_buildinfo(d,pe,elf,g);auto p=find_pcln(d,pe,elf,g);if(!p.valid){if(!g.version.empty()){g.valid=true;g.error="Go build info present but pclntab function recovery failed";}return g;}g.valid=true;g.pclntab_layout=ver_name(p.ver);g.pclntab_offset=p.off;g.pclntab_va=p.va;g.pclntab_text_base=p.text_base;g.pclntab_text_base_source=p.external_text_base?"validated_format_text":"pcHeader";g.pointer_size=p.ps;g.quantum=p.q;g.little_endian=p.le;g.functions=std::move(p.funcs);recover_go_types(d,pe,elf,g);return g;}
+Finding golang_finding(const GoInfo&g){Finding f;f.kind="runtime";f.family="Go";if(!g.valid){f.state="FAILED";return f;}f.state=g.functions.empty()?"LIKELY":"CONFIRMED";if(f.state=="LIKELY")f.confidence=.90;f.variant=g.version;f.fields["version"]=g.version;f.fields["module"]=g.module_path;f.fields["pclntab_layout"]=g.pclntab_layout;if(g.pclntab_text_base){std::ostringstream tb;tb<<"0x"<<std::hex<<g.pclntab_text_base;f.fields["pclntab_text_base"]=tb.str();f.fields["pclntab_text_base_source"]=g.pclntab_text_base_source;}f.fields["function_count"]=std::to_string(g.functions.size());f.fields["type_count"]=std::to_string(g.types.size());if(g.moduledata_va){std::ostringstream x;x<<"0x"<<std::hex<<g.moduledata_va;f.fields["moduledata_va"]=x.str();f.fields["moduledata_layout"]=g.moduledata_layout;f.fields["typelinks_count"]=std::to_string(g.typelinks_count);}if(!g.version.empty())f.evidence.push_back("Go linker build-info structure parsed");if(!g.functions.empty()){f.evidence.push_back("pclntab structurally parsed and function names/RVAs recovered");if(g.pclntab_text_base_source=="validated_format_text")f.evidence.push_back("Go 1.26+ pcHeader text slot is unused; validated PE/ELF text mapping supplies the function-entry base");}if(!g.types.empty()){f.evidence.push_back("moduledata/typelinks structurally recovered and runtime type names parsed");std::size_t user=0,fields=0,tags=0;std::string hints;for(const auto&t:g.types){if(t.user_like){++user;if(hints.size()<1200){if(!hints.empty())hints+=" | ";hints+=t.kind+":"+t.name;}for(const auto&sf:t.fields){++fields;if(!sf.tag.empty())++tags;}}}f.fields["user_type_count"]=std::to_string(user);f.fields["user_struct_fields"]=std::to_string(fields);f.fields["user_struct_tags"]=std::to_string(tags);if(!hints.empty())f.fields["user_type_hints"]=hints;}if(!g.type_error.empty())f.negative_evidence.push_back(g.type_error);if(!g.error.empty())f.negative_evidence.push_back(g.error);return f;}
 GoExtractResult extract_go_symbols(const GoInfo&g,const std::filesystem::path&out){GoExtractResult r;if(!g.valid||g.functions.empty()){r.error="no recovered Go symbols";return r;}std::ofstream f(out,std::ios::binary);if(!f){r.error="cannot create symbol CSV";return r;}f<<"start_va,end_va,start_rva,end_rva,package,name,user_like\n";for(const auto&x:g.functions)f<<"0x"<<std::hex<<x.start_va<<",0x"<<x.end_va<<",0x"<<x.start_rva<<",0x"<<x.end_rva<<std::dec<<','<<csv_quote(x.package)<<','<<csv_quote(x.name)<<','<<(x.user_like?"1":"0")<<"\n";if(!f){r.error="write failed";return r;}r.success=true;r.symbols_csv=out;r.symbol_count=g.functions.size();if(!g.types.empty()){auto tp=out.parent_path()/(out.stem().string()+"-types.csv");std::ofstream tf(tp,std::ios::binary);if(tf){tf<<"type_va,kind,size,name,user_like,field_name,field_type,field_offset,embedded,tag\n";for(const auto&t:g.types){if(t.fields.empty())tf<<"0x"<<std::hex<<t.va<<std::dec<<','<<csv_quote(t.kind)<<','<<t.size<<','<<csv_quote(t.name)<<','<<(t.user_like?1:0)<<",,,,0,\n";else for(const auto&sf:t.fields)tf<<"0x"<<std::hex<<t.va<<std::dec<<','<<csv_quote(t.kind)<<','<<t.size<<','<<csv_quote(t.name)<<','<<(t.user_like?1:0)<<','<<csv_quote(sf.name)<<','<<csv_quote(sf.type_name)<<','<<sf.offset<<','<<(sf.embedded?1:0)<<','<<csv_quote(sf.tag)<<"\n"; }if(tf){r.types_csv=tp;r.type_count=g.types.size();}}}return r;}
 }

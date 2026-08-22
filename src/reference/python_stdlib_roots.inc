@@ -1,4 +1,4 @@
-// Generated for from Python 3.10 stdlib_module_names plus retained official CPython 3.13.14/3.14.3 embeddable zip roots.
+// Generated from Python 3.10 stdlib_module_names plus retained official CPython 3.13.14/3.14.3 embeddable zip roots.
 static constexpr std::string_view kPythonStdlibRoots[] = {
     "__future__",
     "__hello__",

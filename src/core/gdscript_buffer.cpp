@@ -16,6 +16,8 @@
 
 namespace prts {
 namespace {
+constexpr std::uint32_t kTokenizerVersion10 = 10;
+constexpr std::uint32_t kTokenizerVersion13 = 13;
 constexpr std::uint32_t kTokenizerVersion100 = 100;
 constexpr std::uint32_t kTokenizerVersion101 = 101;
 constexpr std::uint32_t kTokenizerTkMax100 = 99;
@@ -707,6 +709,343 @@ std::optional<std::string> token_display_text(std::uint32_t type, std::uint32_t 
     return std::nullopt;
 }
 
+bool legacy_variant_string(Cursor&c);
+bool legacy_identifier(Cursor&c,std::string*out=nullptr);
+
+constexpr std::uint32_t kGodot2VariantMax=29;
+constexpr std::uint32_t kGodot2ImageFormatMax=23;
+constexpr std::uint32_t kGodot2BuiltinFuncMax=66;
+
+struct Godot2TokenProfile {
+    const char* id=nullptr;
+    std::uint32_t token_max=0;
+    std::uint32_t error_token=0;
+    std::uint32_t eof_token=0;
+    std::uint32_t cursor_token=0;
+    std::uint32_t newline_token=0;
+    bool has_enum=false;
+};
+constexpr Godot2TokenProfile kGodot2PreEnumProfile{"godot2-v10-pre-enum-2.1.1-2.1.2",81,78,79,80,76,false};
+constexpr Godot2TokenProfile kGodot2PostEnumProfile{"godot2-v10-post-enum-2.1.3-2.1.5",82,79,80,81,77,true};
+
+const Godot2TokenProfile* godot2_token_profile_from_eof(std::uint32_t terminal_type){
+    if(terminal_type==kGodot2PreEnumProfile.eof_token)return &kGodot2PreEnumProfile;
+    if(terminal_type==kGodot2PostEnumProfile.eof_token)return &kGodot2PostEnumProfile;
+    return nullptr;
+}
+
+const char* godot2_variant_type_name(std::uint32_t type){
+    static constexpr const char*names[]={"NIL","BOOL","INT","REAL","STRING","VECTOR2","RECT2","VECTOR3","MATRIX32","PLANE","QUAT","AABB","MATRIX3","TRANSFORM","COLOR","IMAGE","NODE_PATH","RID","OBJECT","INPUT_EVENT","DICTIONARY","ARRAY","RAW_ARRAY","INT_ARRAY","REAL_ARRAY","STRING_ARRAY","VECTOR2_ARRAY","VECTOR3_ARRAY","COLOR_ARRAY"};
+    return type<sizeof(names)/sizeof(names[0])?names[type]:"UNKNOWN";
+}
+
+std::string godot2_token_type_name(std::uint32_t type,const Godot2TokenProfile&profile){
+    static constexpr const char*post[]={
+        "EMPTY","IDENTIFIER","CONSTANT","SELF","BUILT_IN_TYPE","BUILT_IN_FUNC","IN","EQUAL_EQUAL","BANG_EQUAL","LESS","LESS_EQUAL","GREATER","GREATER_EQUAL","AND","OR","NOT","PLUS","MINUS","STAR","SLASH","PERCENT","SHIFT_LEFT","SHIFT_RIGHT","EQUAL","PLUS_EQUAL","MINUS_EQUAL","STAR_EQUAL","SLASH_EQUAL","PERCENT_EQUAL","SHIFT_LEFT_EQUAL","SHIFT_RIGHT_EQUAL","AMPERSAND_EQUAL","PIPE_EQUAL","CARET_EQUAL","AMPERSAND","PIPE","CARET","TILDE","IF","ELIF","ELSE","FOR","DO","WHILE","SWITCH","CASE","BREAK","CONTINUE","PASS","RETURN","FUNC","CLASS","EXTENDS","ONREADY","TOOL","STATIC","EXPORT","SETGET","CONST","VAR","ENUM","PRELOAD","ASSERT","YIELD","SIGNAL","BREAKPOINT","BRACKET_OPEN","BRACKET_CLOSE","BRACE_OPEN","BRACE_CLOSE","PARENTHESIS_OPEN","PARENTHESIS_CLOSE","COMMA","SEMICOLON","PERIOD","QUESTION_MARK","COLON","NEWLINE","CONST_PI","ERROR","TK_EOF","CURSOR"
+    };
+    static_assert(sizeof(post)/sizeof(post[0])==82);
+    if(type>=profile.token_max)return "CUSTOM_"+std::to_string(type);
+    const auto mapped=profile.has_enum?type:(type<60?type:type+1);
+    return mapped<sizeof(post)/sizeof(post[0])?std::string(post[mapped]):"CUSTOM_"+std::to_string(type);
+}
+
+std::optional<std::string> godot2_token_display_text(std::uint32_t type,const Godot2TokenProfile&profile){
+    static constexpr const char*post[]={
+        "Empty","Identifier","Constant","self","Variant type","Built-in function","in","==","!=","<","<=",">",">=","and","or","not","+","-","*","/","%","<<",">>","=","+=","-=","*=","/=","%=","<<=",">>=","&=","|=","^=","&","|","^","~","if","elif","else","for","do","while","switch","case","break","continue","pass","return","func","class","extends","onready","tool","static","export","setget","const","var","enum","preload","assert","yield","signal","breakpoint","[","]","{","}","(",")",",",";",".","?",":","Newline","PI","Error","End of file","Cursor"
+    };
+    static_assert(sizeof(post)/sizeof(post[0])==82);
+    if(type>=profile.token_max)return std::nullopt;
+    const auto mapped=profile.has_enum?type:(type<60?type:type+1);
+    if(mapped>=sizeof(post)/sizeof(post[0]))return std::nullopt;
+    return std::string(post[mapped]);
+}
+
+bool godot2_string_array_item(Cursor&c){
+    std::uint32_t size=0;if(!c.read32(size)||!size||size>c.bytes.size()-c.pos)return false;
+    const auto bytes=c.bytes.subspan(c.pos,size);if(bytes.back()!=0)return false;
+    if(!valid_utf8(bytes.first(size-1)))return false;
+    c.pos+=size;return c.take((4u-(size&3u))&3u);
+}
+
+bool godot2_variant(Cursor&c,std::size_t depth,std::size_t&nodes){
+    if(depth>kMaxVariantDepth||++nodes>kMaxVariantNodes)return false;
+    std::uint32_t type=0;if(!c.read32(type)||type>=kGodot2VariantMax)return false;
+    auto fixed=[&](std::size_t n){return c.take(n);};
+    switch(type){
+        case 0:return true;
+        case 1:case 2:case 3:return fixed(4);
+        case 4:return legacy_variant_string(c);
+        case 5:return fixed(8);case 6:return fixed(16);case 7:return fixed(12);case 8:return fixed(24);case 9:case 10:return fixed(16);case 11:return fixed(24);case 12:return fixed(36);case 13:return fixed(48);case 14:return fixed(16);
+        case 15:{
+            if(c.bytes.size()-c.pos<20)return false;
+            const auto fmt=u32(c.bytes,c.pos),raw_len=u32(c.bytes,c.pos+16);
+            if(fmt>=kGodot2ImageFormatMax||raw_len>std::uint32_t(std::numeric_limits<std::int32_t>::max()))return false;
+            c.pos+=20;
+            if(raw_len>c.bytes.size()-c.pos||!c.take(raw_len))return false;
+            return c.take((4u-(raw_len&3u))&3u);
+        }
+        case 16:{
+            std::uint32_t names=0,subs=0,flags=0;if(!c.read32(names)||!(names&0x80000000u)||!c.read32(subs)||!c.read32(flags)||flags&~3u)return false;names&=0x7fffffffu;std::uint64_t total=std::uint64_t(names)+subs+((flags&2u)?1u:0u);if(names>kMaxTableCount||subs>kMaxTableCount||total>kMaxTableCount)return false;for(std::uint64_t i=0;i<total;++i)if(!legacy_variant_string(c))return false;return true;
+        }
+        case 17:case 18:return true;
+        case 19:{
+            if(c.bytes.size()-c.pos<12)return false;
+            const auto event_type=u32(c.bytes,c.pos),declared=u32(c.bytes,c.pos+8);
+            if(event_type>=9)return false;
+            std::uint32_t expected=12;
+            if(event_type==1||event_type==4)expected=20;
+            else if(event_type==3||event_type==5||event_type==6)expected=16;
+            if(declared!=expected||declared>c.bytes.size()-c.pos)return false;
+            return c.take(declared);
+        }
+        case 20:{std::uint32_t raw=0;if(!c.read32(raw))return false;const auto count=raw&0x7fffffffu;if(count>kMaxTableCount)return false;for(std::uint32_t i=0;i<count;++i)if(!godot2_variant(c,depth+1,nodes)||!godot2_variant(c,depth+1,nodes))return false;return true;}
+        case 21:{std::uint32_t raw=0;if(!c.read32(raw))return false;const auto count=raw&0x7fffffffu;if(count>kMaxTableCount)return false;for(std::uint32_t i=0;i<count;++i)if(!godot2_variant(c,depth+1,nodes))return false;return true;}
+        case 22:{std::uint32_t count=0;if(!c.read32(count)||count>std::uint32_t(std::numeric_limits<std::int32_t>::max())||count>c.bytes.size()-c.pos||!c.take(count))return false;return c.take((4u-(count&3u))&3u);}
+        case 23:case 24:{std::uint32_t count=0;if(!c.read32(count)||count>kMaxTableCount||std::uint64_t(count)*4>c.bytes.size()-c.pos)return false;return c.take(std::size_t(count)*4);}
+        case 25:{std::uint32_t count=0;if(!c.read32(count)||count>kMaxTableCount)return false;for(std::uint32_t i=0;i<count;++i)if(!godot2_string_array_item(c))return false;return true;}
+        case 26:case 27:case 28:{std::uint32_t count=0;if(!c.read32(count)||count>kMaxTableCount)return false;const std::size_t item=type==26?8u:(type==27?12u:16u);if(std::uint64_t(count)*item>c.bytes.size()-c.pos)return false;return c.take(std::size_t(count)*item);}
+        default:return false;
+    }
+}
+
+std::optional<ConstantSummary> godot2_constant_summary(std::span<const std::uint8_t>encoded){
+    if(encoded.size()<4)return std::nullopt;
+    const auto type=u32(encoded,0);
+    auto scalar=[](std::string x,bool complete=true)->std::optional<ConstantSummary>{return ConstantSummary{std::move(x),complete};};
+    if(type==0)return scalar("null");
+    if(type==1&&encoded.size()>=8)return scalar(u32(encoded,4)?"true":"false");
+    if(type==2&&encoded.size()>=8)return scalar(std::to_string(static_cast<std::int32_t>(u32(encoded,4))));
+    if(type==3&&encoded.size()>=8){
+        auto bits=u32(encoded,4);float v=0;std::memcpy(&v,&bits,sizeof(v));std::ostringstream o;o<<std::setprecision(9)<<v;return scalar(o.str());
+    }
+    if(type==4&&encoded.size()>=8){
+        const auto n=u32(encoded,4);
+        if(n<=encoded.size()-8){std::string x(reinterpret_cast<const char*>(encoded.data()+8),n);const bool complete=x.size()<=512;if(!complete)x.resize(512),x+="...";return scalar(std::move(x),complete);}
+    }
+    if((type==20||type==21||type>=22)&&encoded.size()>=8)return scalar("count="+std::to_string(u32(encoded,4)&0x7fffffffu),false);
+    return std::nullopt;
+}
+
+constexpr std::uint32_t kLegacyTokenizerTkMax13=98;
+constexpr std::uint32_t kLegacyVariantMax=27;
+constexpr std::uint32_t kLegacyBuiltinFuncMax=90;
+
+const char* legacy_variant_type_name(std::uint32_t type){
+    static constexpr const char*names[]={"NIL","BOOL","INT","REAL","STRING","VECTOR2","RECT2","VECTOR3","TRANSFORM2D","PLANE","QUAT","AABB","BASIS","TRANSFORM","COLOR","NODE_PATH","RID","OBJECT","DICTIONARY","ARRAY","POOL_BYTE_ARRAY","POOL_INT_ARRAY","POOL_REAL_ARRAY","POOL_STRING_ARRAY","POOL_VECTOR2_ARRAY","POOL_VECTOR3_ARRAY","POOL_COLOR_ARRAY"};
+    return type<sizeof(names)/sizeof(names[0])?names[type]:"UNKNOWN";
+}
+
+std::string legacy_token_type_name(std::uint32_t type){
+    static constexpr const char*names[]={
+        "EMPTY","IDENTIFIER","CONSTANT","SELF","BUILT_IN_TYPE","BUILT_IN_FUNC","IN","EQUAL_EQUAL","BANG_EQUAL","LESS","LESS_EQUAL","GREATER","GREATER_EQUAL","AND","OR","NOT","PLUS","MINUS","STAR","SLASH","PERCENT","SHIFT_LEFT","SHIFT_RIGHT","EQUAL","PLUS_EQUAL","MINUS_EQUAL","STAR_EQUAL","SLASH_EQUAL","PERCENT_EQUAL","SHIFT_LEFT_EQUAL","SHIFT_RIGHT_EQUAL","AMPERSAND_EQUAL","PIPE_EQUAL","CARET_EQUAL","AMPERSAND","PIPE","CARET","TILDE","IF","ELIF","ELSE","FOR","WHILE","BREAK","CONTINUE","PASS","RETURN","MATCH","FUNC","CLASS","CLASS_NAME","EXTENDS","IS","ONREADY","TOOL","STATIC","EXPORT","SETGET","CONST","VAR","AS","VOID","ENUM","PRELOAD","ASSERT","YIELD","SIGNAL","BREAKPOINT","REMOTE","SYNC","MASTER","SLAVE","PUPPET","REMOTESYNC","MASTERSYNC","PUPPETSYNC","BRACKET_OPEN","BRACKET_CLOSE","BRACE_OPEN","BRACE_CLOSE","PARENTHESIS_OPEN","PARENTHESIS_CLOSE","COMMA","SEMICOLON","PERIOD","QUESTION_MARK","COLON","DOLLAR","FORWARD_ARROW","NEWLINE","CONST_PI","CONST_TAU","WILDCARD","CONST_INF","CONST_NAN","ERROR","TK_EOF","CURSOR"
+    };
+    return type<sizeof(names)/sizeof(names[0])?names[type]:"CUSTOM_"+std::to_string(type);
+}
+
+std::optional<std::string> legacy_token_display_text(std::uint32_t type){
+    static constexpr const char*names[]={
+        "Empty","Identifier","Constant","self","Variant type","Built-in function","in","==","!=","<","<=",">",">=","and","or","not","+","-","*","/","%","<<",">>","=","+=","-=","*=","/=","%=","<<=",">>=","&=","|=","^=","&","|","^","~","if","elif","else","for","while","break","continue","pass","return","match","func","class","class_name","extends","is","onready","tool","static","export","setget","const","var","as","void","enum","preload","assert","yield","signal","breakpoint","remote","sync","master","slave","puppet","remotesync","mastersync","puppetsync","[","]","{","}","(",")",",",";",".","?",":","$","->","Newline","PI","TAU","_","INF","NAN","Error","End of file","Cursor"
+    };
+    if(type>=sizeof(names)/sizeof(names[0]))return std::nullopt;
+    return std::string(names[type]);
+}
+
+bool legacy_variant_string(Cursor&c){
+    std::uint32_t size=0;if(!c.read32(size)||size>c.bytes.size()-c.pos)return false;
+    if(!valid_utf8(c.bytes.subspan(c.pos,size)))return false;
+    c.pos+=size;return c.take((4u-(size&3u))&3u);
+}
+
+bool legacy_variant(Cursor&c,std::size_t depth,std::size_t&nodes){
+    if(depth>kMaxVariantDepth||++nodes>kMaxVariantNodes)return false;
+    std::uint32_t header=0;if(!c.read32(header))return false;const auto type=header&0xffu;if(type>=kLegacyVariantMax)return false;
+    constexpr std::uint32_t flag64=1u<<16;std::uint32_t allowed=(type==2||type==3||type==17)?flag64:0u;if(header&~(0xffu|allowed))return false;
+    const bool wide=(header&flag64)!=0;auto fixed=[&](std::size_t n){return c.take(n);};
+    switch(type){
+        case 0:return true;
+        case 1:return fixed(4);
+        case 2:case 3:return fixed(wide?8:4);
+        case 4:return legacy_variant_string(c);
+        case 5:return fixed(8);case 6:return fixed(16);case 7:return fixed(12);case 8:return fixed(24);case 9:case 10:return fixed(16);case 11:return fixed(24);case 12:return fixed(36);case 13:return fixed(48);case 14:return fixed(16);
+        case 15:{
+            std::uint32_t names=0,subs=0,flags=0;if(!c.read32(names)||!(names&0x80000000u)||!c.read32(subs)||!c.read32(flags)||flags&~3u)return false;names&=0x7fffffffu;if(flags&2u){if(subs==std::numeric_limits<std::uint32_t>::max())return false;++subs;}const auto total=std::uint64_t(names)+subs;if(names>kMaxTableCount||subs>kMaxTableCount||total>kMaxTableCount)return false;for(std::uint64_t i=0;i<total;++i)if(!legacy_variant_string(c))return false;return true;
+        }
+        case 16:return true;
+        case 17:return wide&&fixed(8); // decode_variant(false) accepts only OBJECT_AS_ID.
+        case 18:{std::uint32_t raw=0;if(!c.read32(raw))return false;const auto count=raw&0x7fffffffu;if(count>kMaxTableCount)return false;for(std::uint32_t i=0;i<count;++i)if(!legacy_variant(c,depth+1,nodes)||!legacy_variant(c,depth+1,nodes))return false;return true;}
+        case 19:{std::uint32_t raw=0;if(!c.read32(raw))return false;const auto count=raw&0x7fffffffu;if(count>kMaxTableCount)return false;for(std::uint32_t i=0;i<count;++i)if(!legacy_variant(c,depth+1,nodes))return false;return true;}
+        case 20:{std::uint32_t count=0;if(!c.read32(count)||count>c.bytes.size()-c.pos||!c.take(count))return false;return c.take((4u-(count&3u))&3u);}
+        case 21:case 22:{std::uint32_t count=0;if(!c.read32(count)||count>kMaxTableCount||std::uint64_t(count)*4>c.bytes.size()-c.pos)return false;return c.take(std::size_t(count)*4);}
+        case 23:{std::uint32_t count=0;if(!c.read32(count)||count>kMaxTableCount)return false;for(std::uint32_t i=0;i<count;++i)if(!legacy_variant_string(c))return false;return true;}
+        case 24:case 25:case 26:{std::uint32_t count=0;if(!c.read32(count)||count>kMaxTableCount)return false;const std::size_t item=type==24?8u:(type==25?12u:16u);if(std::uint64_t(count)*item>c.bytes.size()-c.pos)return false;return c.take(std::size_t(count)*item);}
+        default:return false;
+    }
+}
+
+bool legacy_identifier(Cursor&c,std::string*out){
+    std::uint32_t size=0;if(!c.read32(size)||size<4||size>kMaxTableCount||size%4||size>c.bytes.size()-c.pos)return false;
+    std::vector<std::uint8_t>decoded(size);for(std::size_t i=0;i<size;++i)decoded[i]=c.bytes[c.pos+i]^0xb6u;c.pos+=size;
+    auto nul=std::find(decoded.begin(),decoded.end(),std::uint8_t{0});if(nul==decoded.end()||nul==decoded.begin())return false;
+    if(!std::all_of(nul,decoded.end(),[](std::uint8_t b){return b==0;}))return false;
+    const auto n=static_cast<std::size_t>(nul-decoded.begin());
+    if(!valid_utf8(std::span<const std::uint8_t>(decoded.data(),n)))return false;
+    if(out)out->assign(reinterpret_cast<const char*>(decoded.data()),n);
+    return true;
+}
+
+std::optional<ConstantSummary> legacy_constant_summary(std::span<const std::uint8_t>encoded){
+    if(encoded.size()<4)return std::nullopt;
+    const auto header=u32(encoded,0);
+    const auto type=header&0xffu;
+    const bool wide=(header&(1u<<16))!=0;
+    auto scalar=[](std::string x,bool complete=true)->std::optional<ConstantSummary>{return ConstantSummary{std::move(x),complete};};
+    if(type==0)return scalar("null");
+    if(type==1&&encoded.size()>=8)return scalar(u32(encoded,4)?"true":"false");
+    if(type==2){if(wide&&encoded.size()>=12)return scalar(std::to_string(static_cast<std::int64_t>(u64(encoded,4))));if(!wide&&encoded.size()>=8)return scalar(std::to_string(static_cast<std::int32_t>(u32(encoded,4))));}
+    if(type==3){std::ostringstream o;if(wide&&encoded.size()>=12){auto bits=u64(encoded,4);double v=0;std::memcpy(&v,&bits,sizeof(v));o<<std::setprecision(17)<<v;return scalar(o.str());}if(!wide&&encoded.size()>=8){auto bits=u32(encoded,4);float v=0;std::memcpy(&v,&bits,sizeof(v));o<<std::setprecision(9)<<v;return scalar(o.str());}}
+    if(type==4&&encoded.size()>=8){const auto n=u32(encoded,4);if(n<=encoded.size()-8){std::string x(reinterpret_cast<const char*>(encoded.data()+8),n);const bool complete=x.size()<=512;if(!complete)x.resize(512),x+="...";return scalar(std::move(x),complete);}}
+    if((type==18||type==19||type>=20)&&encoded.size()>=8)return scalar("count="+std::to_string(u32(encoded,4)&0x7fffffffu),false);
+    return std::nullopt;
+}
+
+using LegacyVariantParser=bool(*)(Cursor&,std::size_t,std::size_t&);
+using LegacyVariantTypeName=const char*(*)(std::uint32_t);
+using LegacyConstantSummary=std::optional<ConstantSummary>(*)(std::span<const std::uint8_t>);
+
+struct LegacyParsedToken {
+    std::size_t offset=0;
+    std::uint32_t word=0;
+    std::uint32_t record_size=0;
+};
+
+struct LegacyTailPlanes {
+    bool valid=false;
+    std::string failure_stage;
+    std::string error;
+    std::vector<std::pair<std::uint32_t,std::uint32_t>> maps;
+    std::vector<LegacyParsedToken> tokens;
+};
+
+struct LegacyTokenSemantics {
+    std::uint32_t token_max=0;
+    std::uint32_t error_token=0;
+    std::uint32_t eof_token=0;
+    std::uint32_t cursor_token=0;
+    std::uint32_t newline_token=0;
+    std::uint32_t variant_max=0;
+    std::uint32_t builtin_func_max=0;
+    const char* family="legacy GDScript";
+};
+
+bool validate_legacy_prefix(std::span<const std::uint8_t>data,GDScriptBufferInfo&out,const char*family,LegacyVariantParser variant_parser,Cursor&tail){
+    if(data.size()<24){out.failure_stage="header";out.error=std::string(family)+" buffer is shorter than 24-byte header";return false;}
+    out.identifier_count=u32(data,8);out.constant_count=u32(data,12);out.token_line_count=u32(data,16);out.token_count=u32(data,20);out.payload_bytes=data.size()-24;
+    if(out.identifier_count>kMaxTableCount||out.constant_count>kMaxTableCount||out.token_line_count>kMaxTableCount||out.token_count>kMaxTableCount||!out.token_count||!out.token_line_count||out.token_line_count>out.token_count){out.failure_stage="table_header";out.error=std::string(family)+" table count is outside bounded geometry";return false;}
+    Cursor c{data,24};
+    for(std::uint32_t i=0;i<out.identifier_count;++i){if(!legacy_identifier(c)){out.failure_stage="identifiers";out.error=std::string(family)+" identifier XOR/UTF-8 plane failed canonical decoding";return false;}}
+    std::size_t nodes=0;
+    for(std::uint32_t i=0;i<out.constant_count;++i){if(!variant_parser(c,0,nodes)){out.failure_stage="constants";out.error=std::string(family)+" Variant constant serialization failed structural decoding";return false;}}
+    tail=c;return true;
+}
+
+LegacyTailPlanes parse_legacy_tail(Cursor c,std::uint32_t line_count,std::uint32_t token_count,const char*family){
+    LegacyTailPlanes out;out.maps.reserve(line_count);out.tokens.reserve(token_count);
+    std::uint32_t prev_token=0,prev_line=0;bool have=false;std::set<std::uint32_t>line_tokens;
+    for(std::uint32_t i=0;i<line_count;++i){
+        if(c.bytes.size()-c.pos<8){out.failure_stage="lines";out.error=std::string(family)+" sparse line map is truncated";return out;}
+        const auto ti=u32(c.bytes,c.pos),linecol=u32(c.bytes,c.pos+4),line=linecol&0x00ffffffu;c.pos+=8;
+        if(ti>=token_count||!line_tokens.insert(ti).second||(have&&(ti<=prev_token||line<prev_line))){out.failure_stage="lines";out.error=std::string(family)+" sparse line map is noncanonical or references outside token stream";return out;}
+        prev_token=ti;prev_line=line;have=true;out.maps.push_back({ti,linecol});
+    }
+    if(!line_tokens.count(0)){out.failure_stage="lines";out.error=std::string(family)+" sparse line map does not anchor token zero";return out;}
+    for(std::uint32_t i=0;i<token_count;++i){
+        if(c.pos>=c.bytes.size()){out.failure_stage="tokens";out.error=std::string(family)+" token stream is truncated";return out;}
+        const auto start=c.pos;const bool wide=(c.bytes[c.pos]&0x80u)!=0;std::uint32_t word=0;
+        if(wide){if(c.bytes.size()-c.pos<4){out.failure_stage="tokens";out.error=std::string(family)+" wide token is truncated";return out;}word=u32(c.bytes,c.pos)&~0x80u;c.pos+=4;}
+        else{word=c.bytes[c.pos++];}
+        if((word>0xffu)!=wide){out.failure_stage="tokens";out.error=std::string(family)+" token does not use canonical 1/4-byte encoding";return out;}
+        out.tokens.push_back({start,word,wide?4u:1u});
+    }
+    if(c.pos!=c.bytes.size()){out.failure_stage="payload_tail";out.error=std::string("bytes remain after ")+family+" tables and token stream";return out;}
+    out.valid=true;return out;
+}
+
+bool validate_legacy_token_semantics(const LegacyTailPlanes&tail,const GDScriptBufferInfo&info,const LegacyTokenSemantics&sem,std::string&error){
+    for(std::size_t i=0;i<tail.tokens.size();++i){
+        const auto type=tail.tokens[i].word&0xffu,data_index=tail.tokens[i].word>>8;
+        if(type>=sem.token_max||type==sem.error_token||type==sem.cursor_token){error=std::string(sem.family)+" token is outside the serializable official domain";return false;}
+        bool carries=false;
+        if(type==1){carries=true;if(data_index>=info.identifier_count){error=std::string(sem.family)+" identifier token references outside identifier table";return false;}}
+        else if(type==2){carries=true;if(data_index>=info.constant_count){error=std::string(sem.family)+" constant token references outside constant table";return false;}}
+        else if(type==4){carries=true;if(data_index>=sem.variant_max){error=std::string(sem.family)+" built-in type token references outside Variant type domain";return false;}}
+        else if(type==5){carries=true;if(data_index>=sem.builtin_func_max){error=std::string(sem.family)+" built-in function token references outside verified function domain";return false;}}
+        else if(type==sem.newline_token){carries=true;if(data_index>(1u<<20)){error=std::string(sem.family)+" newline indentation exceeds bounded domain";return false;}}
+        if(!carries&&data_index){error=std::string(sem.family)+" ordinary token carries unexpected data bits";return false;}
+        if((i+1==tail.tokens.size())!=(type==sem.eof_token)){error=std::string(sem.family)+" stream must contain exactly one terminal EOF token";return false;}
+    }
+    return true;
+}
+
+template<class TokenName,class TokenDisplay>
+void populate_legacy_tail_analysis(GDScriptAnalysisInfo&out,const LegacyTailPlanes&tail,const LegacyTokenSemantics&sem,TokenName token_name,TokenDisplay token_display,LegacyVariantTypeName variant_name,const char*line_source){
+    out.lines.reserve(tail.maps.size());
+    std::vector<std::uint32_t>effective_line(tail.tokens.size()),effective_col(tail.tokens.size());std::vector<bool>transition(tail.tokens.size(),false);std::uint32_t current_line=0,current_col=0;
+    for(std::size_t i=0;i<tail.maps.size();++i){const auto [ti,linecol]=tail.maps[i];GDScriptLineInfo row;row.index=i;row.token_index=ti;row.line=linecol&0x00ffffffu;row.column=linecol>>24;row.has_column=true;out.lines.push_back(row);}
+    std::size_t mp=0;for(std::size_t i=0;i<tail.tokens.size();++i){if(mp<tail.maps.size()&&tail.maps[mp].first==i){current_line=tail.maps[mp].second&0x00ffffffu;current_col=tail.maps[mp].second>>24;transition[i]=true;++mp;}effective_line[i]=current_line;effective_col[i]=current_col;}
+    out.tokens.reserve(tail.tokens.size());
+    for(std::size_t i=0;i<tail.tokens.size();++i){const auto&raw=tail.tokens[i];GDScriptTokenInfo row;row.index=i;row.payload_offset=raw.offset;row.record_size=raw.record_size;row.type_id=raw.word&0xffu;row.data=raw.word>>8;row.type=token_name(row.type_id);row.custom=false;row.effective_line_known=true;row.effective_line=effective_line[i];row.effective_line_source=line_source;++out.effective_line_token_count;if(transition[i]){row.position_map_present=true;row.mapped_line=effective_line[i];row.mapped_column=effective_col[i];row.mapped_column_known=true;++out.position_mapped_token_count;++out.mapped_column_token_count;}out.tokens.push_back(std::move(row));}
+    for(auto&row:out.tokens){
+        if(row.type_id==1&&row.data<out.identifiers.size()){auto&id=out.identifiers[row.data];if(!id.referenced){id.referenced=true;id.first_token_index=row.index;}id.last_token_index=row.index;++id.token_reference_count;row.reference_kind="identifier";row.reference=id.text;row.semantic_text_available=true;row.semantic_text_complete=true;row.semantic_text_source="identifier-table";row.semantic_text=row.reference;}
+        else if(row.type_id==2&&row.data<out.constants.size()){auto&constant=out.constants[row.data];if(!constant.referenced){constant.referenced=true;constant.first_token_index=row.index;}constant.last_token_index=row.index;++constant.token_reference_count;++constant.literal_reference_count;row.reference_kind="constant";row.reference=constant.type;if(constant.summary_available)row.reference+=":"+constant.summary;row.semantic_text_available=true;row.semantic_text_complete=constant.summary_available&&constant.summary_complete;row.semantic_text_source="constant-table";row.semantic_text=row.reference;}
+        else if(row.type_id==4){row.semantic_text_available=true;row.semantic_text_complete=true;row.semantic_text_source="official-variant-type";row.semantic_text=variant_name(row.data);}
+        else if(row.type_id==5){row.semantic_text_available=true;row.semantic_text_complete=false;row.semantic_text_source="official-builtin-function-id";row.semantic_text="builtin_func#"+std::to_string(row.data);}
+        else if(row.type_id==sem.newline_token){row.semantic_text_available=true;row.semantic_text_complete=true;row.semantic_text_source="official-token-name+indent";row.semantic_text="Newline(indent="+std::to_string(row.data)+")";}
+        else if(auto text=token_display(row.type_id)){row.semantic_text_available=true;row.semantic_text_complete=true;row.semantic_text_source="official-token-name";row.semantic_text=std::move(*text);}
+        if(row.semantic_text_available){++out.semantic_text_token_count;if(row.semantic_text_complete)++out.semantic_text_complete_token_count;else ++out.semantic_text_incomplete_token_count;}
+    }
+    for(std::size_t i=0;i+1<out.tokens.size();++i){const auto&keyword=out.tokens[i];auto&name=out.tokens[i+1];if(name.type!="IDENTIFIER"||name.data>=out.identifiers.size())continue;auto&id=out.identifiers[name.data];bool paired=true;if(keyword.type=="FUNC")++id.func_identifier_pair_count;else if(keyword.type=="VAR")++id.var_identifier_pair_count;else if(keyword.type=="CONST")++id.const_identifier_pair_count;else if(keyword.type=="SIGNAL")++id.signal_identifier_pair_count;else if(keyword.type=="CLASS_NAME")++id.class_name_identifier_pair_count;else if(keyword.type=="CLASS")++id.class_identifier_pair_count;else if(keyword.type=="ENUM")++id.enum_identifier_pair_count;else if(keyword.type=="EXTENDS")++id.extends_identifier_pair_count;else paired=false;if(paired){name.keyword_identifier_pair_present=true;name.keyword_identifier_pair_token_index=keyword.index;name.keyword_identifier_pair_keyword=keyword.type;}}
+}
+
+bool populate_legacy_prefix_analysis(std::span<const std::uint8_t>data,GDScriptAnalysisInfo&out,LegacyVariantParser variant_parser,LegacyVariantTypeName variant_name,LegacyConstantSummary constant_summary,Cursor&tail){
+    const auto identifiers=u32(data,8),constants=u32(data,12);Cursor c{data,24};out.identifiers.reserve(identifiers);
+    for(std::uint32_t i=0;i<identifiers;++i){const auto start=c.pos;GDScriptIdentifierInfo row;row.index=i;row.payload_offset=start;if(!legacy_identifier(c,&row.text)){out.error="legacy identifier plane changed after validation";return false;}out.identifiers.push_back(std::move(row));}
+    out.constants.reserve(constants);std::size_t nodes=0;
+    for(std::uint32_t i=0;i<constants;++i){const auto start=c.pos;Cursor next=c;if(!variant_parser(next,0,nodes)){out.error="legacy constant plane changed after validation";return false;}GDScriptConstantInfo row;row.index=i;row.payload_offset=start;row.encoded_size=next.pos-start;row.type_id=u32(data,start)&0xffu;row.type=variant_name(row.type_id);if(auto summary=constant_summary(data.subspan(start,row.encoded_size))){row.summary_available=true;row.summary_complete=summary->complete;row.summary=std::move(summary->text);}out.constants.push_back(std::move(row));c=next;}
+    tail=c;return true;
+}
+
+bool validate_gdscript_v10(std::span<const std::uint8_t>data,GDScriptBufferInfo&out,const Godot2TokenProfile**resolved_profile=nullptr){
+    out.tokenizer_version=kTokenizerVersion10;out.decompressed_size=0;out.compression="none";out.compression_valid=true;Cursor tail_cursor;
+    if(!validate_legacy_prefix(data,out,"Godot 2 tokenizer-v10",godot2_variant,tail_cursor))return false;
+    auto tail=parse_legacy_tail(tail_cursor,out.token_line_count,out.token_count,"Godot 2 tokenizer-v10");if(!tail.valid){out.failure_stage=tail.failure_stage;out.error=tail.error;return false;}
+    const auto*profile=godot2_token_profile_from_eof(tail.tokens.back().word&0xffu);if(!profile){out.failure_stage="tokens";out.error="Godot 2 tokenizer-v10 terminal token does not uniquely resolve the official pre/post-enum token epoch";return false;}
+    LegacyTokenSemantics sem{profile->token_max,profile->error_token,profile->eof_token,profile->cursor_token,profile->newline_token,kGodot2VariantMax,kGodot2BuiltinFuncMax,"Godot 2 tokenizer-v10"};std::string error;if(!validate_legacy_token_semantics(tail,out,sem,error)){out.failure_stage="tokens";out.error=std::move(error);return false;}
+    if(resolved_profile)*resolved_profile=profile;
+    out.structurally_valid=true;out.official_compatible=true;out.failure_stage.clear();out.error.clear();return true;
+}
+
+GDScriptAnalysisInfo analyze_gdscript_v10(std::span<const std::uint8_t>data){
+    GDScriptAnalysisInfo out;GDScriptBufferInfo verified;verified.header_valid=data.size()>=8&&data[0]=='G'&&data[1]=='D'&&data[2]=='S'&&data[3]=='C';const Godot2TokenProfile*profile=nullptr;if(!verified.header_valid||!validate_gdscript_v10(data,verified,&profile)){out.tokenizer_version=kTokenizerVersion10;out.error=verified.error.empty()?"invalid Godot 2 tokenizer-v10 buffer":verified.error;return out;}
+    out.state="CONFIRMED";out.variant="official-compatible";out.tokenizer_version=kTokenizerVersion10;out.compression="none";out.decompressed_size=0;out.token_record_size=0;out.line_record_size=8;out.offset_space="current_input_file";out.input_bytes=data.size();out.input_sha256=sha256_bytes(data);const auto payload=data.subspan(24);out.payload_bytes=payload.size();out.payload_sha256=sha256_bytes(payload);out.analysis_set_id=out.input_sha256+":"+out.payload_sha256;out.official_version_scope=profile==&kGodot2PreEnumProfile?"Godot 2.1.1/2.1.2 tokenizer-v10 pre-enum token profile":"Godot 2.1.3-2.1.5 tokenizer-v10 post-enum token profile";out.official_version_basis=std::string("tokenizer-v10 wire format; terminal EOF uniquely resolved ")+profile->id+"; built-in function IDs remain numeric because 2.1.2 inserted ColorN without changing BYTECODE_VERSION";
+    Cursor tail_cursor;if(!populate_legacy_prefix_analysis(data,out,godot2_variant,godot2_variant_type_name,godot2_constant_summary,tail_cursor))return out;auto tail=parse_legacy_tail(tail_cursor,u32(data,16),u32(data,20),"Godot 2 tokenizer-v10");if(!tail.valid){out.error=tail.error;return out;}
+    LegacyTokenSemantics sem{profile->token_max,profile->error_token,profile->eof_token,profile->cursor_token,profile->newline_token,kGodot2VariantMax,kGodot2BuiltinFuncMax,"Godot 2 tokenizer-v10"};populate_legacy_tail_analysis(out,tail,sem,[&](std::uint32_t type){return godot2_token_type_name(type,*profile);},[&](std::uint32_t type){return godot2_token_display_text(type,*profile);},godot2_variant_type_name,"v10-sparse-line-map");out.valid=true;out.error.clear();return out;
+}
+
+bool validate_gdscript_v13(std::span<const std::uint8_t>data,GDScriptBufferInfo&out){
+    out.tokenizer_version=kTokenizerVersion13;out.decompressed_size=0;out.compression="none";out.compression_valid=true;Cursor tail_cursor;
+    if(!validate_legacy_prefix(data,out,"Godot 3 tokenizer-v13",legacy_variant,tail_cursor))return false;
+    auto tail=parse_legacy_tail(tail_cursor,out.token_line_count,out.token_count,"Godot 3 tokenizer-v13");
+    if(!tail.valid){out.failure_stage=tail.failure_stage;out.error=tail.error;return false;}
+    LegacyTokenSemantics sem{kLegacyTokenizerTkMax13,95,96,97,89,kLegacyVariantMax,kLegacyBuiltinFuncMax,"Godot 3 tokenizer-v13"};std::string error;if(!validate_legacy_token_semantics(tail,out,sem,error)){out.failure_stage="tokens";out.error=std::move(error);return false;}out.structurally_valid=true;out.official_compatible=true;out.failure_stage.clear();out.error.clear();return true;
+}
+
+GDScriptAnalysisInfo analyze_gdscript_v13(std::span<const std::uint8_t>data){
+    GDScriptAnalysisInfo out;GDScriptBufferInfo verified;verified.header_valid=data.size()>=8&&data[0]=='G'&&data[1]=='D'&&data[2]=='S'&&data[3]=='C';if(!verified.header_valid||!validate_gdscript_v13(data,verified)){out.tokenizer_version=kTokenizerVersion13;out.error=verified.error.empty()?"invalid Godot 3 tokenizer-v13 buffer":verified.error;return out;}
+    out.state="CONFIRMED";out.variant="official-compatible";out.tokenizer_version=kTokenizerVersion13;out.compression="none";out.decompressed_size=0;out.token_record_size=0;out.line_record_size=8;out.offset_space="current_input_file";out.input_bytes=data.size();out.input_sha256=sha256_bytes(data);const auto payload=data.subspan(24);out.payload_bytes=payload.size();out.payload_sha256=sha256_bytes(payload);out.analysis_set_id=out.input_sha256+":"+out.payload_sha256;out.official_version_scope="Godot 3 official tokenizer-v13 profile";out.official_version_basis="tokenizer-v13 wire format verified against Godot 3.2.1/3.3.2/3.4.4; engine minor is not encoded";
+    Cursor tail_cursor;if(!populate_legacy_prefix_analysis(data,out,legacy_variant,legacy_variant_type_name,legacy_constant_summary,tail_cursor))return out;auto tail=parse_legacy_tail(tail_cursor,u32(data,16),u32(data,20),"Godot 3 tokenizer-v13");if(!tail.valid){out.error=tail.error;return out;}
+    LegacyTokenSemantics sem{kLegacyTokenizerTkMax13,95,96,97,89,kLegacyVariantMax,kLegacyBuiltinFuncMax,"Godot 3 tokenizer-v13"};populate_legacy_tail_analysis(out,tail,sem,[](std::uint32_t type){return legacy_token_type_name(type);},[](std::uint32_t type){return legacy_token_display_text(type);},legacy_variant_type_name,"v13-sparse-line-map");out.valid=true;out.error.clear();return out;
+}
+
 bool decode_analysis_payload(std::span<const std::uint8_t> data, std::size_t max_decompressed_size,
                              std::vector<std::uint8_t>& decoded, std::span<const std::uint8_t>& contents,
                              std::string& error) {
@@ -833,11 +1172,13 @@ GDScriptBufferInfo validate_gdscript_buffer_versioned(std::span<const std::uint8
     }
     out.header_valid = true;
     out.tokenizer_version = u32(data, 4);
+    if(out.tokenizer_version==kTokenizerVersion10){validate_gdscript_v10(data,out);return out;}
+    if(out.tokenizer_version==kTokenizerVersion13){validate_gdscript_v13(data,out);return out;}
     out.decompressed_size = u32(data, 8);
     const auto profile = tokenizer_profile(out.tokenizer_version);
     if (!profile) {
         out.failure_stage = "version";
-        out.error = "unsupported official GDScript tokenizer version (supported: 100 for Godot 4.3/4.4, 101 for Godot 4.5)";
+        out.error = "unsupported official GDScript tokenizer version (supported: 10 for verified Godot 2.1.x, 13 for verified Godot 3.x, 100 for Godot 4.3/4.4, 101 for Godot 4.5)";
         return out;
     }
 
@@ -1015,6 +1356,7 @@ GDScriptLayoutInfo infer_gdscript_layout(std::span<const std::uint8_t> data,
 GDScriptAnalysisInfo analyze_gdscript_buffer(std::span<const std::uint8_t> data,
                                               std::size_t max_decompressed_size) {
     GDScriptAnalysisInfo out;
+    if(data.size()>=8&&data[0]=='G'&&data[1]=='D'&&data[2]=='S'&&data[3]=='C'){const auto version=u32(data,4);if(version==kTokenizerVersion10)return analyze_gdscript_v10(data);if(version==kTokenizerVersion13)return analyze_gdscript_v13(data);}
     const auto layout = infer_gdscript_layout(data, max_decompressed_size);
     out.state = layout.state;
     out.variant = layout.variant;

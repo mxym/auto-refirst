@@ -30,12 +30,14 @@ std::uint64_t strict_small_immediate_digest(std::span<const std::uint8_t>d,const
 struct Candidate {std::uint32_t load_rva=0,table_rva=0,exec_count=0,unique=0;std::uint16_t first_opcode=0,entry_count=0;std::vector<std::uint32_t>handlers;};
 std::optional<Candidate> validate_table(std::span<const std::uint8_t>d,const PeInfo&pe,std::uint32_t load,std::uint64_t table_va,std::uint16_t first_opcode,std::uint16_t entry_count){
     if(entry_count<96||entry_count>256||std::uint32_t(first_opcode)+entry_count>256)return{};
-    if(table_va<pe.image_base||table_va-pe.image_base>0xffffffffull)return{};auto tr=static_cast<std::uint32_t>(table_va-pe.image_base);auto off=rvaoff(pe,tr,d.size());if(!off||*off+std::size_t(entry_count)*4>d.size())return{};
+    if(table_va<pe.image_base||table_va-pe.image_base>0xffffffffull)return{};
+    auto tr=static_cast<std::uint32_t>(table_va-pe.image_base);auto off=rvaoff(pe,tr,d.size());if(!off||*off+std::size_t(entry_count)*4>d.size())return{};
     Candidate c;c.load_rva=load;c.table_rva=tr;c.first_opcode=first_opcode;c.entry_count=entry_count;c.handlers.resize(entry_count);std::set<std::uint32_t>uniq;
     for(unsigned i=0;i<entry_count;i++){auto v=u32(d,*off+i*4);c.handlers[i]=v;if(exec_rva(pe,v)){++c.exec_count;uniq.insert(v);}}
     c.unique=static_cast<std::uint32_t>(uniq.size());
     // CPython switch tables are overwhelmingly executable targets; reject incidental integer arrays.
-    if(c.exec_count+4<entry_count||c.unique<60)return{};return c;
+    if(c.exec_count+4<entry_count||c.unique<60)return{};
+    return c;
 }
 }
 CPythonDispatchInfo recover_cpython_dispatch(std::span<const std::uint8_t>d,const PeInfo&pe,bool fingerprint_handlers){

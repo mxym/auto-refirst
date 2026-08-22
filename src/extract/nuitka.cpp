@@ -26,7 +26,8 @@ std::vector<NuitkaConstantBlock> parse_constant_directory(std::span<const std::u
         while(q<d.size()&&q-p<512&&d[q]){auto c=d[q];if(c<0x20||c>0x7e)return out;++q;}
         if(q>=d.size()||q-p>=512)return out;
         std::string name(reinterpret_cast<const char*>(d.data()+p),q-p);p=q+1;
-        if(p+4>d.size())return out;auto sz=u32(d,p);p+=4;if(!sz||sz>d.size()-p)return out;
+        if(p+4>d.size())return out;
+        auto sz=u32(d,p);p+=4;if(!sz||sz>d.size()-p)return out;
         out.push_back({std::move(name),h,p,sz});p+=sz;
         if(p>=d.size())break;
         // If the next header is not plausible, this was the final valid block.
@@ -34,7 +35,8 @@ std::vector<NuitkaConstantBlock> parse_constant_directory(std::span<const std::u
         if(t>=d.size()||t-p>=512||t+5>d.size())break;
         auto nsz=u32(d,t+1);if(!nsz||nsz>d.size()-(t+5))break;
     }
-    if(!out.empty())total=p-start;return out;
+    if(!out.empty())total=p-start;
+    return out;
 }
 std::optional<std::pair<std::uint64_t,std::vector<NuitkaConstantBlock>>> find_constant_blob(std::span<const std::uint8_t>d){
     constexpr std::string_view mark=".bytecode";std::size_t pos=0;

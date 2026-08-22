@@ -1,5 +1,6 @@
 #pragma once
 #include "prts/finding.hpp"
+#include "prts/godot.hpp"
 #include "prts/implicit_exec.hpp"
 
 #include <cstdint>
@@ -92,6 +93,15 @@ struct ApkEntryInfo {
     bool resources_table = false;
     bool native_library = false;
     bool native_elf = false;
+    bool godot_legacy_engine_config_candidate = false;
+    bool godot_legacy_engine_config_valid = false;
+    std::string godot_legacy_engine_config_error;
+    bool unity_il2cpp_metadata_candidate = false;
+    bool unity_il2cpp_metadata_valid = false;
+    bool unity_il2cpp_metadata_parse_skipped_budget = false;
+    std::int32_t unity_il2cpp_metadata_version = 0;
+    std::string unity_il2cpp_metadata_layout;
+    std::string unity_il2cpp_metadata_error;
     std::string native_deep_state = "NOT_ATTEMPTED";
     std::string native_deep_error;
     std::string native_dynamic_state;
@@ -178,6 +188,14 @@ struct ApkInfo {
     std::uint32_t native_jni_onload_count = 0;
     std::uint32_t native_abi_mismatch_count = 0;
     std::uint32_t native_deep_skipped_budget_count = 0;
+    std::uint32_t godot_legacy_engine_config_candidate_count = 0;
+    std::uint32_t godot_legacy_engine_config_valid_count = 0;
+    GodotLegacyEngineConfigInfo godot_legacy_config;
+    std::uint32_t unity_il2cpp_metadata_candidate_count = 0;
+    std::uint32_t unity_il2cpp_metadata_valid_count = 0;
+    std::uint32_t unity_il2cpp_metadata_parse_count = 0;
+    bool unity_il2cpp_metadata_parse_budget_exhausted = false;
+    std::uint64_t unity_il2cpp_metadata_parse_bytes = 0;
     std::uint64_t native_import_count = 0;
     std::uint64_t native_export_count = 0;
     std::uint64_t native_relocation_count = 0;

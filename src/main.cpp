@@ -7,6 +7,7 @@
 #include "prts/dotnet.hpp"
 #include "prts/file_snapshot.hpp"
 #include "prts/godot.hpp"
+#include "prts/gdextension.hpp"
 #include "prts/semantic_producers.hpp"
 #include "prts/repair.hpp"
 #include "prts/gdscript.hpp"
@@ -48,6 +49,8 @@
 #include "prts/continuation.hpp"
 #include "prts/control_record.hpp"
 #include "prts/path_utf8.hpp"
+#include "prts/build_metadata.hpp"
+#include "prts/report_schema.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -110,11 +113,35 @@ struct Options {
     bool suppress_auto_materialization=false;
 };
 
+enum class ExitCode : int {
+    Success = 0,
+    SearchNoMatch = 1,
+    Usage = 2,
+    Input = 3,
+    Internal = 4,
+};
 
-constexpr const char* kVersion = "0.1.0-alpha.1";
+constexpr int exit_code(ExitCode code){return static_cast<int>(code);}
+
+int finish_standard_output(ExitCode code){
+    std::cout.flush();
+    if(!std::cout){
+        std::cerr<<"standard output write failed\n";
+        return exit_code(ExitCode::Internal);
+    }
+    return exit_code(code);
+}
+
+
+void print_version(std::ostream& o){
+    o << "auto-refirst " << prts::kProductVersion << "\n"
+      << "git_commit=" << prts::kBuildId << "\n"
+      << "build_platform=" << prts::kBuildPlatform << "\n"
+      << "report_schema_version=" << prts::kReportSchemaVersion << "\n";
+}
 
 void print_help(std::ostream& o){
-    o << "auto-refirst " << kVersion << "\n"
+    o << "auto-refirst " << prts::kProductVersion << "\n"
       << "Usage: auto-refirst <file|directory> [options]\n\n"
       << "Common options:\n"
       << "  -h, --help                 Show this help and exit\n"
@@ -198,6 +225,22 @@ void add_validation_failure(std::vector<prts::Finding>&out,std::string family,st
     f.negative_evidence.push_back(std::move(error));
     f.suggested_actions.push_back("inspect the failed structure as a possible modified, corrupt, or unsupported variant before applying ecosystem-specific tooling");
     out.push_back(std::move(f));
+}
+
+prts::Finding godot_legacy_config_finding(const prts::GodotLegacyEngineConfigInfo&c){
+    prts::Finding f;f.kind="engine_config";f.family="Godot legacy engine.cfb";f.state="CONFIRMED";f.variant="ECFG";
+    f.evidence={"ECFG property table closed exactly over the input using supported Godot 2.x Variant encodings","all retained application/remap/autoload resource paths passed strict res:// path validation"};
+    f.fields["property_count"]=std::to_string(c.property_count);f.fields["application_name"]=c.application_name;f.fields["main_scene"]=c.main_scene;f.fields["remap_count"]=std::to_string(c.remaps.size());f.fields["autoload_count"]=std::to_string(c.autoloads.size());if(!c.icon.empty())f.fields["icon"]=c.icon;
+    f.suggested_actions={"resolve main_scene through remap/all before inspecting lower-priority resources","treat legacy .gdc tokenizer semantics as a separate capability from project packaging"};return f;
+}
+
+prts::Finding gdextension_descriptor_finding(const prts::GDExtensionDescriptorInfo&d){
+    prts::Finding f;f.kind="native_bridge_descriptor";f.family="Godot GDExtension descriptor";f.state="CONFIRMED";
+    f.evidence={"strict UTF-8 descriptor syntax validated configuration.entry_symbol","libraries declarations use bounded feature keys and safe res:// resource paths"};
+    f.fields["entry_symbol"]=d.entry_symbol;f.fields["compatibility_minimum"]=d.compatibility_minimum;f.fields["library_count"]=std::to_string(d.libraries.size());
+    if(d.reloadable_present)f.fields["reloadable"]=d.reloadable?"true":"false";
+    f.suggested_actions={"resolve declared native library paths and validate the configured entry export"};
+    return f;
 }
 
 bool artifact_path_link_or_reparse(const std::filesystem::path&p){
@@ -292,7 +335,7 @@ prts::Finding dart_finding(const prts::DartInfo& d) {
     if (d.aot.valid) {
         const auto& aot = d.aot;
         f.variant = aot.variant;
-        f.evidence.push_back("loader-visible Dart AOT symbol/segment relationships and FullAOT snapshot structure validate");
+        f.evidence.push_back("loader-visible Dart AOT symbol/segment relationships and product AOT/code snapshot structure validate across the known Snapshot::Kind enum epochs");
         f.fields["architecture"] = aot.architecture;
         f.fields["standalone"] = aot.standalone ? "true" : "false";
         f.fields["flutter_symbols"] = aot.flutter_symbols ? "true" : "false";
@@ -307,7 +350,7 @@ prts::Finding dart_finding(const prts::DartInfo& d) {
         }
         for (const auto& x : aot.snapshots) {
             if (x.valid && x.length) {
-                f.ranges.push_back({x.file_offset, std::min<std::uint64_t>(x.length, 4096), "Dart FullAOT snapshot header/reference"});
+                f.ranges.push_back({x.file_offset, std::min<std::uint64_t>(x.length, 4096), "Dart AOT/code snapshot header/reference"});
             }
         }
     } else if (d.kernel.valid) {
@@ -470,7 +513,7 @@ bool parse_options(int argc,char**argv,Options&opt){
         else if(arg=="--apply")opt.apply=true;
         else if(arg=="--run-all")opt.run_all=true;
         else if(arg=="--search-ignore-case")opt.search_ignore_case=true;
-        else if(arg.rfind("--search=",0)==0)opt.search=arg.substr(9);
+        else if(arg.rfind("--search=",0)==0){opt.search=arg.substr(9);if(opt.search.empty()){std::cerr<<"--search requires non-empty text\n";return false;}}
         else if(arg.rfind("--wxid=",0)==0)opt.wxid=arg.substr(7);
         else if(arg.rfind("--run=",0)==0){opt.run_requested=true;opt.run_mode=arg.substr(6);}
         else if(arg.rfind("--timeout=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(10),v)||v==0||v>3600000){std::cerr<<"invalid timeout (1..3600000 ms): "<<arg<<"\n";return false;}opt.timeout_ms=static_cast<std::uint32_t>(v);}
@@ -794,12 +837,141 @@ void register_container_artifacts(prts::AnalysisReport&report,const std::filesys
     for(const auto&p:report.wxapkg_extract.files){auto r=reltext(p,report.wxapkg_extract.output_dir);const bool code=r.ends_with(".js")||r.ends_with(".wxs")||r.ends_with(".wxml")||r.ends_with(".wxss")||r.ends_with(".json");add(p,"wxapkg_member",code?"app_code":"container_member","wxapkg",code?"HIGH":"BULK");}
     for(const auto&p:report.asar_extract.files){auto r=prts::path_utf8(p.lexically_normal().lexically_relative(report.asar_extract.output_dir.lexically_normal()));const bool interesting=std::find(report.asar.interesting_paths.begin(),report.asar.interesting_paths.end(),r)!=report.asar.interesting_paths.end();add(p,"asar_member",interesting?"app_code":"container_member","Electron ASAR",interesting?"HIGH":"BULK");}
     for(const auto&p:report.autoit_extract.files){auto r=reltext(p,report.autoit_extract.output_dir);const bool code=r=="script.au3"||r=="script.tok";add(p,"autoit_member",code?"user_script":"container_member","AutoIt",code?"HIGH":"BULK");}
-    for(const auto&p:report.apk_extract.files){auto r=reltext(p,report.apk_extract.output_dir);const bool code=r.ends_with(".dex")||r.ends_with(".so")||r.ends_with(".wasm")||r.ends_with(".jar")||r.ends_with(".zip");const bool manifest=r=="androidmanifest.xml";add(p,"apk_member",code?"analysis_child":(manifest?"manifest":"container_member"),"Android APK",code?"HIGH":(manifest?"ANALYSIS":"BULK"));}
+    std::set<std::string>apk_unity_metadata;for(const auto&e:report.apk.entries)if(e.unity_il2cpp_metadata_valid&&!e.normalized_name.empty())apk_unity_metadata.insert(lower(e.normalized_name));
+    for(const auto&p:report.apk_extract.files){auto r=reltext(p,report.apk_extract.output_dir);const bool unity_metadata=apk_unity_metadata.count(r)!=0;const bool code=r.ends_with(".dex")||r.ends_with(".so")||r.ends_with(".wasm")||r.ends_with(".jar")||r.ends_with(".zip")||unity_metadata;const bool manifest=r=="androidmanifest.xml";add(p,unity_metadata?"unity_il2cpp_metadata":"apk_member",unity_metadata?"il2cpp_metadata":(code?"analysis_child":(manifest?"manifest":"container_member")),"Android APK",code?"HIGH":(manifest?"ANALYSIS":"BULK"));}
     for(const auto&p:report.jar_extract.files){auto r=reltext(p,report.jar_extract.output_dir);const bool code=r.ends_with(".class")||r.ends_with(".jar")||r.ends_with(".zip");const bool manifest=r=="meta-inf/manifest.mf";add(p,"jar_member",code?"analysis_child":(manifest?"manifest":"container_member"),"Java/JVM archive",code?"HIGH":(manifest?"ANALYSIS":"BULK"));}
     for(const auto&p:report.nuitka_extract.files){auto r=reltext(p,report.nuitka_extract.output_dir);const bool main=r=="main.bin"||r=="__main__.bin"||r.ends_with(".exe");const bool map=r.ends_with(".nuitka-const.txt");add(p,"nuitka_member",main?"main_payload":(map?"analysis_map":"container_member"),"Nuitka",main?"HIGH":(map?"ANALYSIS":"BULK"));}
     std::set<std::string>godot_validated_native;for(const auto&b:report.godot.gdextensions)for(const auto&l:b.libraries)if(l.child_validated&&!l.matched_child_path.empty()){auto q=lower(l.matched_child_path);if(q.rfind("res://",0)==0)q.erase(0,6);godot_validated_native.insert(q);}
     for(const auto&p:report.godot_extract.files){auto r=reltext(p,report.godot_extract.output_dir);const bool code=r.ends_with(".gdc")||r.ends_with(".gd")||r.ends_with(".gdextension")||r=="project.binary"||r=="project.godot";const bool native=godot_validated_native.count(r)!=0;add(p,"godot_member",native?"native_extension":(code?"script_or_project":"container_member"),"Godot PCK",(code||native)?"HIGH":"BULK");if(r.ends_with(".gdc"))for(const auto*suf:{".godot-script-info.json",".godot-identifiers.csv",".godot-constants.csv",".godot-lines.csv",".godot-tokens.csv"}){auto q=prts::path_with_ascii_suffix(p,suf);register_artifact_file(report,q,"gdscript_analysis","analysis_map","Godot GDScript",p,"analysis_of","ANALYSIS");}}
 }
+
+void integrate_apk_godot2_direct_assets(prts::AnalysisReport&report){
+    if(!report.apk.valid||!report.apk_extract.success||report.apk_extract.output_dir.empty()||!report.apk.godot_legacy_config.valid)return;
+    auto artifact_for=[&](const std::filesystem::path&p)->prts::AnalysisArtifact*{for(auto&a:report.artifacts)if(same_regular_file(a.path,p))return &a;return nullptr;};
+    const prts::ApkEntryInfo*config_entry=nullptr;
+    for(const auto&e:report.apk.entries)if(e.godot_legacy_engine_config_candidate&&e.godot_legacy_engine_config_valid&&!e.duplicate_path&&e.safe_path&&!e.symlink&&!e.encrypted&&e.supported){if(config_entry){config_entry=nullptr;break;}config_entry=&e;}
+    if(!config_entry)return;
+    const auto config_path=report.apk_extract.output_dir/prts::path_from_utf8(config_entry->normalized_name);auto*config_artifact=artifact_for(config_path);
+    prts::Finding f;f.kind="artifact_relationship";f.family="Godot 2.x Android direct assets";f.fields["application_name"]=report.apk.godot_legacy_config.application_name;f.fields["main_scene"]=report.apk.godot_legacy_config.main_scene;f.fields["remap_count"]=std::to_string(report.apk.godot_legacy_config.remaps.size());f.fields["autoload_count"]=std::to_string(report.apk.godot_legacy_config.autoloads.size());f.fields["legacy_gdscript_semantics"]="SEPARATE_STATIC_CHILD_ANALYSIS";
+    if(!config_artifact){f.state="PARTIAL";f.negative_evidence.push_back("validated canonical assets/engine.cfb was not materialized under the current APK analysis budget");report.findings.push_back(std::move(f));return;}
+    config_artifact->kind="godot_legacy_engine_config";config_artifact->role="godot_project_config";config_artifact->priority="HIGH";
+    std::map<std::string,std::string>remap;for(const auto&r:report.apk.godot_legacy_config.remaps)remap.emplace(r.source,r.target);
+    auto resolve=[&](const std::string&source){auto it=remap.find(source);return it==remap.end()?source:it->second;};
+    auto asset_name=[&](const std::string&resource)->std::string{if(resource.rfind("res://",0)!=0)return{};return "assets/"+resource.substr(6);};
+    auto exact_entry=[&](const std::string&name)->const prts::ApkEntryInfo*{const prts::ApkEntryInfo*hit=nullptr;for(const auto&e:report.apk.entries){if(e.normalized_name!=name||e.duplicate_path||!e.safe_path||e.symlink||e.encrypted||!e.supported)continue;if(hit)return nullptr;hit=&e;}return hit;};
+    auto add_relation=[&](const std::string&kind,const std::string&role,const std::string&source_key,const std::string&source_resource,const std::string&target_resource,const prts::ApkEntryInfo&target,const std::filesystem::path&target_path,const std::string&reason){
+        prts::ArtifactRelationship x;x.first=config_path;x.second=target_path;x.directed=true;x.kind=kind;x.state="CONFIRMED";x.first_role="godot_project_config";x.second_role=role;x.first_relation_role="resource_reference_source";x.second_relation_role="resource_reference_target";
+        x.evidence_basis="validated Godot 2.x ECFG "+source_key+" exact res:// reference"+(source_resource==target_resource?std::string{}:" plus exact remap/all source->target mapping")+" closes to one safe non-duplicate APK asset member under the canonical Android res:// -> assets/ export/read mapping";
+        x.evidence_source="Godot 2.x ECFG parser + APK central/local member integrity + canonical Godot 2.1.5 Android asset mapping";
+        x.source_coordinate="APK_member:"+config_entry->normalized_name+";central_directory_offset="+std::to_string(config_entry->central_directory_offset)+";ECFG:"+source_key+"="+source_resource+(source_resource==target_resource?std::string{}:";remap_target="+target_resource);
+        x.target_coordinate="APK_member:"+target.normalized_name+";central_directory_offset="+std::to_string(target.central_directory_offset)+";local_header_offset="+std::to_string(target.local_header_offset);
+        x.provenance_scope="same validated APK; exact Godot 2.x startup-resource dependency only; target RSRC/GDSC semantics are not claimed unless their independent parsers validate";x.evidence_level="R3_EXACT_DATA_DEPENDENCY";x.ambiguity="NONE";x.semantic_relevance="DATA_DEPENDENCY";x.priority_eligible=false;x.reason=reason;
+        report.artifact_relationships.push_back(std::move(x));
+    };
+    std::size_t main_relations=0,autoload_relations=0,autoload_missing=0;
+    const auto main_target_resource=resolve(report.apk.godot_legacy_config.main_scene);const auto main_asset=asset_name(main_target_resource);const auto*main_entry=exact_entry(main_asset);
+    if(main_entry){auto main_path=report.apk_extract.output_dir/prts::path_from_utf8(main_entry->normalized_name);if(auto*ma=artifact_for(main_path)){ma->kind="godot_legacy_resource";ma->role="godot_main_scene";ma->priority="HIGH";add_relation("godot2_android_main_scene","godot_main_scene","application/main_scene",report.apk.godot_legacy_config.main_scene,main_target_resource,*main_entry,main_path,"validated Godot project config selects this exact startup scene asset");++main_relations;f.fields["resolved_main_scene_member"]=main_entry->normalized_name;}}
+    for(const auto&a:report.apk.godot_legacy_config.autoloads){const auto target_resource=resolve(a.path);const auto target_asset=asset_name(target_resource);const auto*entry=exact_entry(target_asset);if(!entry){++autoload_missing;continue;}auto target_path=report.apk_extract.output_dir/prts::path_from_utf8(entry->normalized_name);auto*aa=artifact_for(target_path);if(!aa){++autoload_missing;continue;}aa->kind="godot_legacy_script";aa->role="godot_autoload_script";aa->priority="HIGH";add_relation("godot2_android_autoload","godot_autoload_script","autoload/"+a.name,a.path,target_resource,*entry,target_path,"validated Godot autoload configuration selects this exact packaged script asset");++autoload_relations;}
+    f.fields["main_scene_relations"]=std::to_string(main_relations);f.fields["autoload_relations"]=std::to_string(autoload_relations);f.fields["autoload_unresolved"]=std::to_string(autoload_missing);
+    if(main_relations==1&&autoload_missing==0){f.state="CONFIRMED";f.evidence={"canonical assets/engine.cfb passed bounded Godot 2.x ECFG property/Variant validation","application/main_scene closed through exact remap/all and the canonical Android res:// -> assets/ mapping to one APK member","every configured autoload closed to one exact packaged target under the same mapping"};f.negative_evidence.push_back("exact .gdc delivery does not itself imply script semantics or source decompilation; the delivered child is analyzed independently by the versioned GDScript parser");}
+    else{f.state="PARTIAL";if(!main_relations)f.negative_evidence.push_back("configured main_scene/remap target did not close to one materialized safe APK member");if(autoload_missing)f.negative_evidence.push_back(std::to_string(autoload_missing)+" configured autoload target(s) did not close uniquely under the current package/budget");}
+    report.findings.push_back(std::move(f));
+}
+
+void integrate_apk_unity_il2cpp_delivery(prts::AnalysisReport&report){
+    if(!report.apk.valid||!report.apk_extract.success||report.apk_extract.output_dir.empty())return;
+    auto lower=[](std::string x){std::transform(x.begin(),x.end(),x.begin(),[](unsigned char c){return char(std::tolower(c));});return x;};
+    auto basename=[](const std::string&s){auto p=s.find_last_of("/\\");return p==std::string::npos?s:s.substr(p+1);};
+    std::vector<const prts::ApkEntryInfo*>metadata,natives;
+    for(const auto&e:report.apk.entries){
+        if(e.duplicate_path||!e.safe_path||e.symlink||e.encrypted||!e.supported)continue;
+        if(e.unity_il2cpp_metadata_valid)metadata.push_back(&e);
+        if(e.native_library&&e.native_elf&&e.native_deep_state=="ELF_VALID"&&e.native_abi_consistent_known&&e.native_abi_consistent&&lower(basename(e.normalized_name))=="libil2cpp.so")natives.push_back(&e);
+    }
+    if(metadata.empty()&&!report.apk.unity_il2cpp_metadata_parse_budget_exhausted)return;
+    prts::Finding f;f.kind="artifact_relationship";f.family="Unity IL2CPP APK delivery";f.fields["metadata_candidates"]=std::to_string(metadata.size());f.fields["native_candidates"]=std::to_string(natives.size());f.fields["registration_state"]="UNRESOLVED";
+    if(report.apk.unity_il2cpp_metadata_parse_budget_exhausted){f.state="UNRESOLVED";f.negative_evidence.push_back("IL2CPP metadata candidate parse budget was exhausted; unparsed candidates prevent endpoint uniqueness from being established");report.findings.push_back(std::move(f));return;}
+    if(metadata.size()!=1){f.state="UNRESOLVED";f.negative_evidence.push_back("multiple independently validated IL2CPP metadata members exist in the same APK; no unique metadata endpoint is selected");report.findings.push_back(std::move(f));return;}
+    const auto*md=metadata.front();auto mdpath=report.apk_extract.output_dir/prts::path_from_utf8(md->normalized_name);
+    auto artifact_for=[&](const std::filesystem::path&p)->prts::AnalysisArtifact*{for(auto&a:report.artifacts)if(same_regular_file(a.path,p))return &a;return nullptr;};
+    auto*ma=artifact_for(mdpath);if(!ma){f.state="PARTIAL";f.negative_evidence.push_back("validated IL2CPP metadata member was not materialized under the current APK analysis budget");report.findings.push_back(std::move(f));return;}
+    ma->kind="unity_il2cpp_metadata";ma->role="il2cpp_metadata";ma->priority="HIGH";
+    std::size_t related=0;std::set<std::string>abis;
+    for(const auto*n:natives){
+        auto np=report.apk_extract.output_dir/prts::path_from_utf8(n->normalized_name);auto*na=artifact_for(np);if(!na)continue;
+        na->role="il2cpp_runtime";na->priority="HIGH";abis.insert(n->abi);
+        prts::ArtifactRelationship x;x.first=mdpath;x.second=np;x.directed=false;x.kind="unity_il2cpp_apk_delivery_pair";x.state="CONFIRMED";x.first_role="il2cpp_metadata";x.second_role="il2cpp_runtime";x.first_relation_role="validated_package_member";x.second_relation_role="validated_package_member";
+        x.evidence_basis="one structurally validated IL2CPP global-metadata member and one validated ABI-consistent ELF libil2cpp.so are exact members of the same validated APK";x.evidence_source="APK central-directory/local-header integrity + Unity IL2CPP metadata parser + ELF/ABI validation";
+        x.source_coordinate="APK_member:"+md->normalized_name+";central_directory_offset="+std::to_string(md->central_directory_offset)+";local_header_offset="+std::to_string(md->local_header_offset);
+        x.target_coordinate="APK_member:"+n->normalized_name+";central_directory_offset="+std::to_string(n->central_directory_offset)+";local_header_offset="+std::to_string(n->local_header_offset)+";abi="+n->abi;
+        x.provenance_scope="same validated APK delivery package; confirms a structural IL2CPP metadata/runtime pair only; CodeRegistration, MetadataRegistration and managed-method-to-native mapping remain unresolved unless independently proven";
+        x.evidence_level="R2_STRUCTURAL_RELATION";x.ambiguity="NONE";x.semantic_relevance="STRUCTURAL";x.priority_eligible=false;x.reason="validated APK packaging closes a Unity IL2CPP delivery pair without claiming registration semantics";
+        bool duplicate=false;for(const auto&prior:report.artifact_relationships)if(prior.kind==x.kind&&((same_regular_file(prior.first,x.first)&&same_regular_file(prior.second,x.second))||(same_regular_file(prior.first,x.second)&&same_regular_file(prior.second,x.first)))){duplicate=true;break;}
+        if(!duplicate){report.artifact_relationships.push_back(std::move(x));++related;}
+    }
+    f.fields["metadata_member"]=md->normalized_name;f.fields["metadata_version"]=std::to_string(md->unity_il2cpp_metadata_version);f.fields["metadata_layout"]=md->unity_il2cpp_metadata_layout;f.fields["delivery_relation_count"]=std::to_string(related);
+    std::string abi_text;for(const auto&a:abis){if(!abi_text.empty())abi_text+=',';abi_text+=a;}f.fields["native_abis"]=abi_text;
+    if(related){f.state="CONFIRMED";f.evidence={"global-metadata.dat passed the existing Unity IL2CPP metadata parser before child admission","lib/<abi>/libil2cpp.so passed APK member integrity, ELF parsing and ABI-consistency validation","both endpoints are exact materialized members of the same validated APK"};f.negative_evidence.push_back("delivery pairing does not establish CodeRegistration or managed MethodDef native RVAs");}
+    else{f.state="PARTIAL";f.negative_evidence.push_back("validated IL2CPP metadata is present, but no materialized ABI-consistent ELF libil2cpp.so endpoint closed under the current evidence/budget");}
+    report.findings.push_back(std::move(f));
+}
+
+std::vector<std::size_t> bounded_exact_ascii_offsets(std::span<const std::uint8_t>d,std::string_view needle,std::size_t cap=2){
+    std::vector<std::size_t> hits;if(needle.empty()||d.size()<needle.size())return hits;
+    std::size_t pos=0;auto hex=[](unsigned char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');};
+    while(pos+needle.size()<=d.size()&&hits.size()<cap){
+        auto it=std::search(d.begin()+static_cast<std::ptrdiff_t>(pos),d.end(),needle.begin(),needle.end());if(it==d.end())break;
+        auto off=static_cast<std::size_t>(it-d.begin());const bool left=off==0||!hex(d[off-1]);const bool right=off+needle.size()==d.size()||!hex(d[off+needle.size()]);if(left&&right)hits.push_back(off);pos=off+1;
+    }return hits;
+}
+
+bool bytes_contain_ascii(std::span<const std::uint8_t>d,std::string_view needle){return !needle.empty()&&d.size()>=needle.size()&&std::search(d.begin(),d.end(),needle.begin(),needle.end())!=d.end();}
+
+void integrate_apk_flutter_aot_delivery(prts::AnalysisReport&report){
+    if(!report.apk.valid||!report.apk_extract.success||report.apk_extract.output_dir.empty())return;
+    auto lower=[](std::string x){std::transform(x.begin(),x.end(),x.begin(),[](unsigned char c){return char(std::tolower(c));});return x;};
+    auto leaf=[](const std::string&s){auto p=s.find_last_of("/\\");return p==std::string::npos?s:s.substr(p+1);};
+    auto artifact_for=[&](const std::filesystem::path&p)->prts::AnalysisArtifact*{for(auto&a:report.artifacts)if(same_regular_file(a.path,p))return &a;return nullptr;};
+    std::map<std::string,const prts::ApkEntryInfo*>apps,engines;
+    const prts::ApkEntryInfo*manifest_entry=nullptr;std::size_t manifest_candidates=0;
+    for(const auto&e:report.apk.entries){
+        if(e.duplicate_path||!e.safe_path||e.symlink||e.encrypted||!e.supported)continue;
+        auto low=lower(e.normalized_name);
+        if(low=="assets/flutter_assets/assetmanifest.bin"){manifest_entry=&e;++manifest_candidates;continue;}
+        if(!e.native_library||!e.native_elf||e.native_deep_state!="ELF_VALID"||!e.native_abi_consistent_known||!e.native_abi_consistent)continue;
+        auto name=lower(leaf(low));if(name=="libapp.so")apps.emplace(e.abi,&e);else if(name=="libflutter.so")engines.emplace(e.abi,&e);
+    }
+    if(apps.empty()&&engines.empty()&&!manifest_entry)return;
+    prts::Finding f;f.kind="artifact_relationship";f.family="Flutter APK AOT delivery";f.fields["app_candidates"]=std::to_string(apps.size());f.fields["engine_candidates"]=std::to_string(engines.size());f.fields["asset_manifest_candidates"]=std::to_string(manifest_candidates);
+    std::size_t compatible=0,manifest_relations=0,structural_apps=0;std::set<std::string>abis,hashes;bool hash_mismatch=false,engine_marker_failure=false;
+    for(const auto&[abi,ae]:apps){
+        auto ai=engines.find(abi);if(ai==engines.end())continue;const auto*ee=ai->second;
+        auto ap=report.apk_extract.output_dir/prts::path_from_utf8(ae->normalized_name);auto ep=report.apk_extract.output_dir/prts::path_from_utf8(ee->normalized_name);auto*aa=artifact_for(ap);auto*ea=artifact_for(ep);if(!aa||!ea)continue;
+        prts::MappedFile am(ap),em(ep);if(!am.valid()||!em.valid())continue;auto aelf=prts::parse_elf(am.bytes());auto eelf=prts::parse_elf(em.bytes());if(!aelf.valid||!eelf.valid)continue;
+        auto dart=prts::detect_dart(am.bytes(),aelf);if(!dart.valid||!dart.aot.valid||!dart.aot.flutter_symbols)continue;
+        std::set<std::string>local_hashes;for(const auto&snap:dart.aot.snapshots)if(snap.valid&&!snap.snapshot_hash.empty())local_hashes.insert(snap.snapshot_hash);
+        if(local_hashes.size()!=1)continue;
+        ++structural_apps;const auto hash=*local_hashes.begin();
+        const bool engine_markers=bytes_contain_ascii(em.bytes(),"Dart_Initialize")&&bytes_contain_ascii(em.bytes(),"FlutterEngine")&&bytes_contain_ascii(em.bytes(),"flutter/shell/platform/android");
+        if(!engine_markers){engine_marker_failure=true;continue;}auto hash_hits=bounded_exact_ascii_offsets(em.bytes(),hash,2);if(hash_hits.size()!=1){hash_mismatch=true;continue;}
+        aa->kind="dart_aot_app";aa->role="dart_aot_app";aa->priority="HIGH";ea->kind="flutter_engine";ea->role="flutter_engine";ea->priority="HIGH";abis.insert(abi);hashes.insert(hash);
+        prts::ArtifactRelationship x;x.first=ep;x.second=ap;x.directed=true;x.kind="flutter_engine_snapshot_compatibility";x.state="CONFIRMED";x.first_role="flutter_engine";x.second_role="dart_aot_app";x.first_relation_role="snapshot_version_consumer";x.second_relation_role="snapshot_version_provider";
+        x.evidence_basis="validated same-ABI Flutter engine ELF contains exactly one boundary-delimited copy of the exact 32-byte Dart snapshot version hash recovered independently from the structurally validated libapp.so VM/isolate data snapshots";x.evidence_source="APK member integrity + ELF dynamic-symbol/load-segment validation + Dart snapshot parser + exact engine byte dependency";
+        x.source_coordinate="APK_member:"+ee->normalized_name+";engine_file_offset="+std::to_string(hash_hits.front())+";engine_snapshot_hash="+hash;x.target_coordinate="APK_member:"+ae->normalized_name+";dart_snapshot_hash="+hash;
+        x.provenance_scope="same validated APK and ABI="+abi+"; confirms exact engine/app snapshot-version compatibility and AOT delivery identity only; it does not deserialize Dart heap objects or execute the app";x.evidence_level="R3_EXACT_DATA_DEPENDENCY";x.ambiguity="NONE";x.semantic_relevance="DATA_DEPENDENCY";x.priority_eligible=false;x.reason="Flutter engine embeds the exact snapshot compatibility hash required by this structurally validated Dart AOT app payload";
+        report.artifact_relationships.push_back(std::move(x));++compatible;
+    }
+    prts::FlutterAssetManifestInfo manifest;
+    std::filesystem::path mp;
+    if(manifest_entry&&manifest_candidates==1){mp=report.apk_extract.output_dir/prts::path_from_utf8(manifest_entry->normalized_name);if(auto*ma=artifact_for(mp)){prts::MappedFile mm(mp);if(mm.valid()){manifest=prts::parse_flutter_asset_manifest(mm.bytes());if(manifest.valid&&manifest.nonempty){ma->kind="flutter_asset_manifest";ma->role="flutter_asset_manifest";ma->priority="HIGH";for(const auto&[abi,ae]:apps){auto ap=report.apk_extract.output_dir/prts::path_from_utf8(ae->normalized_name);auto*aa=artifact_for(ap);if(!aa||aa->role!="dart_aot_app")continue;prts::ArtifactRelationship x;x.first=ap;x.second=mp;x.directed=false;x.kind="flutter_apk_asset_delivery";x.state="CONFIRMED";x.first_role="dart_aot_app";x.second_role="flutter_asset_manifest";x.first_relation_role="validated_package_member";x.second_relation_role="validated_package_member";x.evidence_basis="structurally validated Flutter Dart AOT app member and non-empty StandardMessageCodec AssetManifest.bin are exact canonical members of the same validated APK";x.evidence_source="APK member integrity + Dart AOT parser + Flutter AssetManifest codec/schema parser";x.source_coordinate="APK_member:"+ae->normalized_name;x.target_coordinate="APK_member:"+manifest_entry->normalized_name;x.provenance_scope="same validated APK delivery package; structural asset-delivery relation only";x.evidence_level="R2_STRUCTURAL_RELATION";x.ambiguity="NONE";x.semantic_relevance="STRUCTURAL";x.priority_eligible=false;x.reason="validated canonical Flutter app and asset manifest are co-delivered by the same APK";report.artifact_relationships.push_back(std::move(x));++manifest_relations;}}}}
+    }
+    f.fields["compatible_app_engine_pairs"]=std::to_string(compatible);f.fields["structural_app_payloads"]=std::to_string(structural_apps);f.fields["asset_manifest_state"]=(manifest.valid&&manifest.nonempty)?"CONFIRMED":(manifest.candidate?"UNRESOLVED":"ABSENT");f.fields["asset_manifest_relations"]=std::to_string(manifest_relations);
+    std::string abi_text;for(const auto&a:abis){if(!abi_text.empty())abi_text+=',';abi_text+=a;}f.fields["validated_abis"]=abi_text;std::string hash_text;for(const auto&h:hashes){if(!hash_text.empty())hash_text+=',';hash_text+=h;}f.fields["snapshot_hashes"]=hash_text;
+    if(compatible){f.state="CONFIRMED";f.evidence={"libapp.so exposes complete loader-visible Flutter Dart snapshot pairs whose read-only data snapshots and executable instruction spans validate","same-ABI libflutter.so independently validates as ELF and contains the exact app snapshot compatibility hash once, alongside independent Flutter/Dart engine markers","all related endpoints are exact materialized members of the same validated APK"};if(manifest.valid&&manifest.nonempty)f.evidence.push_back("canonical AssetManifest.bin independently passes bounded StandardMessageCodec and Flutter asset-schema validation");f.negative_evidence.push_back("snapshot compatibility/delivery confirmation does not imply deep Dart object, class, or function deserialization");}
+    else{f.state=structural_apps?"PARTIAL":"UNRESOLVED";if(hash_mismatch)f.negative_evidence.push_back("Flutter engine/app snapshot hash dependency did not close uniquely");if(engine_marker_failure)f.negative_evidence.push_back("candidate libflutter.so lacked the bounded independent Flutter/Dart engine marker set");if(!structural_apps)f.negative_evidence.push_back("no same-ABI structurally validated Flutter Dart AOT app payload was available under the current extraction budget");}
+    report.findings.push_back(std::move(f));
+}
+
 void cleanup_empty_container_outputs(const prts::AnalysisReport&report){
     static constexpr std::string_view leaves[]={"renpy/rpa","renpy/rpyc","wxapkg","asar","autoit","apk","jar","nuitka","godot"};
     std::error_code ec;
@@ -1007,7 +1179,7 @@ void execute_cpython_probe_step(prts::AnalysisReport&report,const std::filesyste
 
 void update_runtime_step_results(prts::AnalysisReport&report,bool runtime_ok,const std::string&error,std::uint64_t elapsed_ms){
     if(auto*s=prts::runtime_plan_step(report.runtime_plan,"generic_runtime_trace");s&&s->selected){s->elapsed_ms=elapsed_ms;s->state=runtime_ok?"COMPLETED":"FAILED";s->result=runtime_ok?"runtime process/timeline collection completed":"runtime backend failed";if(!runtime_ok)s->refusal=error;}
-    std::size_t memory_artifacts=0,reconstructed=0;for(const auto&a:report.runtime.artifacts){if(a.kind=="materialized_region")++memory_artifacts;if(a.kind=="unpacked_pe"||a.kind=="reconstructed_elf"||a.kind=="runtime_backing_elf")++reconstructed;if(a.kind=="materialization_graph"){if(auto*s=prts::runtime_plan_step(report.runtime_plan,"materialization_tracking")){auto it=a.fields.find("deepest_confirmed_generation");if(it!=a.fields.end())s->evidence.push_back("deepest confirmed generation="+it->second);}}}
+    std::size_t memory_artifacts=0,reconstructed=0;for(const auto&a:report.runtime.artifacts){if(a.kind=="materialized_region")++memory_artifacts;if(a.kind=="unpacked_pe"||a.kind=="reconstructed_elf"||a.kind=="runtime_backing_elf")++reconstructed;if(a.kind=="materialization_graph"){if(auto*s=prts::runtime_plan_step(report.runtime_plan,"materialization_tracking")){auto it=a.fields.find("deepest_confirmed_generation");if(it!=a.fields.end())s->evidence.push_back("deepest confirmed materialization generation="+it->second);}}}
     if(auto*s=prts::runtime_plan_step(report.runtime_plan,"materialization_tracking");s&&s->selected){s->elapsed_ms=elapsed_ms;s->state=runtime_ok?"COMPLETED":"FAILED";s->result=runtime_ok?("memory artifacts="+std::to_string(memory_artifacts)):"runtime materialization analysis failed";if(!runtime_ok)s->refusal=error;}
     if(auto*s=prts::runtime_plan_step(report.runtime_plan,"unpack_reconstruction");s&&s->selected){s->elapsed_ms=elapsed_ms;s->state=runtime_ok?"COMPLETED":"FAILED";s->result=runtime_ok?("runtime-derived image artifacts="+std::to_string(reconstructed)):"reconstruction pipeline unavailable after runtime failure";if(!runtime_ok)s->refusal=error;}
     if(auto*s=prts::runtime_plan_step(report.runtime_plan,"validated_transactional_install");s&&s->selected){s->elapsed_ms=elapsed_ms;if(!runtime_ok){s->state="FAILED";s->refusal=error;}else if(report.replacement.performed){s->state="COMPLETED";s->result="validated candidate transactionally installed; backup/rollback contract retained";}else{s->state="SKIPPED";s->result="no candidate reached the strict final installation gate";}}
@@ -1075,6 +1247,7 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
         if(report.python_bytecode.candidate)report.findings.push_back(prts::python_bytecode_finding(report.python_bytecode));
         report.cpython_marshal_loader=prts::inspect_cpython_marshal_loader_source(mapped.bytes());
         if(report.cpython_marshal_loader.loader_confirmed)report.findings.push_back(prts::cpython_marshal_loader_finding(report.cpython_marshal_loader));
+        if(starts_with(mapped.bytes(),"ECFG")){report.godot_legacy_config=prts::parse_godot_legacy_engine_config(mapped.bytes());if(report.godot_legacy_config.valid)report.findings.push_back(godot_legacy_config_finding(report.godot_legacy_config));else add_validation_failure(report.findings,"Godot legacy engine.cfb","ECFG binary project-settings magic",report.godot_legacy_config.error);}
         const bool gdscript_routed=ext_is(input,".gdc")||starts_with(mapped.bytes(),"GDSC");
         if(gdscript_routed){
             auto materialize_gdscript=[&](prts::Finding&f){
@@ -1094,9 +1267,9 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
             auto gd=prts::validate_gdscript_buffer_versioned(mapped.bytes());
             if(gd.structurally_valid){
                 prts::Finding f;f.kind="bytecode";f.family="Godot GDScript";f.state="CONFIRMED";f.variant="official-tokenizer-v"+std::to_string(gd.tokenizer_version);
-                f.evidence={"GDSC header/version passed an explicit official tokenizer profile","identifier, Variant constant, sparse line/column maps, token records, and payload closure all validated"};
-                f.fields["format_state"]="official-compatible";f.fields["tokenizer_version"]=std::to_string(gd.tokenizer_version);f.fields["official_profile"]=gd.tokenizer_version==100?"Godot 4.3/4.4 tokenizer-v100":"Godot 4.5 tokenizer-v101";f.fields["compression"]=gd.compression;f.fields["identifier_count"]=std::to_string(gd.identifier_count);f.fields["constant_count"]=std::to_string(gd.constant_count);f.fields["token_line_count"]=std::to_string(gd.token_line_count);f.fields["token_count"]=std::to_string(gd.token_count);f.fields["payload_bytes"]=std::to_string(gd.payload_bytes);
-                f.ranges.push_back(prts::file_offset_range(0,std::min<std::uint64_t>(mapped.bytes().size(),12),"GDScript tokenizer-buffer header"));materialize_gdscript(f);report.findings.push_back(std::move(f));
+                f.evidence={"GDSC header/version passed an explicit official tokenizer profile","identifier, Variant constant, source-position map, token records, and payload closure all validated"};
+                f.fields["format_state"]="official-compatible";f.fields["tokenizer_version"]=std::to_string(gd.tokenizer_version);f.fields["official_profile"]=gd.tokenizer_version==10?"Godot 2 tokenizer-v10 (verified 2.1.1/2.1.5; token epoch resolved by terminal EOF)":(gd.tokenizer_version==13?"Godot 3 tokenizer-v13 (verified 3.2.1/3.3.2/3.4.4)":(gd.tokenizer_version==100?"Godot 4.3/4.4 tokenizer-v100":"Godot 4.5 tokenizer-v101"));f.fields["compression"]=gd.compression;f.fields["identifier_count"]=std::to_string(gd.identifier_count);f.fields["constant_count"]=std::to_string(gd.constant_count);f.fields["token_line_count"]=std::to_string(gd.token_line_count);f.fields["token_count"]=std::to_string(gd.token_count);f.fields["payload_bytes"]=std::to_string(gd.payload_bytes);
+                const auto gdscript_header_bytes=(gd.tokenizer_version==10||gd.tokenizer_version==13)?24ull:12ull;f.ranges.push_back(prts::file_offset_range(0,std::min<std::uint64_t>(mapped.bytes().size(),gdscript_header_bytes),"GDScript tokenizer-buffer header"));materialize_gdscript(f);report.findings.push_back(std::move(f));
             }else{
                 auto layout=prts::infer_gdscript_layout(mapped.bytes());
                 if(layout.state=="CONFIRMED"&&!layout.official_compatible){
@@ -1114,6 +1287,11 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
             }
         }
         {auto common=prts::detect_common(mapped.bytes(),report.pe,report.elf,report.static_scan);report.findings.insert(report.findings.end(),std::make_move_iterator(common.begin()),std::make_move_iterator(common.end()));}
+        if(ext_is(input,".gdextension")){
+            report.gdextension_descriptor=prts::parse_gdextension_descriptor(mapped.bytes());
+            if(report.gdextension_descriptor.valid)report.findings.push_back(gdextension_descriptor_finding(report.gdextension_descriptor));
+            else add_validation_failure(report.findings,"Godot GDExtension descriptor",".gdextension filename extension",report.gdextension_descriptor.error.empty()?"descriptor did not pass strict configuration/libraries validation":report.gdextension_descriptor.error);
+        }
         const bool unity_routed=route_unity(input,report.pe,report.static_scan);std::future<prts::UnityInfo> unity_future;if(unity_routed)unity_future=std::async(std::launch::async,[&](){return prts::detect_unity(input,mapped.bytes(),report.pe);});
         if(report.pe.valid){auto anti=prts::detect_antidebug(mapped.bytes(),report.pe);report.findings.insert(report.findings.end(),std::make_move_iterator(anti.begin()),std::make_move_iterator(anti.end()));}
         if(report.pe.valid){auto prereq=prts::detect_execution_prerequisites(mapped.bytes(),report.pe);report.findings.insert(report.findings.end(),std::make_move_iterator(prereq.begin()),std::make_move_iterator(prereq.end()));}
@@ -1266,7 +1444,7 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
             report.findings.erase(std::remove_if(report.findings.begin(),report.findings.end(),[](const prts::Finding&f){return f.family=="Godot"||f.family=="Godot PCK";}),report.findings.end());
             report.findings.push_back(prts::godot_finding(report.godot));
             if(report.godot.gdextension_descriptor_candidates)report.findings.push_back(prts::godot_gdextension_finding(report.godot));
-            {auto out=container_output_dir(report,"godot");if(prepare_container_output(report,out,"Godot PCK")){if(opt.artifact_graph_node){report.godot_extract=prts::extract_godot(mapped.bytes(),report.godot,out,false,false,extract_bytes_left,extract_files_left);extract_bytes_left=report.godot_extract.output_bytes>extract_bytes_left?0:extract_bytes_left-report.godot_extract.output_bytes;auto used=std::min<std::uint64_t>(report.godot_extract.files.size(),extract_files_left);extract_files_left-=static_cast<std::uint32_t>(used);}else if(opt.extract){auto bytes=sum_bytes(report.godot.entries,[](const auto&e){return (!e.removal&&!e.delta)?e.size:0;});auto files=cap_count(std::count_if(report.godot.entries.begin(),report.godot.entries.end(),[](const auto&e){return !e.removal&&!e.delta;}));if(permit_extract("Godot PCK",bytes,files))report.godot_extract=prts::extract_godot(mapped.bytes(),report.godot,out,true,false,bytes,files);}else{auto [bytes,files]=auto_core_budget(opt);report.godot_extract=prts::extract_godot(mapped.bytes(),report.godot,out,true,true,bytes,files);if(report.godot_extract.budget_exhausted)note_auto_core_partial(report,"Godot PCK",report.godot_extract.omitted_count,report.godot_extract.omitted_bytes);}if(report.godot_extract.script_analysis_count||report.godot_extract.script_analysis_failures){prts::Finding f;f.kind="artifact";f.family="Godot GDScript normalized analysis";f.state=report.godot_extract.script_analysis_failures?(report.godot_extract.script_analysis_count?"PARTIAL":"FAILED"):"CONFIRMED";if(report.godot_extract.script_analysis_count)f.evidence.push_back("validated GDSC children produced normalized analysis sidecars during PCK materialization");if(report.godot_extract.script_analysis_failures)f.negative_evidence.push_back("one or more GDSC children could not produce sidecars; see Godot extraction warnings");f.fields["script_analysis_count"]=std::to_string(report.godot_extract.script_analysis_count);f.fields["script_artifact_count"]=std::to_string(report.godot_extract.script_artifact_count);f.fields["script_analysis_failures"]=std::to_string(report.godot_extract.script_analysis_failures);f.fields["source_decompilation"]="false";f.fields["core_only"]=report.godot_extract.core_only?"true":"false";report.findings.push_back(std::move(f));}}}
+            {auto out=container_output_dir(report,"godot");if(prepare_container_output(report,out,"Godot PCK")){if(opt.artifact_graph_node){report.godot_extract=prts::extract_godot(mapped.bytes(),report.godot,out,false,false,extract_bytes_left,extract_files_left);extract_bytes_left=report.godot_extract.output_bytes>extract_bytes_left?0:extract_bytes_left-report.godot_extract.output_bytes;auto used=std::min<std::uint64_t>(report.godot_extract.files.size(),extract_files_left);extract_files_left-=static_cast<std::uint32_t>(used);}else if(opt.extract){auto bytes=sum_bytes(report.godot.entries,[](const auto&e){return (!e.removal&&!e.delta)?e.size:0;});auto files=cap_count(std::count_if(report.godot.entries.begin(),report.godot.entries.end(),[](const auto&e){return !e.removal&&!e.delta;}));if(permit_extract("Godot PCK",bytes,files))report.godot_extract=prts::extract_godot(mapped.bytes(),report.godot,out,true,false,bytes,files);}else{auto [bytes,files]=auto_core_budget(opt);report.godot_extract=prts::extract_godot(mapped.bytes(),report.godot,out,!opt.suppress_auto_child_analysis,true,bytes,files);if(report.godot_extract.budget_exhausted)note_auto_core_partial(report,"Godot PCK",report.godot_extract.omitted_count,report.godot_extract.omitted_bytes);}if(report.godot_extract.script_analysis_count||report.godot_extract.script_analysis_failures){prts::Finding f;f.kind="artifact";f.family="Godot GDScript normalized analysis";f.state=report.godot_extract.script_analysis_failures?(report.godot_extract.script_analysis_count?"PARTIAL":"FAILED"):"CONFIRMED";if(report.godot_extract.script_analysis_count)f.evidence.push_back("validated GDSC children produced normalized analysis sidecars during PCK materialization");if(report.godot_extract.script_analysis_failures)f.negative_evidence.push_back("one or more GDSC children could not produce sidecars; see Godot extraction warnings");f.fields["script_analysis_count"]=std::to_string(report.godot_extract.script_analysis_count);f.fields["script_artifact_count"]=std::to_string(report.godot_extract.script_artifact_count);f.fields["script_analysis_failures"]=std::to_string(report.godot_extract.script_analysis_failures);f.fields["source_decompilation"]="false";f.fields["core_only"]=report.godot_extract.core_only?"true":"false";report.findings.push_back(std::move(f));}}}
         }else if(godot_routed&&route_godot_pck_failure(input,mapped.bytes()))add_validation_failure(report.findings,"Godot PCK",ext_is(input,".pck")?".pck filename extension":"GDPC PCK header marker","no supported Godot PCK v0-v4 structure passed geometry validation");
 
         const bool pyinstaller_routed=route_pyinstaller(report.pe,report.static_scan);
@@ -1304,8 +1482,8 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
             }
         }else if(pyinstaller_routed&&report.static_scan.hints.pyinstaller)add_validation_failure(report.findings,"PyInstaller CArchive","PyInstaller/PYIMOD/PYZ static evidence",report.pyinstaller.error);
 
-        // Exceptional-flow/control-record analysis are explicit heavy planes.
-        // Large native inputs keep --extract as their product reachability boundary.
+        // G/I are deliberately explicit heavy planes. K measured unacceptable default cost on
+        // large Unity/native inputs, so --extract is their product reachability boundary.
         if(opt.extract&&(report.pe.valid||report.elf.valid)){
             auto emit_heavy=[&](const std::string&family,const std::filesystem::path&path,std::uint64_t rows,bool limited,const std::string&state,const std::string&error){
                 prts::Finding f;f.kind="analysis_artifact";f.family=family;f.state=error.empty()?(limited?"PARTIAL":"CONFIRMED"):"FAILED";f.evidence.push_back("explicit --extract requested an existing bounded heavy analysis plane; default zero-config analysis intentionally does not run this detector");f.fields["rows"]=std::to_string(rows);f.fields["output"]=prts::path_utf8(path);f.fields["analysis_state"]=state;f.fields["analysis_limited"]=limited?"true":"false";if(!error.empty())f.negative_evidence.push_back(error);report.findings.push_back(std::move(f));
@@ -1347,6 +1525,9 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
     register_analysis_sidecars(report,input);
     register_container_artifacts(report,input);
     register_pyinstaller_artifacts(report,input);
+    integrate_apk_unity_il2cpp_delivery(report);
+    integrate_apk_flutter_aot_delivery(report);
+    integrate_apk_godot2_direct_assets(report);
     cleanup_empty_container_outputs(report);
     if(!opt.suppress_auto_child_analysis&&!opt.suppress_auto_materialization)analyze_static_artifact_children(report,input,opt);
 
@@ -1356,6 +1537,11 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
     register_pyinstaller_artifacts(report,input);
     report.analysis_guidance=prts::build_analysis_guidance(report);
     return report;
+}
+
+bool root_input_analysis_failed(const prts::AnalysisReport&report){
+    if(!report.input_snapshot.exists)return true;
+    return std::any_of(report.findings.begin(),report.findings.end(),[](const auto&f){return f.kind=="input"&&f.state=="FAILED";});
 }
 
 
@@ -1671,8 +1857,8 @@ bool render_directory_text_spooled(const prts::DirectoryPlan&plan,const prts::Di
 
 int analyze_directory_static_spooled(const std::filesystem::path&input,const Options&opt){
     const auto begin=std::chrono::steady_clock::now();auto plan=prts::inventory_directory(input,opt.directory_max_depth);plan.max_runtime_targets=opt.max_runtime_targets;plan.total_runtime_budget_ms=opt.total_runtime_budget_ms;plan.per_target_timeout_ms=opt.timeout_ms;plan.run_all=opt.run_all;
-    if(plan.candidates.empty()){for(const auto&s:plan.traversal_skips)std::cerr<<prts::path_utf8(s.path)<<": "<<s.reason<<"\n";std::cerr<<"no regular input files found\n";return 2;}
-    DirectoryReportSpool spool(opt.json,opt.report_language);if(!spool.ready()){std::cerr<<spool.error()<<"\n";return 2;}
+    if(plan.candidates.empty()){for(const auto&s:plan.traversal_skips)std::cerr<<prts::path_utf8(s.path)<<": "<<s.reason<<"\n";std::cerr<<"no regular input files found\n";return exit_code(ExitCode::Input);}
+    DirectoryReportSpool spool(opt.json,opt.report_language);if(!spool.ready()){std::cerr<<spool.error()<<"\n";return exit_code(ExitCode::Internal);}
     Options static_opt=opt;static_opt.run_requested=false;static_opt.run_mode.clear();static_opt.apply=false;static_opt.run_all=false;static_opt.recursive=false;
     const bool bounded_artifacts=!opt.extract;
     prts::DirectoryArtifactRendering artifact_rendering;
@@ -1687,7 +1873,7 @@ int analyze_directory_static_spooled(const std::filesystem::path&input,const Opt
     artifact_rendering.detail_retrieval_mode="reanalyze_file";
     artifact_rendering.detail_retrieval_command="auto-refirst <file-from-directory_plan.file_states> --json";
     std::uint64_t artifact_bytes_used=0,artifact_files_used=0;
-    std::vector<prts::DirectoryReportIndex> compact;compact.reserve(plan.candidates.size());std::vector<prts::AnalysisReport> retained;std::uint64_t spool_elapsed_ms=0;
+    std::vector<prts::DirectoryReportIndex> compact;compact.reserve(plan.candidates.size());std::vector<prts::AnalysisReport> retained;std::uint64_t spool_elapsed_ms=0;std::size_t successful_inputs=0;
     auto spool_report=[&](const prts::AnalysisReport&r,const prts::DirectoryCandidate&c,const prts::DirectoryReportIndex&idx){std::string why;auto st=std::chrono::steady_clock::now();const bool ok=spool.add(r,directory_report_detail_priority(c,idx),why);spool_elapsed_ms=sat_add(spool_elapsed_ms,static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-st).count()));if(!ok)std::cerr<<why<<"\n";return ok;};
     for(auto&c:plan.candidates){
         if(!c.readable)continue;
@@ -1699,60 +1885,71 @@ int analyze_directory_static_spooled(const std::filesystem::path&input,const Opt
             std::string reset_error;if(!reset_directory_artifact_root(artifact_root,reset_error)){unsafe_prior_root=true;forced_deferred=true;c.artifact_materialization_state="REFUSED_UNSAFE_ROOT";c.artifact_materialization_reason=reset_error;}
             if(!unsafe_prior_root&&(!remaining_bytes||!remaining_files)){forced_deferred=true;c.artifact_materialization_state="DEFERRED";c.artifact_materialization_reason="directory aggregate artifact byte/file budget is exhausted";}
             if(forced_deferred){candidate_opt.suppress_auto_materialization=true;candidate_opt.suppress_auto_child_analysis=true;candidate_opt.extract_budget_bytes=0;candidate_opt.extract_budget_files=0;candidate_opt.artifact_max_bytes=0;candidate_opt.artifact_max_nodes=0;}
-            else{candidate_opt.extract_budget_bytes=std::min(candidate_opt.extract_budget_bytes,remaining_bytes);candidate_opt.extract_budget_files=static_cast<std::uint32_t>(std::min<std::uint64_t>(candidate_opt.extract_budget_files,remaining_files));candidate_opt.artifact_max_bytes=std::min(candidate_opt.artifact_max_bytes,remaining_bytes);candidate_opt.artifact_max_nodes=static_cast<std::uint32_t>(std::min<std::uint64_t>(candidate_opt.artifact_max_nodes,remaining_files));}
+            else{candidate_opt.suppress_auto_child_analysis=true;candidate_opt.extract_budget_bytes=std::min(candidate_opt.extract_budget_bytes,remaining_bytes);candidate_opt.extract_budget_files=static_cast<std::uint32_t>(std::min<std::uint64_t>(candidate_opt.extract_budget_files,remaining_files));candidate_opt.artifact_max_bytes=std::min(candidate_opt.artifact_max_bytes,remaining_bytes);candidate_opt.artifact_max_nodes=static_cast<std::uint32_t>(std::min<std::uint64_t>(candidate_opt.artifact_max_nodes,remaining_files));}
         }
         auto r=analyze_file(c.path,candidate_opt);
         if(bounded_artifacts){
             if(unsafe_prior_root){artifact_rendering.partial=true;++artifact_rendering.deferred_candidate_count;++artifact_rendering.unknown_omitted_candidate_count;note_directory_artifact_deferred(r,0,0,"automatic directory materialization was refused because the pre-existing product artifact root was unsafe to reset");}
             else{
-                DirectoryArtifactTreeStats stats;std::string artifact_error;if(!inspect_directory_artifact_tree(artifact_root,stats,artifact_error)){std::cerr<<artifact_error<<"\n";return 2;}
+                DirectoryArtifactTreeStats stats;std::string artifact_error;if(!inspect_directory_artifact_tree(artifact_root,stats,artifact_error)){std::cerr<<artifact_error<<"\n";return exit_code(ExitCode::Internal);}
                 if(forced_deferred){
-                    if(stats.files||stats.bytes){std::cerr<<"internal directory artifact invariant failed: suppressed candidate still materialized output\n";return 2;}
-                    std::string cleanup_error;if(!reset_directory_artifact_root(artifact_root,cleanup_error)){std::cerr<<cleanup_error<<"\n";return 2;}
+                    if(stats.files||stats.bytes){std::cerr<<"internal directory artifact invariant failed: suppressed candidate still materialized output\n";return exit_code(ExitCode::Internal);}
+                    std::string cleanup_error;if(!reset_directory_artifact_root(artifact_root,cleanup_error)){std::cerr<<cleanup_error<<"\n";return exit_code(ExitCode::Internal);}
                     artifact_rendering.partial=true;++artifact_rendering.deferred_candidate_count;++artifact_rendering.unknown_omitted_candidate_count;note_directory_artifact_deferred(r,0,0,"automatic materialization was deferred after the directory aggregate budget was exhausted");
                 }else if(stats.bytes>remaining_bytes||stats.files>remaining_files){
                     artifact_rendering.partial=true;++artifact_rendering.deferred_candidate_count;artifact_rendering.known_omitted_bytes=sat_add(artifact_rendering.known_omitted_bytes,stats.bytes);artifact_rendering.known_omitted_files=sat_add(artifact_rendering.known_omitted_files,stats.files);
-                    std::string cleanup_error;if(!reset_directory_artifact_root(artifact_root,cleanup_error)){std::cerr<<cleanup_error<<"\n";return 2;}
+                    std::string cleanup_error;if(!reset_directory_artifact_root(artifact_root,cleanup_error)){std::cerr<<cleanup_error<<"\n";return exit_code(ExitCode::Internal);}
                     Options retry_opt=static_opt;retry_opt.suppress_auto_materialization=true;retry_opt.suppress_auto_child_analysis=true;retry_opt.extract_budget_bytes=0;retry_opt.extract_budget_files=0;retry_opt.artifact_max_bytes=0;retry_opt.artifact_max_nodes=0;
-                    r=analyze_file(c.path,retry_opt);DirectoryArtifactTreeStats retry_stats;if(!inspect_directory_artifact_tree(artifact_root,retry_stats,artifact_error)){std::cerr<<artifact_error<<"\n";return 2;}if(retry_stats.files||retry_stats.bytes){std::cerr<<"internal directory artifact invariant failed: rollback reanalysis still materialized output\n";return 2;}if(!reset_directory_artifact_root(artifact_root,cleanup_error)){std::cerr<<cleanup_error<<"\n";return 2;}
+                    r=analyze_file(c.path,retry_opt);DirectoryArtifactTreeStats retry_stats;if(!inspect_directory_artifact_tree(artifact_root,retry_stats,artifact_error)){std::cerr<<artifact_error<<"\n";return exit_code(ExitCode::Internal);}if(retry_stats.files||retry_stats.bytes){std::cerr<<"internal directory artifact invariant failed: rollback reanalysis still materialized output\n";return exit_code(ExitCode::Internal);}if(!reset_directory_artifact_root(artifact_root,cleanup_error)){std::cerr<<cleanup_error<<"\n";return exit_code(ExitCode::Internal);}
                     c.artifact_materialization_state="DEFERRED";c.artifact_materialization_reason="candidate automatic output exceeded the remaining directory aggregate byte/file allowance and was atomically rolled back";note_directory_artifact_deferred(r,stats.files,stats.bytes,c.artifact_materialization_reason);
                 }else{
                     artifact_bytes_used=sat_add(artifact_bytes_used,stats.bytes);artifact_files_used=sat_add(artifact_files_used,stats.files);c.artifact_materialized_bytes=stats.bytes;c.artifact_materialized_files=stats.files;
-                    if(stats.files){c.artifact_materialization_state=r.materialization.partial?"MATERIALIZED_PARTIAL":"MATERIALIZED";c.artifact_materialization_reason=r.materialization.partial?"materialized within the remaining directory aggregate allowance; per-file automatic policy also reported partiality":"materialized within the remaining directory aggregate allowance";++artifact_rendering.retained_candidate_roots;}
-                    else{c.artifact_materialization_state="NO_OUTPUT";c.artifact_materialization_reason="analysis produced no regular automatic artifact files";}
+                    if(stats.files){
+                        ++artifact_rendering.retained_candidate_roots;
+                        std::vector<prts::AnalysisArtifact>bounded_children;for(const auto&a:r.artifacts)if(automatic_static_child_candidate(a))bounded_children.push_back(a);
+                        if(!bounded_children.empty()){
+                            const auto before_bytes=artifact_bytes_used,before_files=artifact_files_used;
+                            analyze_selected_static_artifact_children_bounded(r,c.path,static_opt,bounded_children,artifact_bytes_used,artifact_files_used,kDirectoryPreRelationshipArtifactBytes,kDirectoryPreRelationshipArtifactFiles);
+                            c.artifact_materialized_bytes=sat_add(c.artifact_materialized_bytes,artifact_bytes_used-before_bytes);c.artifact_materialized_files=sat_add(c.artifact_materialized_files,artifact_files_used-before_files);
+                        }
+                        c.artifact_materialization_state=r.materialization.partial?"MATERIALIZED_PARTIAL":"MATERIALIZED";c.artifact_materialization_reason=r.materialization.partial?"materialized within the remaining directory aggregate allowance; compact high-value child reports were bounded and one or more derivatives were deferred":"materialized within the remaining directory aggregate allowance; high-value child reports use compact no-sidecar summaries";
+                    }else{c.artifact_materialization_state="NO_OUTPUT";c.artifact_materialization_reason="analysis produced no regular automatic artifact files";}
                 }
             }
         }
+        if(!root_input_analysis_failed(r))++successful_inputs;
         c.analysis_elapsed_ms=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-st).count());prts::refine_directory_candidate(c,r);compact.push_back(prts::make_directory_report_index(r));auto&idx=compact.back();
-        if(prts::directory_report_requires_post_relationship_retention(r))retained.push_back(std::move(r));else if(!spool_report(r,c,idx))return 2;
+        if(prts::directory_report_requires_post_relationship_retention(r))retained.push_back(std::move(r));else if(!spool_report(r,c,idx))return exit_code(ExitCode::Internal);
     }
+    if(!successful_inputs){std::cerr<<"no readable regular input files found\n";return exit_code(ExitCode::Input);}
     prts::build_directory_relationships(plan,compact);
     integrate_directory_godot_semantics(plan,compact,retained,static_opt,bounded_artifacts?&artifact_bytes_used:nullptr,bounded_artifacts?&artifact_files_used:nullptr,bounded_artifacts?&artifact_rendering:nullptr);
     artifact_rendering.materialized_bytes=artifact_bytes_used;artifact_rendering.materialized_files=artifact_files_used;
     artifact_rendering.partial=artifact_rendering.partial||artifact_rendering.deferred_candidate_count!=0;
     artifact_rendering.reason=bounded_artifacts?(artifact_rendering.partial?"one or more automatic artifact outputs or derivatives were deferred/refused to preserve the directory aggregate hard bound":"all automatic artifact outputs fit the default directory aggregate hard bound"):"explicit --extract requested the established per-file materialization behavior; no default directory aggregate cap is claimed";
     std::map<std::string,std::size_t> compact_by_input;for(std::size_t i=0;i<compact.size();++i)compact_by_input[directory_report_key(compact[i].input)]=i;std::set<std::string> retained_inputs;for(const auto&r:retained)retained_inputs.insert(directory_report_key(r.input));
-    for(const auto&r:compact)if(r.post_relationship_mutated&&!retained_inputs.count(directory_report_key(r.input))){std::cerr<<"internal directory retention invariant failed: relationship-mutated report was not retained: "<<prts::path_utf8(r.input)<<"\n";return 2;}
+    for(const auto&r:compact)if(r.post_relationship_mutated&&!retained_inputs.count(directory_report_key(r.input))){std::cerr<<"internal directory retention invariant failed: relationship-mutated report was not retained: "<<prts::path_utf8(r.input)<<"\n";return exit_code(ExitCode::Internal);}
     for(auto&r:retained){
-        auto ci=compact_by_input.find(directory_report_key(r.input));if(ci==compact_by_input.end()){std::cerr<<"internal directory retention invariant failed: retained report has no compact index\n";return 2;}auto&idx=compact[ci->second];prts::apply_directory_report_index_mutations(r,idx);r.analysis_guidance=prts::build_analysis_guidance(r);
-        if(idx.post_relationship_mutated){auto refreshed=prts::make_directory_report_index(r);refreshed.post_relationship_mutated=true;idx=std::move(refreshed);}auto pc=std::find_if(plan.candidates.begin(),plan.candidates.end(),[&](const auto&c){return directory_report_key(c.path)==directory_report_key(r.input);});if(pc==plan.candidates.end()){std::cerr<<"internal directory retention invariant failed: retained report has no candidate\n";return 2;}if(!spool_report(r,*pc,idx))return 2;
+        auto ci=compact_by_input.find(directory_report_key(r.input));if(ci==compact_by_input.end()){std::cerr<<"internal directory retention invariant failed: retained report has no compact index\n";return exit_code(ExitCode::Internal);}auto&idx=compact[ci->second];prts::apply_directory_report_index_mutations(r,idx);r.analysis_guidance=prts::build_analysis_guidance(r);
+        if(idx.post_relationship_mutated){auto refreshed=prts::make_directory_report_index(r);refreshed.post_relationship_mutated=true;idx=std::move(refreshed);}auto pc=std::find_if(plan.candidates.begin(),plan.candidates.end(),[&](const auto&c){return directory_report_key(c.path)==directory_report_key(r.input);});if(pc==plan.candidates.end()){std::cerr<<"internal directory retention invariant failed: retained report has no candidate\n";return exit_code(ExitCode::Internal);}if(!spool_report(r,*pc,idx))return exit_code(ExitCode::Internal);
     }
     std::vector<prts::AnalysisReport>().swap(retained);prts::sort_directory_candidates(plan);
     std::map<std::string,std::size_t> rank;for(std::size_t i=0;i<plan.candidates.size();++i)rank[directory_report_key(plan.candidates[i].path)]=i;
     std::stable_sort(spool.records().begin(),spool.records().end(),[&](const auto&a,const auto&b){auto ai=rank.find(directory_report_key(a.input)),bi=rank.find(directory_report_key(b.input));auto av=ai==rank.end()?std::numeric_limits<std::size_t>::max():ai->second,bv=bi==rank.end()?std::numeric_limits<std::size_t>::max():bi->second;return av<bv;});
-    if(spool.records().size()!=compact.size()){std::cerr<<"internal directory retention invariant failed: report spool/index cardinality mismatch\n";return 2;}std::string spool_error;if(!spool.validate(spool_error)){std::cerr<<spool_error<<"\n";return 2;}spool.annotate_plan(plan);
+    if(spool.records().size()!=compact.size()){std::cerr<<"internal directory retention invariant failed: report spool/index cardinality mismatch\n";return exit_code(ExitCode::Internal);}std::string spool_error;if(!spool.validate(spool_error)){std::cerr<<spool_error<<"\n";return exit_code(ExitCode::Internal);}spool.annotate_plan(plan);
     const auto raw_elapsed=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count());const auto elapsed=raw_elapsed>spool_elapsed_ms?raw_elapsed-spool_elapsed_ms:0;auto summary=prts::summarize_directory(plan,compact,elapsed);auto rendering=spool.rendering();
     if(rendering.partial){summary.partial=true;summary.partial_reasons.push_back("bounded default report rendering deferred "+std::to_string(rendering.full_reports_deferred)+" of "+std::to_string(rendering.full_report_count)+" complete per-file reports; compact state remains present for every admitted file");}
     if(artifact_rendering.partial){summary.partial=true;summary.partial_reasons.push_back("bounded default artifact materialization deferred or refused one or more automatic outputs under the shared directory aggregate byte/file budget");}
-    if(opt.json){auto paths=spool.selected_paths();if(!prts::render_directory_json_spooled(std::cout,plan,summary,paths,rendering,artifact_rendering,spool_error)){std::cerr<<spool_error<<"\n";return 2;}}
-    else if(!render_directory_text_spooled(plan,summary,spool.records(),rendering,artifact_rendering,spool_error)){std::cerr<<spool_error<<"\n";return 2;}
-    return 0;
+    if(opt.json){auto paths=spool.selected_paths();if(!prts::render_directory_json_spooled(std::cout,plan,summary,paths,rendering,artifact_rendering,spool_error)){std::cerr<<spool_error<<"\n";return exit_code(ExitCode::Internal);}}
+    else if(!render_directory_text_spooled(plan,summary,spool.records(),rendering,artifact_rendering,spool_error)){std::cerr<<spool_error<<"\n";return exit_code(ExitCode::Internal);}
+    return finish_standard_output(ExitCode::Success);
 }
 
 int analyze_directory_retained(const std::filesystem::path&input,const Options&opt){
-    const auto begin=std::chrono::steady_clock::now();auto plan=prts::inventory_directory(input,opt.directory_max_depth);plan.max_runtime_targets=opt.max_runtime_targets;plan.total_runtime_budget_ms=opt.total_runtime_budget_ms;plan.per_target_timeout_ms=opt.timeout_ms;plan.run_all=opt.run_all;if(plan.candidates.empty()){for(const auto&s:plan.traversal_skips)std::cerr<<prts::path_utf8(s.path)<<": "<<s.reason<<"\n";std::cerr<<"no regular input files found\n";return 2;}
-    Options static_opt=opt;static_opt.run_requested=false;static_opt.run_mode.clear();static_opt.apply=false;static_opt.run_all=false;static_opt.recursive=false;std::vector<prts::AnalysisReport>reports;reports.reserve(plan.candidates.size());
-    for(auto&c:plan.candidates){if(!c.readable)continue;auto st=std::chrono::steady_clock::now();auto r=analyze_file(c.path,static_opt);c.analysis_elapsed_ms=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-st).count());prts::refine_directory_candidate(c,r);reports.push_back(std::move(r));}
+    const auto begin=std::chrono::steady_clock::now();auto plan=prts::inventory_directory(input,opt.directory_max_depth);plan.max_runtime_targets=opt.max_runtime_targets;plan.total_runtime_budget_ms=opt.total_runtime_budget_ms;plan.per_target_timeout_ms=opt.timeout_ms;plan.run_all=opt.run_all;if(plan.candidates.empty()){for(const auto&s:plan.traversal_skips)std::cerr<<prts::path_utf8(s.path)<<": "<<s.reason<<"\n";std::cerr<<"no regular input files found\n";return exit_code(ExitCode::Input);}
+    Options static_opt=opt;static_opt.run_requested=false;static_opt.run_mode.clear();static_opt.apply=false;static_opt.run_all=false;static_opt.recursive=false;std::vector<prts::AnalysisReport>reports;reports.reserve(plan.candidates.size());std::size_t successful_inputs=0;
+    for(auto&c:plan.candidates){if(!c.readable)continue;auto st=std::chrono::steady_clock::now();auto r=analyze_file(c.path,static_opt);if(!root_input_analysis_failed(r))++successful_inputs;c.analysis_elapsed_ms=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-st).count());prts::refine_directory_candidate(c,r);reports.push_back(std::move(r));}
+    if(!successful_inputs){std::cerr<<"no readable regular input files found\n";return exit_code(ExitCode::Input);}
     prts::build_directory_relationships(plan,reports);{std::vector<prts::DirectoryReportIndex> compact;compact.reserve(reports.size());for(const auto&r:reports)compact.push_back(prts::make_directory_report_index(r));integrate_directory_godot_semantics(plan,compact,reports,static_opt);}for(auto&r:reports)r.analysis_guidance=prts::build_analysis_guidance(r);prts::sort_directory_candidates(plan);
     if(opt.run_requested){
         std::uint64_t used=0;std::uint32_t targets=0;
@@ -1775,7 +1972,7 @@ int analyze_directory_retained(const std::filesystem::path&input,const Options&o
     }
     std::map<std::string,std::size_t> rank;for(std::size_t i=0;i<plan.candidates.size();++i)rank[prts::path_utf8(plan.candidates[i].path.lexically_normal())]=i;
     std::stable_sort(reports.begin(),reports.end(),[&](const auto&a,const auto&b){auto ai=rank.find(prts::path_utf8(a.input.lexically_normal())),bi=rank.find(prts::path_utf8(b.input.lexically_normal()));auto av=ai==rank.end()?std::numeric_limits<std::size_t>::max():ai->second,bv=bi==rank.end()?std::numeric_limits<std::size_t>::max():bi->second;return av<bv;});
-    auto elapsed=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count());auto summary=prts::summarize_directory(plan,reports,elapsed);if(opt.json)prts::render_directory_json(std::cout,plan,summary,reports);else render_directory_text(plan,summary,reports,opt.report_language);return 0;
+    auto elapsed=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count());auto summary=prts::summarize_directory(plan,reports,elapsed);if(opt.json){std::string output_error;if(!prts::render_directory_json(std::cout,plan,summary,reports,output_error)){std::cerr<<output_error<<"\n";return exit_code(ExitCode::Internal);}}else render_directory_text(plan,summary,reports,opt.report_language);return finish_standard_output(ExitCode::Success);
 }
 
 int analyze_directory_default(const std::filesystem::path&input,const Options&opt){return opt.run_requested?analyze_directory_retained(input,opt):analyze_directory_static_spooled(input,opt);}
@@ -1790,26 +1987,28 @@ int main(int argc,char**argv){
     auto utf8_storage=windows_utf8_args();std::vector<char*> utf8_argv;if(!utf8_storage.empty()){utf8_argv.reserve(utf8_storage.size()+1);for(auto&x:utf8_storage)utf8_argv.push_back(x.data());utf8_argv.push_back(nullptr);argc=static_cast<int>(utf8_storage.size());argv=utf8_argv.data();}
 #endif
     if(argc>=2&&std::string(argv[1])=="--internal-cpython-probe")return prts::cpython_probe_child_main();
-    if(argc<2){std::cerr<<"usage: auto-refirst <file|directory> [--run] [--apply] [--json] [--extract] [options]\nTry 'auto-refirst --help' for details.\n";return 2;}
-    const std::string first=argv[1];if(first=="-h"||first=="--help"){print_help(std::cout);return 0;}if(first=="--version"){std::cout<<"auto-refirst "<<kVersion<<"\n";return 0;}
-    Options opt;if(!parse_options(argc,argv,opt))return 2;if(opt.help){print_help(std::cout);return 0;}if(opt.version){std::cout<<"auto-refirst "<<kVersion<<"\n";return 0;}
-    const std::filesystem::path input=cli_path(argv[1]);std::error_code ec;const bool is_dir=std::filesystem::is_directory(input,ec);if(ec){std::cerr<<"cannot stat input: "<<ec.message()<<"\n";return 2;}
+    try {
+    if(argc<2){std::cerr<<"usage: auto-refirst <file|directory> [--run] [--apply] [--json] [--extract] [options]\nTry 'auto-refirst --help' for details.\n";return exit_code(ExitCode::Usage);}
+    const std::string first=argv[1];if(first=="-h"||first=="--help"){print_help(std::cout);return finish_standard_output(ExitCode::Success);}if(first=="--version"){print_version(std::cout);return finish_standard_output(ExitCode::Success);}if(!first.empty()&&first.front()=='-'){std::cerr<<"unknown option: "<<first<<"\n";return exit_code(ExitCode::Usage);}
+    Options opt;if(!parse_options(argc,argv,opt))return exit_code(ExitCode::Usage);if(opt.help){print_help(std::cout);return finish_standard_output(ExitCode::Success);}if(opt.version){print_version(std::cout);return finish_standard_output(ExitCode::Success);}
+    const std::filesystem::path input=cli_path(argv[1]);std::error_code ec;const auto input_status=std::filesystem::status(input,ec);if(ec||input_status.type()==std::filesystem::file_type::not_found){std::cerr<<"cannot access input"<<(ec?": "+ec.message():std::string())<<"\n";return exit_code(ExitCode::Input);}const bool is_dir=input_status.type()==std::filesystem::file_type::directory;if(!is_dir&&input_status.type()!=std::filesystem::file_type::regular){std::cerr<<"input is neither a regular file nor a directory\n";return exit_code(ExitCode::Input);}
     if(opt.run_mode=="trace")std::cerr<<"warning: --run=trace is DEPRECATED; prefer bare --run for automatic deep non-destructive analysis\n";
     else if(opt.run_mode=="unpack")std::cerr<<"warning: --run=unpack is DEPRECATED and is non-destructive; prefer bare --run, and add --apply only when you explicitly authorize validated installation\n";
     else if(opt.run_mode=="python-probe")std::cerr<<"warning: --run=python-probe is a DEPRECATED forced-debug compatibility mode; bare --run routes the probe automatically when it can answer an unresolved question\n";
-    if(!opt.search.empty()){prts::SearchOptions so;so.needle=opt.search;so.ignore_case=opt.search_ignore_case;so.recursive=true;so.json_lines=opt.json;auto st=prts::search_tree_streaming(input,so);if(!opt.json)std::cout<<"Search complete: files="<<st.files<<" bytes="<<st.bytes<<" matches="<<st.matches<<"\n";return st.matches?0:1;}
-    if(opt.recursive&&opt.extract&&opt.run_requested){std::cerr<<"recursive extracted-artifact analysis remains static-only; run root inputs without --extract --recursive so extracted children are never executed automatically\n";return 2;}
-    if(is_dir&&opt.run_mode=="unpack"){std::cerr<<"deprecated --run=unpack is single-file compatibility only; for a directory use --run or --run --apply explicitly\n";return 2;}
+    if(!opt.search.empty()){prts::SearchOptions so;so.needle=opt.search;so.ignore_case=opt.search_ignore_case;so.recursive=true;so.json_lines=opt.json;auto st=prts::search_tree_streaming(input,so);if(!opt.json)std::cout<<"Search complete: files="<<st.files<<" bytes="<<st.bytes<<" matches="<<st.matches<<"\n";if(!st.files){std::cerr<<"no readable regular input files found\n";return finish_standard_output(ExitCode::Input);}return finish_standard_output(st.matches?ExitCode::Success:ExitCode::SearchNoMatch);}
+    if(opt.recursive&&opt.extract&&opt.run_requested){std::cerr<<"recursive extracted-artifact analysis remains static-only; run root inputs without --extract --recursive so extracted children are never executed automatically\n";return exit_code(ExitCode::Usage);}
+    if(is_dir&&opt.run_mode=="unpack"){std::cerr<<"deprecated --run=unpack is single-file compatibility only; for a directory use --run or --run --apply explicitly\n";return exit_code(ExitCode::Usage);}
     if(is_dir&&!(opt.recursive&&opt.extract))return analyze_directory_default(input,opt);
     std::vector<std::filesystem::path> files;
     if(is_dir){auto inv=prts::inventory_directory(input,opt.directory_max_depth);for(const auto&c:inv.candidates)if(c.readable)files.push_back(c.path);}
     else files.push_back(input);
-    if(files.empty()){std::cerr<<"no regular input files found\n";return 2;}
+    if(files.empty()){std::cerr<<"no regular input files found\n";return exit_code(ExitCode::Input);}
 
     std::vector<prts::AnalysisReport> reports;
     const bool artifact_graph_mode=opt.recursive&&opt.extract;
+    std::size_t successful_root_inputs=0;
     if(!artifact_graph_mode){
-        reports.reserve(files.size());for(const auto&f:files)reports.push_back(analyze_file(f,opt));
+        reports.reserve(files.size());for(const auto&f:files){auto report=analyze_file(f,opt);if(!root_input_analysis_failed(report))++successful_root_inputs;reports.push_back(std::move(report));}
     }else{
         prts::ArtifactGraphInfo graph;graph.enabled=true;graph.max_depth=opt.artifact_max_depth;graph.max_nodes=opt.artifact_max_nodes;graph.max_total_bytes=opt.artifact_max_bytes;
         std::deque<PendingArtifact> queue;
@@ -1822,7 +2021,7 @@ int main(int argc,char**argv){
             node_opt.extract_budget_bytes=graph.materialized_bytes<graph.max_total_bytes?graph.max_total_bytes-graph.materialized_bytes:0;
             auto occupied=reports.size()+queue.size()+1;
             node_opt.extract_budget_files=occupied<graph.max_nodes?static_cast<std::uint32_t>(graph.max_nodes-occupied):0;
-            auto report=analyze_file(cur.path,node_opt);report.artifact.graph_member=true;report.artifact.root=cur.root;report.artifact.depth=cur.depth;report.artifact.parent=cur.parent;report.artifact.root_input=cur.root_input;report.artifact.offset_basis=cur.path;report.artifact.offset_space="current_input_file";report.artifact.relation=cur.relation;
+            auto report=analyze_file(cur.path,node_opt);if(cur.root&&!root_input_analysis_failed(report))++successful_root_inputs;report.artifact.graph_member=true;report.artifact.root=cur.root;report.artifact.depth=cur.depth;report.artifact.parent=cur.parent;report.artifact.root_input=cur.root_input;report.artifact.offset_basis=cur.path;report.artifact.offset_space="current_input_file";report.artifact.relation=cur.relation;
             ++graph.nodes;
             if(!report.input_snapshot.sha256.empty())first_by_sha.try_emplace(report.input_snapshot.sha256,cur.path);
             if(report.pyinstaller_extract.budget_exhausted){graph.truncated=true;++graph.skipped_limits;graph.warnings.push_back("PyInstaller extraction hit the recursive byte/file budget while decoding outer/PYZ artifacts at "+prts::path_utf8(cur.path));}
@@ -1867,6 +2066,7 @@ int main(int argc,char**argv){
         }
     }
 
+    if(!successful_root_inputs){std::cerr<<"no readable regular input files found\n";return exit_code(ExitCode::Input);}
     if(opt.json){
         if(reports.size()==1)std::cout<<prts::render_json(reports.front());
         else{
@@ -1875,5 +2075,12 @@ int main(int argc,char**argv){
     }else{
         for(std::size_t i=0;i<reports.size();++i){if(i)std::cout<<"\n============================================================\n\n";std::cout<<prts::render_text(reports[i],opt.report_language);}
     }
-    return 0;
+    return finish_standard_output(ExitCode::Success);
+    } catch(const std::exception& e) {
+        std::cerr << "internal fatal error: " << e.what() << "\n";
+        return exit_code(ExitCode::Internal);
+    } catch(...) {
+        std::cerr << "internal fatal error: unknown exception\n";
+        return exit_code(ExitCode::Internal);
+    }
 }

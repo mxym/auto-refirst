@@ -70,7 +70,7 @@ struct DirectoryCandidate {
     std::string runtime_skip_reason;
     std::uint64_t analysis_elapsed_ms=0;
     std::uint64_t runtime_elapsed_ms=0;
-    // Default-directory detail state. The compact candidate/file-state plane
+    // BB default-directory detail state.  The compact candidate/file-state plane
     // remains complete even when the full per-file report is deferred.
     std::string report_detail_state="NOT_RENDERED";
     std::string report_detail_reason;
@@ -92,7 +92,7 @@ struct DirectoryPlan {
     std::filesystem::path root;
     std::uint32_t max_depth=0xffffffffu;
     std::uint32_t max_runtime_targets=4;
-    // Default directory admission is cardinality-bounded. Every admitted
+    // BB: default directory admission is cardinality-bounded. Every admitted
     // file still receives a compact file_state; excess regular files are
     // explicitly deferred instead of expanding the default envelope forever.
     std::uint32_t max_candidates=1024;
@@ -118,6 +118,12 @@ struct DirectoryPlan {
 struct DirectoryPeImportFact {
     std::string name;
     std::uint32_t descriptor_rva=0;
+};
+
+struct DirectoryPeExportFact {
+    std::string name;
+    std::uint32_t rva=0;
+    bool forwarded=false;
 };
 
 struct DirectoryArtifactFact {
@@ -148,7 +154,12 @@ struct DirectoryReportIndex {
     std::filesystem::path input;
     bool pe_valid=false;
     bool pe_dll=false;
+    bool pe64=false;
+    std::uint16_t pe_machine=0;
     std::vector<DirectoryPeImportFact> pe_imports;
+    std::vector<DirectoryPeExportFact> pe_exports;
+    std::uint64_t pe_named_export_count=0;
+    bool pe_exports_truncated=false;
     bool elf_valid=false;
     std::uint16_t elf_type=0;
     std::uint64_t elf_entry=0;
@@ -293,7 +304,7 @@ void build_directory_relationships(DirectoryPlan& plan,std::vector<AnalysisRepor
 void sort_directory_candidates(DirectoryPlan& plan);
 DirectorySummary summarize_directory(const DirectoryPlan& plan,const std::vector<DirectoryReportIndex>& reports,std::uint64_t elapsed_ms);
 DirectorySummary summarize_directory(const DirectoryPlan& plan,const std::vector<AnalysisReport>& reports,std::uint64_t elapsed_ms);
-void render_directory_json(std::ostream& out,const DirectoryPlan& plan,const DirectorySummary& summary,const std::vector<AnalysisReport>& reports);
+bool render_directory_json(std::ostream& out,const DirectoryPlan& plan,const DirectorySummary& summary,const std::vector<AnalysisReport>& reports,std::string& error);
 bool render_directory_json_spooled(std::ostream& out,const DirectoryPlan& plan,const DirectorySummary& summary,const std::vector<std::filesystem::path>& report_paths,const DirectoryReportRendering& rendering,const DirectoryArtifactRendering& artifact_rendering,std::string& error);
 std::string render_directory_json(const DirectoryPlan& plan,const DirectorySummary& summary,const std::vector<AnalysisReport>& reports);
 }

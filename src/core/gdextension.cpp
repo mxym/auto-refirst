@@ -79,6 +79,25 @@ bool valid_symbol(std::string_view s) {
     return std::all_of(s.begin() + 1, s.end(), [](unsigned char c) { return std::isalnum(c) || c == '_'; });
 }
 
+bool parse_compatibility_value(std::string_view value,std::string&out){
+    std::string t;if(!parse_quoted(value,t))t=trim(value);
+    if(t.empty()||t.size()>32)return false;
+    std::array<unsigned,3> version{};std::size_t part=0,digits=0;unsigned current=0;
+    for(unsigned char c:t){
+        if(c=='.'){
+            if(!digits||part>=2)return false;
+            version[part++]=current;current=0;digits=0;continue;
+        }
+        if(!std::isdigit(c)||++digits>4)return false;
+        current=current*10u+unsigned(c-'0');
+    }
+    if(!digits)return false;
+    version[part]=current;
+    // Godot 4.x rejects GDExtension compatibility_minimum below 4.1.0.
+    if(version[0]<4||(version[0]==4&&version[1]<1))return false;
+    out=std::move(t);return true;
+}
+
 bool valid_feature_key(std::string_view s) {
     if (s.empty() || s.size() > 512) return false;
     bool token = false;
@@ -387,6 +406,8 @@ FunctionTrace trace_function(std::span<const std::uint8_t>d,const PeInfo&pe,cons
 
 std::optional<std::string> normalize_gdextension_resource_path(std::string_view input) { return normalize_res_path(input); }
 
+bool gdextension_pe64_x64_feature_compatible(std::string_view feature_key) { return pe64_x64_feature_compatible(feature_key); }
+
 GDExtensionDescriptorInfo parse_gdextension_descriptor(std::span<const std::uint8_t> data) {
     GDExtensionDescriptorInfo out;
     if (data.empty() || data.size() > kMaxDescriptorBytes || !valid_utf8(data)) { out.error="descriptor is empty/oversized or not valid UTF-8"; return out; }
@@ -400,7 +421,7 @@ GDExtensionDescriptorInfo parse_gdextension_descriptor(std::span<const std::uint
         if(eq==std::string::npos){out.error="descriptor assignment lacks '='";out.error_line=line_no;return out;}auto key=trim(std::string_view(clean).substr(0,eq));auto val=std::string_view(clean).substr(eq+1);if(key.empty()){out.error="empty descriptor key";out.error_line=line_no;return out;}
         if(section=="configuration"){
             if(key=="entry_symbol"){std::string v;if(entry_seen||!parse_quoted(val,v)||!valid_symbol(v)){out.error="invalid or duplicate configuration.entry_symbol";out.error_line=line_no;return out;}entry_seen=true;out.entry_symbol=std::move(v);}
-            else if(key=="compatibility_minimum"){std::string v;if(!parse_quoted(val,v)){out.error="compatibility_minimum must be a quoted string";out.error_line=line_no;return out;}out.compatibility_minimum=std::move(v);}
+            else if(key=="compatibility_minimum"){std::string v;if(!parse_compatibility_value(val,v)){out.error="compatibility_minimum must be a bounded dotted version accepted by the GDExtension 4.1+ contract";out.error_line=line_no;return out;}out.compatibility_minimum=std::move(v);}
             else if(key=="reloadable"){auto t=trim(val);if(t!="true"&&t!="false"){out.error="reloadable must be true/false";out.error_line=line_no;return out;}out.reloadable_present=true;out.reloadable=t=="true";}
         } else if(section=="libraries"){
             std::string path;if(!valid_feature_key(key)||!parse_quoted(val,path)||!safe_res_path(path)||!libkeys.insert(key).second){out.error="invalid/duplicate libraries entry or unsafe res:// path";out.error_line=line_no;return out;}out.libraries.push_back({key,std::move(path),line_no});
