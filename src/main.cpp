@@ -271,7 +271,7 @@ bool ensure_artifact_subdirectory(const std::filesystem::path&root,const std::fi
             if(st.type()!=std::filesystem::file_type::directory){error="artifact path component is not a directory: "+prts::path_utf8(p);return false;}
             return true;
         }
-        ec.clear();if(!std::filesystem::create_directory(p,ec)&&ec){error="cannot create artifact directory: "+prts::path_utf8(p)+": "+ec.message();return false;}
+        ec.clear();if(!std::filesystem::create_directory(p,ec)&&ec){error="cannot create artifact directory: "+prts::path_utf8(p)+": "+prts::error_message_utf8(ec);return false;}
         ec.clear();st=std::filesystem::symlink_status(p,ec);if(ec||st.type()!=std::filesystem::file_type::directory||artifact_path_link_or_reparse(p)){error="artifact path component did not resolve to a real non-reparse directory: "+prts::path_utf8(p);return false;}return true;
     };
     if(!ensure_one(nr))return false;
@@ -440,17 +440,17 @@ struct DirectoryArtifactTreeStats {
 bool inspect_directory_artifact_tree(const std::filesystem::path&root,DirectoryArtifactTreeStats&stats,std::string&error){
     stats={};error.clear();std::error_code ec;auto st=std::filesystem::symlink_status(root,ec);
     if(ec==std::errc::no_such_file_or_directory){ec.clear();return true;}
-    if(ec){error="cannot inspect directory artifact root: "+ec.message();return false;}
+    if(ec){error="cannot inspect directory artifact root: "+prts::error_message_utf8(ec);return false;}
     if(st.type()==std::filesystem::file_type::not_found)return true;
     if(artifact_path_link_or_reparse(root)){error="directory artifact root is a symlink/reparse point; refusing traversal: "+prts::path_utf8(root);return false;}
     if(st.type()!=std::filesystem::file_type::directory){error="directory artifact root is occupied by a non-directory path: "+prts::path_utf8(root);return false;}
     std::filesystem::recursive_directory_iterator it(root,std::filesystem::directory_options::skip_permission_denied,ec),end;
-    if(ec){error="cannot enumerate directory artifact root: "+ec.message();return false;}
+    if(ec){error="cannot enumerate directory artifact root: "+prts::error_message_utf8(ec);return false;}
     while(it!=end){
-        auto path=it->path();auto est=it->symlink_status(ec);if(ec){error="cannot stat directory artifact output: "+ec.message();return false;}
+        auto path=it->path();auto est=it->symlink_status(ec);if(ec){error="cannot stat directory artifact output: "+prts::error_message_utf8(ec);return false;}
         if(artifact_path_link_or_reparse(path)){if(est.type()==std::filesystem::file_type::directory)it.disable_recursion_pending();error="directory artifact output contains a symlink/reparse point: "+prts::path_utf8(path);return false;}
-        if(est.type()==std::filesystem::file_type::regular){auto n=std::filesystem::file_size(path,ec);if(ec){error="cannot size directory artifact output: "+ec.message();return false;}stats.bytes=sat_add(stats.bytes,n);stats.files=sat_add(stats.files,1);}
-        it.increment(ec);if(ec){error="directory artifact iteration failed: "+ec.message();return false;}
+        if(est.type()==std::filesystem::file_type::regular){auto n=std::filesystem::file_size(path,ec);if(ec){error="cannot size directory artifact output: "+prts::error_message_utf8(ec);return false;}stats.bytes=sat_add(stats.bytes,n);stats.files=sat_add(stats.files,1);}
+        it.increment(ec);if(ec){error="directory artifact iteration failed: "+prts::error_message_utf8(ec);return false;}
     }
     return true;
 }
@@ -458,14 +458,14 @@ bool inspect_directory_artifact_tree(const std::filesystem::path&root,DirectoryA
 bool reset_directory_artifact_root(const std::filesystem::path&root,std::string&error){
     error.clear();std::error_code ec;auto st=std::filesystem::symlink_status(root,ec);
     if(ec==std::errc::no_such_file_or_directory){ec.clear();return true;}
-    if(ec){error="cannot inspect prior directory artifact root: "+ec.message();return false;}
+    if(ec){error="cannot inspect prior directory artifact root: "+prts::error_message_utf8(ec);return false;}
     if(st.type()==std::filesystem::file_type::not_found)return true;
     if(artifact_path_link_or_reparse(root)){error="prior directory artifact root is a symlink/reparse point; refusing removal: "+prts::path_utf8(root);return false;}
     if(st.type()!=std::filesystem::file_type::directory){error="prior directory artifact root is not a directory; refusing removal: "+prts::path_utf8(root);return false;}
     // The root is product-owned (`<input>.auto-refirst`) and has just been proven
     // to be a real directory.  Refuse any nested link/reparse before remove_all.
     DirectoryArtifactTreeStats ignored;if(!inspect_directory_artifact_tree(root,ignored,error))return false;
-    std::filesystem::remove_all(root,ec);if(ec){error="cannot reset prior product-owned directory artifact root: "+ec.message();return false;}return true;
+    std::filesystem::remove_all(root,ec);if(ec){error="cannot reset prior product-owned directory artifact root: "+prts::error_message_utf8(ec);return false;}return true;
 }
 
 void note_directory_artifact_deferred(prts::AnalysisReport&report,std::uint64_t files,std::uint64_t bytes,const std::string&reason){
@@ -1258,7 +1258,7 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
                 auto base=analysis_map_dir(report,"godot")/"gdscript";
                 std::vector<std::filesystem::path>targets={prts::path_with_ascii_suffix(base,".godot-script-info.json"),prts::path_with_ascii_suffix(base,".godot-identifiers.csv"),prts::path_with_ascii_suffix(base,".godot-constants.csv"),prts::path_with_ascii_suffix(base,".godot-lines.csv"),prts::path_with_ascii_suffix(base,".godot-tokens.csv")};
                 if(!prepare_artifact_targets(report,"Godot GDScript",targets))return;
-                for(const auto&t:targets){std::error_code ec;std::filesystem::remove(t,ec);if(ec){f.negative_evidence.push_back("cannot replace prior GDScript sidecar: "+prts::path_utf8(t)+": "+ec.message());return;}}
+                for(const auto&t:targets){std::error_code ec;std::filesystem::remove(t,ec);if(ec){f.negative_evidence.push_back("cannot replace prior GDScript sidecar: "+prts::path_utf8(t)+": "+prts::error_message_utf8(ec));return;}}
                 report.gdscript_extract=prts::materialize_gdscript_analysis(analysis,base);
                 if(!report.gdscript_extract.success){f.negative_evidence.push_back("normalized GDScript artifact materialization failed: "+report.gdscript_extract.error);return;}
                 f.evidence.push_back("five normalized GDScript analysis sidecars were materialized under the per-input artifact root; no .gd source decompilation was claimed");
@@ -1567,7 +1567,7 @@ void add_directory_semantic_priority(prts::DirectoryPlan&plan,const std::filesys
 bool reset_owned_artifact_subdirectory(const std::filesystem::path&root,const std::filesystem::path&dir,std::string&error){
     if(!ensure_artifact_subdirectory(root,dir.parent_path(),error))return false;
     std::error_code ec;auto st=std::filesystem::symlink_status(dir,ec);
-    if(!ec&&st.type()!=std::filesystem::file_type::not_found){std::filesystem::remove_all(dir,ec);if(ec){error="cannot reset prior product-owned semantic artifact directory: "+ec.message();return false;}}
+    if(!ec&&st.type()!=std::filesystem::file_type::not_found){std::filesystem::remove_all(dir,ec);if(ec){error="cannot reset prior product-owned semantic artifact directory: "+prts::error_message_utf8(ec);return false;}}
     return ensure_artifact_subdirectory(root,dir,error);
 }
 
@@ -1756,16 +1756,16 @@ class DirectoryReportSpool {
     }
 public:
     DirectoryReportSpool(bool json,prts::ReportLanguage language):json_(json),language_(language){
-        std::error_code ec;auto base=std::filesystem::temp_directory_path(ec);if(ec){error_="cannot locate temporary directory for report spool: "+ec.message();return;}
+        std::error_code ec;auto base=std::filesystem::temp_directory_path(ec);if(ec){error_="cannot locate temporary directory for report spool: "+prts::error_message_utf8(ec);return;}
         const auto nonce=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
         for(unsigned attempt=0;attempt<128;++attempt){
             auto name="auto-refirst-report-spool-"+std::to_string(nonce)+"-"+std::to_string(attempt);auto candidate=base/prts::path_from_utf8(name);ec.clear();
             if(std::filesystem::create_directory(candidate,ec)){root_=std::move(candidate);break;}
-            if(ec){error_="cannot create temporary report spool: "+ec.message();return;}
+            if(ec){error_="cannot create temporary report spool: "+prts::error_message_utf8(ec);return;}
         }
         if(root_.empty()){error_="cannot create unique temporary report spool";return;}
 #ifndef _WIN32
-        ec.clear();std::filesystem::permissions(root_,std::filesystem::perms::owner_all,std::filesystem::perm_options::replace,ec);if(ec){error_="cannot restrict temporary report spool permissions: "+ec.message();std::filesystem::remove_all(root_,ec);root_.clear();return;}
+        ec.clear();std::filesystem::permissions(root_,std::filesystem::perms::owner_all,std::filesystem::perm_options::replace,ec);if(ec){error_="cannot restrict temporary report spool permissions: "+prts::error_message_utf8(ec);std::filesystem::remove_all(root_,ec);root_.clear();return;}
 #endif
     }
     ~DirectoryReportSpool(){if(root_.empty())return;std::error_code ec;std::filesystem::remove_all(root_,ec);}
@@ -1991,7 +1991,7 @@ int main(int argc,char**argv){
     if(argc<2){std::cerr<<"usage: auto-refirst <file|directory> [--run] [--apply] [--json] [--extract] [options]\nTry 'auto-refirst --help' for details.\n";return exit_code(ExitCode::Usage);}
     const std::string first=argv[1];if(first=="-h"||first=="--help"){print_help(std::cout);return finish_standard_output(ExitCode::Success);}if(first=="--version"){print_version(std::cout);return finish_standard_output(ExitCode::Success);}if(!first.empty()&&first.front()=='-'){std::cerr<<"unknown option: "<<first<<"\n";return exit_code(ExitCode::Usage);}
     Options opt;if(!parse_options(argc,argv,opt))return exit_code(ExitCode::Usage);if(opt.help){print_help(std::cout);return finish_standard_output(ExitCode::Success);}if(opt.version){print_version(std::cout);return finish_standard_output(ExitCode::Success);}
-    const std::filesystem::path input=cli_path(argv[1]);std::error_code ec;const auto input_status=std::filesystem::status(input,ec);if(ec||input_status.type()==std::filesystem::file_type::not_found){std::cerr<<"cannot access input"<<(ec?": "+ec.message():std::string())<<"\n";return exit_code(ExitCode::Input);}const bool is_dir=input_status.type()==std::filesystem::file_type::directory;if(!is_dir&&input_status.type()!=std::filesystem::file_type::regular){std::cerr<<"input is neither a regular file nor a directory\n";return exit_code(ExitCode::Input);}
+    const std::filesystem::path input=cli_path(argv[1]);std::error_code ec;const auto input_status=std::filesystem::status(input,ec);if(ec||input_status.type()==std::filesystem::file_type::not_found){std::cerr<<"cannot access input"<<(ec?": "+prts::error_message_utf8(ec):std::string())<<"\n";return exit_code(ExitCode::Input);}const bool is_dir=input_status.type()==std::filesystem::file_type::directory;if(!is_dir&&input_status.type()!=std::filesystem::file_type::regular){std::cerr<<"input is neither a regular file nor a directory\n";return exit_code(ExitCode::Input);}
     if(opt.run_mode=="trace")std::cerr<<"warning: --run=trace is DEPRECATED; prefer bare --run for automatic deep non-destructive analysis\n";
     else if(opt.run_mode=="unpack")std::cerr<<"warning: --run=unpack is DEPRECATED and is non-destructive; prefer bare --run, and add --apply only when you explicitly authorize validated installation\n";
     else if(opt.run_mode=="python-probe")std::cerr<<"warning: --run=python-probe is a DEPRECATED forced-debug compatibility mode; bare --run routes the probe automatically when it can answer an unresolved question\n";
