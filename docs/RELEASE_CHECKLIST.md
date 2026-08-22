@@ -12,6 +12,7 @@ This checklist is the maintainer gate for public auto-refirst prereleases and re
 ## 2. Provenance and supply chain
 
 - [ ] Revalidate `tests/corpus/PROVENANCE.csv`: every tracked fixture has a documented source/rights basis and matching SHA-256.
+- [ ] `python3 tests/check_third_party_provenance.py` passes and reconciles compiled/reference rows with CMake, vendored roots, license files, notices, and the SBOM.
 - [ ] Review all newly added fixtures and generated references for source, version/revision, redistribution basis, generator/acquisition path, transformations, and hash.
 - [ ] Reconcile `LICENSE`, `NOTICE`, `THIRD_PARTY_NOTICES.md`, `LICENSES/`, `docs/PROVENANCE.md`, and `SBOM.spdx.json` with the bytes actually shipped.
 - [ ] Review dependency/revision changes explicitly; do not silently substitute vendored sources during packaging.
@@ -25,6 +26,7 @@ From a clean checkout of the frozen commit:
 - [ ] Run the documented Zig Windows cross-build as an additional portability check when the maintainer toolchain is available.
 - [ ] Record commit, compiler/toolchain, CMake version, platform, and relevant build flags in release metadata.
 - [ ] Verify `auto-refirst --version` reports the intended release version on both release binaries.
+- [ ] `cmake --build <build-dir> --target auto_refirst_public_install_stage_check` passes for each native release build.
 
 ## 4. Public regression gates
 

@@ -21,6 +21,7 @@ from typing import Iterable
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROVENANCE = ROOT / "tests" / "corpus" / "PROVENANCE.csv"
+THIRD_PARTY_PROVENANCE_CHECK = ROOT / "tests" / "check_third_party_provenance.py"
 PUBLIC_FIXTURES = (
     "tests/corpus/jvm/LambdaSample.class",
     "tests/corpus/android/LambdaSample.dex",
@@ -112,6 +113,9 @@ def pyc310() -> bytes:
 
 
 def provenance_gate() -> None:
+    supply_chain = run([sys.executable, THIRD_PARTY_PROVENANCE_CHECK])
+    if supply_chain.stdout.strip():
+        log(supply_chain.stdout.strip())
     assert PROVENANCE.is_file(), PROVENANCE
     with PROVENANCE.open(newline="", encoding="utf-8") as f:
         rows = {r["path"]: r for r in csv.DictReader(f)}

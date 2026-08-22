@@ -136,6 +136,29 @@ install(FILES README.md README_EN.md LICENSE NOTICE THIRD_PARTY_NOTICES.md
         DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/auto-refirst)
 install(DIRECTORY LICENSES DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/auto-refirst)
 
+# Explicit local supply-chain gates. They are opt-in targets so the normal
+# product build does not acquire a Python configure-time dependency.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  add_custom_target(auto_refirst_public_provenance_check
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_third_party_provenance.py"
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      USES_TERMINAL VERBATIM)
+
+  set(_auto_refirst_install_check_config_args)
+  if(CMAKE_CONFIGURATION_TYPES)
+    set(_auto_refirst_install_check_config_args --config "$<CONFIG>")
+  endif()
+  add_custom_target(auto_refirst_public_install_stage_check
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_install_stage.py"
+              --build-binary "$<TARGET_FILE:auto_refirst>"
+              --build-dir "${CMAKE_CURRENT_BINARY_DIR}"
+              ${_auto_refirst_install_check_config_args}
+      DEPENDS auto_refirst auto_refirst_public_provenance_check
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      USES_TERMINAL VERBATIM)
+endif()
+
 # Self-contained public CI helpers. These are built on demand by the public regression runner.
 add_executable(auto_refirst_public_model_trust_unit EXCLUDE_FROM_ALL
     tests/model_trust_unit.cpp

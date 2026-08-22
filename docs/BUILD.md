@@ -43,6 +43,17 @@ python3 tests/run_public_regression.py --binary build/auto-refirst --tier all
 
 Windows 多配置生成器需要将 `--binary` 指向实际配置目录中的 executable。
 
+本地 provenance 与安装 allowlist gate：
+
+```sh
+cmake --build build --target auto_refirst_public_provenance_check
+cmake --build build --target auto_refirst_public_install_stage_check
+```
+
+Windows 多配置生成器在上述命令后增加 `--config Release`。安装 gate 会把当前
+build 暂存到临时 prefix，逐字节核对 binary、README、NOTICE、项目许可证及
+`LICENSES/`，并拒绝额外文件、目录和链接。
+
 ## Sanitizer smoke
 
 GCC/Clang：
