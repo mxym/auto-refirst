@@ -37,9 +37,11 @@ jobs:
         env:
           EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
-          actual_sha="$(git rev-parse HEAD)"
+          test -e .git
+          actual_sha="$(git rev-parse --verify HEAD)"
           test "$actual_sha" = "$EXPECTED_SHA"
-          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          source_status="$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "$source_status"
       - name: Public source hygiene
         run: python3 tests/check_public_source_hygiene.py --require-clean
       - name: Record toolchain
@@ -47,35 +49,22 @@ jobs:
           cmake --version
           "$CC" --version
           "$CXX" --version
-      - name: Select warnings-as-errors contract
-        id: strict
-        run: |
-          if git grep -q AUTO_REFIRST_WARNINGS_AS_ERRORS -- CMakeLists.txt cmake 2>/dev/null; then
-            echo "arg=-DAUTO_REFIRST_WARNINGS_AS_ERRORS=ON" >> "$GITHUB_OUTPUT"
-          else
-            echo "arg=-DCMAKE_COMPILE_WARNING_AS_ERROR=ON" >> "$GITHUB_OUTPUT"
-          fi
       - name: Configure strict Release
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          ${{ steps.strict.outputs.arg }}
+          -DAUTO_REFIRST_WARNINGS_AS_ERRORS=ON
       - name: Build
         run: cmake --build build --parallel 2
-      - name: Verify embedded binary source identity
+      - name: Verify exact build identity
         env:
           EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: |
-          version_output="$(build/auto-refirst --version)"
-          printf '%s\n' "$version_output"
-          embedded_sha="$(printf '%s\n' "$version_output" | sed -n 's/^git_commit=//p')"
-          if test -n "$embedded_sha"; then
-            test "$embedded_sha" = "$EXPECTED_SHA"
-          elif git grep -q 'git_commit=' -- src include cmake 2>/dev/null; then
-            echo "binary omitted git_commit although the source declares the identity contract" >&2
-            exit 1
-          else
-            echo "::notice::This public baseline predates embedded build identity; the RC candidate must expose git_commit and will be checked exactly."
-          fi
+        run: >-
+          python3 tests/check_ci_build_identity.py
+          --binary build/auto-refirst
+          --expected-commit "$EXPECTED_SHA"
+          --expected-platform Linux/x86_64
+          --expected-schema 1.0
+          --self-test
       - name: Public P0/P1 static regression
         run: python3 tests/run_public_regression.py --binary build/auto-refirst --tier all --require-clean-source
       - name: Directory resource static contract
@@ -86,7 +75,9 @@ jobs:
           auto_refirst_public_provenance_check
           auto_refirst_public_install_stage_check
       - name: Assert source remains clean
-        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
+        run: |
+          source_status="$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "$source_status"
 
   authorized-runtime:
     name: Authorized runtime tests (not static-only)
@@ -106,23 +97,17 @@ jobs:
         env:
           EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
-          actual_sha="$(git rev-parse HEAD)"
+          test -e .git
+          actual_sha="$(git rev-parse --verify HEAD)"
           test "$actual_sha" = "$EXPECTED_SHA"
-          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          source_status="$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "$source_status"
       - name: Public source hygiene
         run: python3 tests/check_public_source_hygiene.py --require-clean
-      - name: Select warnings-as-errors contract
-        id: strict
-        run: |
-          if git grep -q AUTO_REFIRST_WARNINGS_AS_ERRORS -- CMakeLists.txt cmake 2>/dev/null; then
-            echo "arg=-DAUTO_REFIRST_WARNINGS_AS_ERRORS=ON" >> "$GITHUB_OUTPUT"
-          else
-            echo "arg=-DCMAKE_COMPILE_WARNING_AS_ERROR=ON" >> "$GITHUB_OUTPUT"
-          fi
       - name: Configure strict Release
         run: >-
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          ${{ steps.strict.outputs.arg }}
+          -DAUTO_REFIRST_WARNINGS_AS_ERRORS=ON
       - name: Build
         run: cmake --build build --parallel 2
       - name: Directory orchestration with authorized runtime
@@ -130,4 +115,6 @@ jobs:
       - name: Runtime authorization boundary
         run: python3 tests/test_runtime_authorization.py build/auto-refirst
       - name: Assert source remains clean
-        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
+        run: |
+          source_status="$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "$source_status"

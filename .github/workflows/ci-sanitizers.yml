@@ -29,9 +29,11 @@ jobs:
         env:
           EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
-          actual_sha="$(git rev-parse HEAD)"
+          test -e .git
+          actual_sha="$(git rev-parse --verify HEAD)"
           test "$actual_sha" = "$EXPECTED_SHA"
-          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          source_status="$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "$source_status"
       - name: Public source hygiene
         run: python3 tests/check_public_source_hygiene.py --require-clean
       - name: Record GCC 13 toolchain
@@ -39,18 +41,10 @@ jobs:
           cmake --version
           "$CC" --version
           "$CXX" --version
-      - name: Select warnings-as-errors contract
-        id: strict
-        run: |
-          if git grep -q AUTO_REFIRST_WARNINGS_AS_ERRORS -- CMakeLists.txt cmake 2>/dev/null; then
-            echo "arg=-DAUTO_REFIRST_WARNINGS_AS_ERRORS=ON" >> "$GITHUB_OUTPUT"
-          else
-            echo "arg=-DCMAKE_COMPILE_WARNING_AS_ERROR=ON" >> "$GITHUB_OUTPUT"
-          fi
       - name: Configure strict ASan and UBSan
         run: >-
           cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Release
-          ${{ steps.strict.outputs.arg }}
+          -DAUTO_REFIRST_WARNINGS_AS_ERRORS=ON
           -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_C_FLAGS_RELEASE="-O1 -g1 -DNDEBUG"
@@ -61,4 +55,6 @@ jobs:
       - name: Malformed-input static sanitizer smoke
         run: python3 tests/run_public_regression.py --binary build-san/auto_refirst_public_malformed_sanitizer --sanitizer-smoke
       - name: Assert source remains clean
-        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
+        run: |
+          source_status="$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "$source_status"
