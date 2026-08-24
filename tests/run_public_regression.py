@@ -32,6 +32,7 @@ PUBLIC_FIXTURES = (
     "tests/corpus/hermes/v89.hbc",
     "tests/corpus/hermes/v96.hbc",
     "tests/corpus/hermes/v98.hbc",
+    "tests/corpus/apk-jni/jni-relation-x86_64.apk",
 )
 
 
@@ -167,7 +168,7 @@ def provenance_gate() -> None:
     assert PROVENANCE.is_file(), PROVENANCE
     with PROVENANCE.open(newline="", encoding="utf-8") as f:
         rows = {r["path"]: r for r in csv.DictReader(f)}
-    assert len(rows) == 12, f"expected exactly twelve public fixture rows, got {len(rows)}"
+    assert len(rows) == 13, f"expected exactly thirteen public fixture rows, got {len(rows)}"
     for path,r in rows.items():
         src=ROOT/path
         assert src.is_file(), f"missing public fixture: {path}"
@@ -178,7 +179,7 @@ def provenance_gate() -> None:
     for path in PUBLIC_FIXTURES:
         assert path in rows, f"missing P0 provenance row: {path}"
         assert rows[path]["public_ci_allowed"].lower()=="true", (path,rows[path])
-    log("[PASS P0] public fixture provenance: 12 source-backed rows + SHA-256")
+    log("[PASS P0] public fixture provenance: 13 source-backed rows + SHA-256")
 
 def p0_formats(binary: pathlib.Path, td: pathlib.Path) -> None:
     pe=td/"minimal-pe.bin"; pe.write_bytes(minimal_pe())
@@ -204,7 +205,7 @@ def p0_formats(binary: pathlib.Path, td: pathlib.Path) -> None:
     assert len(findings)==1 and findings[0]["state"]=="CONFIRMED", findings
     assert findings[0]["variant"]=="5.3" and findings[0]["fields"]["prototypes"]=="1" and findings[0]["fields"]["constants"]=="1", findings[0]
     assert not lua53["runtime"]["requested"]
-    for rel,version in zip(PUBLIC_FIXTURES[4:],(89,96,98)):
+    for rel,version in zip(PUBLIC_FIXTURES[4:7],(89,96,98)):
         src=ROOT/rel; p=td/src.name; p.write_bytes(src.read_bytes())
         j=analyze(binary,p); hermes=j["hermes"]
         assert hermes["valid"] and hermes["parse_complete"] and hermes["version"]==version
@@ -213,6 +214,9 @@ def p0_formats(binary: pathlib.Path, td: pathlib.Path) -> None:
     cp=run([sys.executable,ROOT/"tests/test_hermes_apk.py",binary,"--smoke"],timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log("[PASS P0] APK/ZIP exact Hermes content-child route")
+    cp=run([sys.executable,ROOT/"tests/test_apk_jni_fixture.py",binary],timeout=180)
+    assert "[PASS]" in cp.stdout,cp.stdout
+    log("[PASS P0] source-backed APK/JNI J0-J4 structural relations; static only")
 
 
 def p0_relationship_guidance(binary: pathlib.Path, td: pathlib.Path) -> None:

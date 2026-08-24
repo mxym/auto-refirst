@@ -6,14 +6,15 @@
 
 P0 校验：
 
-- 12 个公开 fixture 的 provenance 与 SHA-256；
+- 13 个公开 fixture 的 provenance 与 SHA-256；
 - PE/ELF/JVM/DEX/Wasm/Lua/Hermes 静态格式边界；
 - 跨文件关系与目录 guidance；
 - interpreter/runtime-modality 静态授权边界；
 - nested executable 与 recursive artifact graph；
 - model trust 与 CPython bytecode ingress；
 - JSON/text/version 与 `0/1/2/3/4` process contract；
-- APK/Hermes child、Mach-O/Swift、.NET bundle/NativeAOT 与 Unreal container 的有界静态 gate；
+- APK/Hermes child、APK/JNI J0-J4 结构关系、Mach-O/Swift、.NET bundle/NativeAOT 与
+  Unreal container 的有界静态 gate；
 - Windows junction/reparse 输出安全（Windows runner）。
 
 ## P1 — source-generated integration

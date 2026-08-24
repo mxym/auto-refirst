@@ -13,6 +13,7 @@
 ### Changed
 
 - Extend source-generated public P0/P1 gates for Hermes/APK, Mach-O/Swift, .NET bundle/NativeAOT, Unreal containers and the CLI exit-code contract.
+- Add a project-owned source-backed APK/JNI J0-J4 structural-relation fixture to the static-only public P0 gate.
 - Keep semantic confidence fail-closed: encrypted/unsupported layouts remain `PARTIAL`, structural relations do not become native-registration or source-recovery claims, and analyzed fixtures are never executed.
 
 ### Fixed
