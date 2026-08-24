@@ -2,6 +2,7 @@
 #include "prts/path_utf8.hpp"
 #include "prts/report_schema.hpp"
 #include <iomanip>
+#include <limits>
 #include <sstream>
 
 namespace prts {
@@ -180,6 +181,7 @@ std::vector<const ApkEntryInfo*> apk_render_entries(const ApkInfo& apk,std::size
     // entries that most directly change downstream analysis. These are renderer priorities,
     // not parser/detector confidence changes.
     add([](const auto&e){return e.manifest;},4);
+    add([](const auto&e){return e.hermes_magic;},32);
     add([](const auto&e){return e.native_elf&&e.jni_onload_export;},16);
     add([](const auto&e){return e.dex&&e.dex_magic;},32);
     add([](const auto&e){return e.native_elf;},32);
@@ -188,7 +190,7 @@ std::vector<const ApkEntryInfo*> apk_render_entries(const ApkInfo& apk,std::size
     add([](const auto&e){return e.native_library;},16);
     add([](const auto&e){return e.dex;},16);
     add([](const auto&e){return !e.safe_path||e.symlink||e.encrypted||!e.supported||e.duplicate_path;},16);
-    for(const auto priority:{std::uint8_t(100),std::uint8_t(95),std::uint8_t(80),std::uint8_t(75),std::uint8_t(65),std::uint8_t(60)})
+    for(const auto priority:{std::uint8_t(100),std::uint8_t(99),std::uint8_t(95),std::uint8_t(80),std::uint8_t(75),std::uint8_t(65),std::uint8_t(60)})
         add([&](const auto&e){return e.analysis_priority==priority;},cap);
     add([](const auto&){return true;},cap);
     return out;
@@ -481,17 +483,45 @@ std::string render_text(const AnalysisReport& r) {
         if(r.macho.fat)o<<" Universal"<<(r.macho.fat64?"64":"")<<" slices="<<r.macho.slices.size();
         o<<"\n";
         o<<"File-offset basis: "<<path_utf8(r.artifact.offset_basis)<<" (current input artifact)\n";
+        o<<"Slice policy: "<<r.macho.slice_policy<<" selected="<<r.macho.selected_slice<<" (architecture inventory only)\n";
         for(std::size_t si=0;si<r.macho.slices.size();++si){
             const auto&m=r.macho.slices[si];
             o<<"Slice "<<si<<": "<<(m.macho64?"Mach-O64":"Mach-O32")<<' '<<macho_cpu_name(m.cpu_type)<<' '<<macho_filetype_name(m.filetype)<<" endian="<<(m.little_endian?"little":"big")<<" file_off=0x"<<std::hex<<m.slice_offset<<std::dec<<" size="<<m.slice_size<<"\n";
+            o<<"  Architecture: "<<m.architecture<<" subtype_base="<<m.cpu_subtype_base;
+            if(m.arm64e)o<<" ptrauth_versioned="<<(m.ptrauth_versioned?"true":"false")<<" ptrauth_kernel="<<(m.ptrauth_kernel?"true":"false")<<" ptrauth_abi_version="<<m.ptrauth_abi_version;
+            o<<"\n  Coverage: "<<m.coverage_state<<" load_commands="<<m.load_command_coverage_state<<" retained="<<m.load_commands.size()<<"/"<<m.load_command_count<<(m.load_commands_truncated?" truncated":"")<<"\n";
+            for(const auto& command:m.unknown_load_commands)o<<"    Unknown load command cmd=0x"<<std::hex<<command.command<<" offset=0x"<<command.offset<<std::dec<<" size="<<command.size<<"\n";
+            if(m.unknown_load_commands_truncated)o<<"    Unknown load commands truncated: retained="<<m.unknown_load_commands.size()<<" total="<<m.unknown_load_command_count<<"\n";
+            for(const auto& reason:m.coverage_reasons)o<<"    coverage reason: "<<reason<<"\n";
+            if(m.bitcode_present)o<<"  Bitcode: "<<m.bitcode_state<<" (__LLVM,__bundle inventory only)\n";
+            o<<"  Code signature state: "<<m.code_signature_state<<"\n";
             if(m.entry_file_offset)o<<"  Entry file offset=0x"<<std::hex<<m.entry_file_offset<<" VA=0x"<<m.entry_va<<std::dec<<"\n";
             if(m.platform)o<<"  Build: "<<macho_platform_name(m.platform)<<" min="<<macho_version_string(m.min_os)<<" sdk="<<macho_version_string(m.sdk)<<"\n";
             if(!m.uuid.empty())o<<"  UUID: "<<m.uuid<<"\n";
-            if(m.code_signature)o<<"  Code signature: offset=0x"<<std::hex<<m.code_signature_offset<<std::dec<<" size="<<m.code_signature_size<<"\n";
+            if(m.code_signature)o<<"    blob offset=0x"<<std::hex<<m.code_signature_offset<<std::dec<<" size="<<m.code_signature_size<<" (cryptographic verification not performed)\n";
             if(m.crypt_size)o<<"  Encryption info: cryptid="<<m.cryptid<<" offset=0x"<<std::hex<<m.crypt_offset<<std::dec<<" size="<<m.crypt_size<<(m.encrypted?" encrypted":" not-encrypted")<<"\n";
             if(!m.dylibs.empty()){o<<"  Dylibs:";for(const auto&x:m.dylibs)o<<" "<<x;o<<"\n";}
             o<<"  Sections:\n";for(const auto&sec:m.sections)o<<"    "<<sec.segment<<','<<sec.name<<" VA=0x"<<std::hex<<sec.address<<" off=0x"<<sec.offset<<std::dec<<" size="<<sec.size<<" used="<<sec.used_size<<" entropy="<<std::fixed<<std::setprecision(3)<<sec.entropy<<" flags=0x"<<std::hex<<sec.flags<<std::dec<<"\n";
             if(!m.symbols.empty()){o<<"  Symbols: "<<m.symbols.size()<<"\n";std::size_t shown=0;for(const auto&x:m.symbols){if(shown++>=80){o<<"    ...\n";break;}o<<"    "<<(x.defined?"defined":"undefined")<<(x.external?" external":"")<<(x.private_external?" private-external":"")<<" VA=0x"<<std::hex<<x.value;if(x.file_offset)o<<" file_off=0x"<<x.file_offset;o<<std::dec<<" "<<x.name<<"\n";}}
+            if(m.swift.present){
+                o<<"  Swift metadata: "<<m.swift.state<<" evidence="<<m.swift.evidence_level<<" coverage="<<m.swift.coverage_state<<" source_or_semantic_recovery="<<m.swift.source_or_semantic_recovery<<"\n";
+                for(const auto& section:m.swift.sections)o<<"    section "<<section.segment<<','<<section.name<<" off=0x"<<std::hex<<section.offset<<std::dec<<" size="<<section.size<<" state="<<section.state<<"\n";
+                for(const auto& type:m.swift.types){
+                    o<<"    "<<type.kind<<' '<<type.module_name<<'.'<<type.type_name;
+                    if(type.mangled_type_plain_text)o<<" mangled_text="<<type.mangled_type_name;
+                    else if(type.mangled_type_present)o<<" mangled_bytes_sha256="<<type.mangled_type_sha256<<" byte_length="<<type.mangled_type_byte_length<<" symbolic_references="<<type.mangled_type_symbolic_references;
+                    else o<<" mangled=absent";
+                    o<<" fields="<<type.fields.size()<<"\n";
+                    for(const auto& field:type.fields){o<<"      "<<field.name;
+                        if(field.mangled_type_plain_text)o<<" : "<<field.mangled_type_name;
+                        else if(field.mangled_type_present)o<<" : bytes_sha256="<<field.mangled_type_sha256<<" byte_length="<<field.mangled_type_byte_length<<" symbolic_references="<<field.mangled_type_symbolic_references;
+                        else o<<" : mangled_type=absent";
+                        o<<" flags=0x"<<std::hex<<field.flags<<std::dec<<"\n";}
+                }
+                o<<"    budgets: types="<<m.swift.type_records_used<<"/4096 field_descriptors="<<m.swift.field_descriptors_used<<"/4096 fields="<<m.swift.field_records_used<<"/65536 pointers="<<m.swift.relative_pointers_used<<"/131072 strings="<<m.swift.strings_used<<"/65536 string_bytes="<<m.swift.string_bytes_used<<"/4194304\n";
+                o<<"    outcomes: complete_type_closures="<<m.swift.complete_type_closures<<" type_skipped="<<m.swift.type_records_skipped<<" type_partial="<<m.swift.type_records_partial<<" type_unsupported="<<m.swift.type_records_unsupported<<" field_descriptors_skipped="<<m.swift.field_descriptors_skipped<<" field_descriptors_partial="<<m.swift.field_descriptors_partial<<" fields_skipped="<<m.swift.field_records_skipped<<" fields_partial="<<m.swift.field_records_partial<<" mangled_absent="<<m.swift.mangled_type_names_absent<<" mangled_symbolic="<<m.swift.mangled_type_names_symbolic<<"\n";
+                if(!m.swift.error.empty())o<<"    Swift coverage reason: "<<m.swift.error<<"\n";
+            }
             if(!m.function_starts.empty()){o<<"  Function starts: "<<m.function_starts.size()<<"\n";std::size_t shown=0;for(const auto&x:m.function_starts){if(shown++>=120){o<<"    ...\n";break;}o<<"    VA=0x"<<std::hex<<x.address<<" file_off=0x"<<x.file_offset<<std::dec;if(!x.symbol.empty())o<<" "<<x.symbol;o<<"\n";}}
             if(m.routine_init_address||!m.init_functions.empty()||!m.term_functions.empty()||!m.thread_init_functions.empty()){o<<"  Pre-entry / initialization:\n";if(m.routine_init_address)o<<"    LC_ROUTINES init=0x"<<std::hex<<m.routine_init_address<<std::dec<<"\n";for(auto x:m.init_functions)o<<"    init=0x"<<std::hex<<x<<std::dec<<"\n";for(auto x:m.thread_init_functions)o<<"    thread-init=0x"<<std::hex<<x<<std::dec<<"\n";for(auto x:m.term_functions)o<<"    term=0x"<<std::hex<<x<<std::dec<<"\n";}
         }
@@ -794,6 +824,14 @@ std::string render_text(const AnalysisReport& r) {
               << " native_elf=" << r.apk.validated_native_elf_count << "/" << r.apk.native_library_count
               << " resources.arsc=" << (r.apk.resources_table_valid?"validated":"absent/unvalidated")
               << " assets=" << r.apk.asset_count << " res_files=" << r.apk.resource_count << " nested=" << r.apk.nested_archive_count << "\n";
+            o << "  JNI static relations: state=" << r.apk.jni_relations_state
+              << " packaged=" << r.apk.jni_packaged_count << " referenced=" << r.apk.jni_referenced_count
+              << " declared=" << r.apk.jni_declared_count << " exported=" << r.apk.jni_exported_count
+              << " registration_confirmed=" << r.apk.jni_registration_confirmed_count
+              << " (static evidence only; loading/invocation not observed)\n";
+            for(std::size_t z=0;z<r.apk.jni_relations.size()&&z<24;++z){const auto&j=r.apk.jni_relations[z];o<<"    "<<j.evidence_level;if(!j.dex_entry.empty())o<<" dex="<<j.dex_entry;if(!j.native_entry.empty())o<<" native="<<j.native_entry;if(!j.class_descriptor.empty())o<<" "<<j.class_descriptor<<"->"<<j.method_name<<j.method_descriptor;o<<"\n";}
+            if(r.apk.jni_relations.size()>24)o<<"    ... "<<(r.apk.jni_relations.size()-24)<<" more static relations\n";
+            if(!r.apk.jni_relations_error.empty())o<<"  JNI relation warning: "<<r.apk.jni_relations_error<<"\n";
             o << "  manifest: strings=" << r.apk.manifest.string_count << " elements=" << r.apk.manifest.start_element_count
               << " permissions=" << r.apk.manifest.permissions.size() << " components=" << r.apk.manifest.components.size();
             if(r.apk.manifest.min_sdk_known)o<<" minSdk="<<r.apk.manifest.min_sdk;
@@ -834,6 +872,28 @@ std::string render_text(const AnalysisReport& r) {
         } else if(!r.apk.error.empty()) o<<"  error: "<<r.apk.error<<"\n";
     }
 
+    if(r.unreal.candidate){
+        o<<"Unreal Engine container:\n  kind: "<<r.unreal.kind<<" state: "<<r.unreal.state<<"\n";
+        if(r.unreal.kind=="pak"){
+            const auto&x=r.unreal.pak;
+            o<<"  Pak: version="<<x.version<<" footer_profile="<<x.footer_profile
+             <<" footer=current-file+0x"<<std::hex<<x.footer_offset<<std::dec
+             <<" index=current-file+0x"<<std::hex<<x.index_offset<<std::dec<<"+"<<x.index_size
+             <<" entries="<<x.entry_count<<" SHA1="<<(x.index_hash_checked?(x.index_hash_matches?"match":"MISMATCH"):"not-checked")
+             <<" encrypted="<<(x.encrypted_index?"true":"false")<<" frozen="<<(x.frozen_index?"true":"false")<<"\n";
+        }else{
+            const auto&x=r.unreal.iostore;
+            o<<"  IoStore: version="<<unsigned(x.version)<<" header_size="<<x.header_size
+             <<" entries="<<x.entry_count<<" blocks="<<x.compressed_block_count
+             <<" partitions="<<x.partition_count<<" toc_valid="<<(x.toc_valid?"true":"false")
+             <<" pair_valid="<<(x.pair_valid?"true":"false")<<" encrypted="<<(x.encrypted?"true":"false")
+             <<" signature_table="<<(x.signature_table_structurally_present?"STRUCTURALLY_PRESENT":"NOT_PRESENT_OR_UNVALIDATED")
+             <<" cryptographic_verification=NOT_PERFORMED\n";
+            for(const auto&p:x.partitions)o<<"    partition["<<p.index<<"] "<<path_utf8(p.path)<<" state="<<p.state<<" required="<<p.required_bytes<<" size="<<p.file_size<<(p.error.empty()?"":(" error="+p.error))<<"\n";
+        }
+        if(!r.unreal.error.empty())o<<"  error: "<<r.unreal.error<<"\n";
+        o<<"  scope: static structural recognition only; no asset semantics, decryption, decompression, or extraction claimed\n";
+    }
     if (r.dex.candidate) {
         o << "Android DEX:\n"
           << "  state: " << (r.dex.valid?"CONFIRMED":"FAILED") << "\n"
@@ -844,7 +904,10 @@ std::string render_text(const AnalysisReport& r) {
               << " fields=" << r.dex.fields.size() << " methods=" << r.dex.methods.size() << " classes=" << r.dex.classes.size() << "\n"
               << "  definitions: fields=" << r.dex.defined_field_count << " methods=" << r.dex.defined_method_count
               << " code_items=" << r.dex.code_item_count << " debug_info=" << r.dex.debug_info_count << "\n"
-              << "  dynamic: method_handles=" << r.dex.method_handles.size() << " call_sites=" << r.dex.call_sites.size() << "\n";
+              << "  dynamic: method_handles=" << r.dex.method_handles.size() << " call_sites=" << r.dex.call_sites.size() << "\n"
+              << "  JNI static surface: state=" << (r.dex.jni_surface_scan_complete?"RESOLVED":"PARTIAL")
+              << " loadLibrary_references=" << r.dex.library_loads.size() << " (loading not observed)\n";
+            if(!r.dex.jni_surface_scan_error.empty())o<<"  JNI surface warning: "<<r.dex.jni_surface_scan_error<<"\n";
             if(r.dex.checksum_checked)o<<"  Adler-32: "<<(r.dex.checksum_matches?"match":"MISMATCH")<<"\n";
             if(r.dex.signature_checked)o<<"  SHA-1 signature: "<<(r.dex.signature_matches?"match":"MISMATCH")<<"\n";
             if(!r.dex.classes.empty()){o<<"  classes:\n";for(std::size_t z=0;z<r.dex.classes.size()&&z<64;++z){const auto&c=r.dex.classes[z];o<<"    "<<c.name;if(!c.superclass.empty())o<<" extends "<<c.superclass;if(!c.source_file.empty())o<<" source="<<c.source_file;o<<"\n";}if(r.dex.classes.size()>64)o<<"    ... "<<(r.dex.classes.size()-64)<<" more\n";}
@@ -885,6 +948,21 @@ std::string render_text(const AnalysisReport& r) {
         if(r.jar_extract.success||r.jar_extract.budget_exhausted)o<<"  extraction: "<<(r.jar_extract.success?"EXTRACTED_VALIDATED":"PARTIAL")<<" files="<<r.jar_extract.file_count<<" bytes="<<r.jar_extract.output_bytes<<" output="<<path_utf8(r.jar_extract.output_dir)<<"\n";
     }
 
+    if (r.dotnet_bundle.candidate) {
+        const auto& b=r.dotnet_bundle;
+        o << ".NET single-file bundle:\n"
+          << "  state: " << b.state << " version=" << b.major_version << '.' << b.minor_version << " files=" << b.file_count << "\n";
+        if(b.valid)o << "  bundle_id: " << b.bundle_id << " compressed_files=" << b.compressed_file_count << " integrity=" << b.integrity_state << "\n";
+        if(!b.error.empty())o << "  note: " << b.error << "\n";
+    }
+    if (r.native_aot.candidate) {
+        const auto& n=r.native_aot;
+        o << ".NET NativeAOT:\n"
+          << "  state: " << n.state << " platform=" << n.platform << " R2R=" << n.major_version << '.' << n.minor_version << " sections=" << n.section_count << "\n";
+        if(n.valid)o << "  evidence: __modules + __managedcode + .dotnet_eh_table + .hydrated; raw_RTR=" << n.raw_rtr_magic_count << " valid_headers=" << n.valid_rtr_header_count << "\n";
+        if(!n.error.empty())o << "  note: " << n.error << "\n";
+    }
+
     if (r.pe.clr.present) {
         o << ".NET metadata:\n"
           << "  state: " << (r.dotnet.valid?"CONFIRMED":"FAILED") << "\n";
@@ -916,6 +994,20 @@ std::string render_text(const AnalysisReport& r) {
         }
         if(!r.wasm.error.empty())o<<"  error: file+0x"<<std::hex<<r.wasm.error_offset<<std::dec<<" "<<r.wasm.error<<"\n";
         for(const auto&a:r.wasm.anomalies)o<<"  warning: "<<a<<"\n";
+    }
+
+    if (r.hermes.candidate) {
+        const auto state=!r.hermes.supported_epoch?"PARTIAL":((!r.hermes.valid&&!r.hermes.budget_limited)?"FAILED":(r.hermes.parse_complete?"CONFIRMED":"PARTIAL"));
+        o << "Hermes bytecode:\n"
+          << "  state: " << state << " version=" << r.hermes.version << " epoch=" << r.hermes.epoch << "\n";
+        if(r.hermes.supported_epoch){
+            o << "  functions/strings/identifiers: " << r.hermes.function_count << "/" << r.hermes.string_count << "/" << r.hermes.identifier_count << "\n"
+              << "  footer SHA-1: " << (r.hermes.footer_hash_matches?"validated":"failed") << " debug=" << (r.hermes.debug.valid?"validated":"failed") << "\n";
+            std::size_t shown=0;for(const auto&f:r.hermes.functions){if(f.function_name.empty())continue;if(shown++==0)o<<"  named functions:\n";if(shown>64){o<<"    ...\n";break;}o<<"    #"<<f.index<<" "<<f.function_name<<" file+0x"<<std::hex<<f.bytecode_offset<<std::dec<<" size="<<f.bytecode_size<<" instructions="<<f.instruction_count<<"\n";}
+            if(r.hermes_extract.success)o<<"  maps: "<<path_utf8(r.hermes_extract.functions_csv)<<", "<<path_utf8(r.hermes_extract.strings_csv)<<", "<<path_utf8(r.hermes_extract.opcodes_csv)<<"\n";
+        }
+        if(!r.hermes.error.empty())o<<"  error: file+0x"<<std::hex<<r.hermes.error_offset<<std::dec<<" "<<r.hermes.error<<"\n";
+        for(const auto&a:r.hermes.anomalies)o<<"  warning: "<<a<<"\n";
     }
 
     if(r.implicit_exec.state!="NOT_PRESENT"){
@@ -1223,13 +1315,41 @@ std::string render_text(const AnalysisReport& r,ReportLanguage language) {
 }
 
 namespace {
-struct ChildJsonPlaneLimit { const char* name; std::size_t total; std::size_t cap; };
-constexpr std::size_t kChildDexMapItems=128,kChildDexTypes=128,kChildDexProtos=128,kChildDexFields=128,kChildDexMethods=256,kChildDexCodeItems=128,kChildDexClasses=64,kChildDexMethodHandles=64,kChildDexCallSites=64,kChildDexStrings=256,kChildDexStringHints=256,kChildDexAnomalies=64;
+struct ChildJsonPlaneLimit {
+    std::string name;
+    std::size_t total=0,cap=0,retained=std::numeric_limits<std::size_t>::max();
+    std::size_t rendered()const{return std::min(total,std::min(cap,retained));}
+};
+constexpr std::size_t kChildDexMapItems=128,kChildDexTypes=128,kChildDexProtos=128,kChildDexFields=128,kChildDexMethods=256,kChildDexCodeItems=128,kChildDexClasses=64,kChildDexMethodHandles=64,kChildDexCallSites=64,kChildDexLibraryLoads=128,kChildDexStrings=256,kChildDexStringHints=256,kChildDexAnomalies=64;
 constexpr std::size_t kChildDotnetTableRows=64,kChildDotnetAssemblyRefs=64,kChildDotnetTypeRefs=128,kChildDotnetTypes=128,kChildDotnetFields=128,kChildDotnetParams=128,kChildDotnetMethods=256,kChildDotnetMemberRefs=128,kChildDotnetProperties=64,kChildDotnetEvents=64,kChildDotnetGenericParams=64,kChildDotnetMethodSpecs=64,kChildDotnetResources=64,kChildDotnetObfuscationHints=64,kChildDotnetAnomalies=64;
+constexpr std::size_t kChildDotnetBundleEntries=64,kChildNativeAotSections=64;
+constexpr std::size_t kChildSwiftTypes=64,kChildSwiftFields=64;
+
+struct SwiftSliceRenderPlan {
+    std::size_t types_total=0,types_rendered=0,fields_total=0,fields_rendered=0;
+    std::vector<std::size_t> fields_rendered_per_type;
+};
+
+SwiftSliceRenderPlan swift_slice_render_plan(const MachOSwiftInfo&swift,std::size_t&types_remaining,std::size_t&fields_remaining){
+    SwiftSliceRenderPlan plan;plan.types_total=swift.types.size();plan.types_rendered=std::min(plan.types_total,types_remaining);types_remaining-=plan.types_rendered;
+    plan.fields_rendered_per_type.reserve(plan.types_rendered);
+    for(const auto&type:swift.types)plan.fields_total+=type.fields.size();
+    for(std::size_t i=0;i<plan.types_rendered;++i){const auto retained=std::min(swift.types[i].fields.size(),fields_remaining);plan.fields_rendered_per_type.push_back(retained);plan.fields_rendered+=retained;fields_remaining-=retained;}
+    return plan;
+}
 
 std::vector<ChildJsonPlaneLimit> child_json_plane_limits(const AnalysisReport&r){
-    std::vector<ChildJsonPlaneLimit> x={{"dex.map_items",r.dex.map_items.size(),kChildDexMapItems},{"dex.types",r.dex.types.size(),kChildDexTypes},{"dex.protos",r.dex.protos.size(),kChildDexProtos},{"dex.fields",r.dex.fields.size(),kChildDexFields},{"dex.methods",r.dex.methods.size(),kChildDexMethods},{"dex.code_items",r.dex.code_items.size(),kChildDexCodeItems},{"dex.classes",r.dex.classes.size(),kChildDexClasses},{"dex.method_handles",r.dex.method_handles.size(),kChildDexMethodHandles},{"dex.call_sites",r.dex.call_sites.size(),kChildDexCallSites},{"dex.strings",r.dex.strings.size(),kChildDexStrings},{"dex.string_hints",r.dex.string_hints.size(),kChildDexStringHints},{"dex.anomalies",r.dex.anomalies.size(),kChildDexAnomalies},
+    std::vector<ChildJsonPlaneLimit> x={{"dex.map_items",r.dex.map_items.size(),kChildDexMapItems},{"dex.types",r.dex.types.size(),kChildDexTypes},{"dex.protos",r.dex.protos.size(),kChildDexProtos},{"dex.fields",r.dex.fields.size(),kChildDexFields},{"dex.methods",r.dex.methods.size(),kChildDexMethods},{"dex.code_items",r.dex.code_items.size(),kChildDexCodeItems},{"dex.classes",r.dex.classes.size(),kChildDexClasses},{"dex.method_handles",r.dex.method_handles.size(),kChildDexMethodHandles},{"dex.call_sites",r.dex.call_sites.size(),kChildDexCallSites},{"dex.library_loads",r.dex.library_loads.size(),kChildDexLibraryLoads},{"dex.strings",r.dex.strings.size(),kChildDexStrings},{"dex.string_hints",r.dex.string_hints.size(),kChildDexStringHints},{"dex.anomalies",r.dex.anomalies.size(),kChildDexAnomalies},
         {"dotnet.table_rows",r.dotnet.table_rows.size(),kChildDotnetTableRows},{"dotnet.assembly_refs",r.dotnet.assembly_refs.size(),kChildDotnetAssemblyRefs},{"dotnet.type_refs",r.dotnet.type_refs.size(),kChildDotnetTypeRefs},{"dotnet.types",r.dotnet.types.size(),kChildDotnetTypes},{"dotnet.fields",r.dotnet.fields.size(),kChildDotnetFields},{"dotnet.params",r.dotnet.params.size(),kChildDotnetParams},{"dotnet.methods",r.dotnet.methods.size(),kChildDotnetMethods},{"dotnet.member_refs",r.dotnet.member_refs.size(),kChildDotnetMemberRefs},{"dotnet.properties",r.dotnet.properties.size(),kChildDotnetProperties},{"dotnet.events",r.dotnet.events.size(),kChildDotnetEvents},{"dotnet.generic_params",r.dotnet.generic_params.size(),kChildDotnetGenericParams},{"dotnet.method_specs",r.dotnet.method_specs.size(),kChildDotnetMethodSpecs},{"dotnet.resources",r.dotnet.resources.size(),kChildDotnetResources},{"dotnet.obfuscation_hints",r.dotnet.obfuscation_hints.size(),kChildDotnetObfuscationHints},{"dotnet.anomalies",r.dotnet.anomalies.size(),kChildDotnetAnomalies}};
+    x.push_back({"dotnet_bundle.entries",r.dotnet_bundle.entries.size(),kChildDotnetBundleEntries});
+    x.push_back({"native_aot.sections",r.native_aot.sections.size(),kChildNativeAotSections});
+    x.push_back({"hermes.functions",r.hermes.functions.size(),256});
+    x.push_back({"hermes.strings",r.hermes.strings.size(),512});
+    std::size_t swift_types_remaining=kChildSwiftTypes,swift_fields_remaining=kChildSwiftFields;
+    std::size_t swift_types_total=0,swift_types_rendered=0,swift_fields_total=0,swift_fields_rendered=0;
+    for(const auto&slice:r.macho.slices){const auto plan=swift_slice_render_plan(slice.swift,swift_types_remaining,swift_fields_remaining);swift_types_total+=plan.types_total;swift_types_rendered+=plan.types_rendered;swift_fields_total+=plan.fields_total;swift_fields_rendered+=plan.fields_rendered;}
+    x.push_back({"macho.swift.types",swift_types_total,kChildSwiftTypes,swift_types_rendered});
+    x.push_back({"macho.swift.fields",swift_fields_total,kChildSwiftFields,swift_fields_rendered});
     return x;
 }
 
@@ -1237,7 +1357,7 @@ void render_cardinality(std::ostream&o,const char*name,std::size_t total,std::si
 
 void render_automatic_child_retention(std::ostream&o,const AnalysisReport&r){
     auto limits=child_json_plane_limits(r);std::uint64_t omitted=0;std::vector<std::string>planes;
-    for(const auto&x:limits)if(x.total>x.cap){omitted+=static_cast<std::uint64_t>(x.total-x.cap);planes.emplace_back(x.name);}
+    for(const auto&x:limits){const auto rendered=x.rendered();if(x.total>rendered){omitted+=static_cast<std::uint64_t>(x.total-rendered);planes.emplace_back(x.name);}}
     o<<"  \"report_retention\": {\"profile\":\"automatic_child_summary\",\"analysis_execution_profile\":\"full\",\"analysis_completed_before_persistence\":true,\"persisted_full_detail\":false,\"summary_omission_means_evidence_absent\":false,\"sampling_policy\":\"deterministic_parser_order_prefix\",\"omitted_rows\":"<<omitted<<",\"omitted_planes\":[";
     for(std::size_t i=0;i<planes.size();++i){if(i)o<<',';o<<"\""<<esc(planes[i])<<"\"";}
     o<<"],\"full_evidence_retrieval\":{\"mode\":\"reanalyze_persisted_input\",\"input\":\""<<esc(path_utf8(r.input))<<"\",\"input_sha256\":\""<<esc(r.input_snapshot.sha256)<<"\",\"required_option\":\"--json\",\"result_profile\":\"full\"}},\n";
@@ -1245,16 +1365,17 @@ void render_automatic_child_retention(std::ostream&o,const AnalysisReport&r){
 
 void render_dex_summary_json(std::ostream&o,const AnalysisReport&r){
     const auto&d=r.dex;
-    o << "  \"dex\": {\"candidate\":"<<(d.candidate?"true":"false")<<",\"valid\":"<<(d.valid?"true":"false")<<",\"state\":\""<<(d.candidate?(d.valid?"CONFIRMED":"FAILED"):"ABSENT")<<"\",\"version\":\""<<esc(d.version)<<"\",\"offset_space\":\"current_input_file\",\"reverse_endian\":"<<(d.reverse_endian?"true":"false")<<",\"container_v41\":"<<(d.container_v41?"true":"false")<<",\"header_size\":"<<d.header_size<<",\"file_size\":"<<d.file_size<<",\"container_size\":"<<d.container_size<<",\"header_offset\":"<<d.header_offset<<",\"map_off\":"<<d.map_off<<",\"string_ids_size\":"<<d.string_ids_size<<",\"string_ids_off\":"<<d.string_ids_off<<",\"type_ids_size\":"<<d.type_ids_size<<",\"type_ids_off\":"<<d.type_ids_off<<",\"proto_ids_size\":"<<d.proto_ids_size<<",\"proto_ids_off\":"<<d.proto_ids_off<<",\"field_ids_size\":"<<d.field_ids_size<<",\"field_ids_off\":"<<d.field_ids_off<<",\"method_ids_size\":"<<d.method_ids_size<<",\"method_ids_off\":"<<d.method_ids_off<<",\"class_defs_size\":"<<d.class_defs_size<<",\"class_defs_off\":"<<d.class_defs_off<<",\"data_size\":"<<d.data_size<<",\"data_off\":"<<d.data_off<<",\"defined_field_count\":"<<d.defined_field_count<<",\"defined_method_count\":"<<d.defined_method_count<<",\"code_item_count\":"<<d.code_item_count<<",\"debug_info_count\":"<<d.debug_info_count<<",\"map_complete\":"<<(d.map_complete?"true":"false")<<",\"descriptor_parse_complete\":"<<(d.descriptor_parse_complete?"true":"false")<<",\"checksum_checked\":"<<(d.checksum_checked?"true":"false")<<",\"checksum_matches\":"<<(d.checksum_matches?"true":"false")<<",\"signature_checked\":"<<(d.signature_checked?"true":"false")<<",\"signature_matches\":"<<(d.signature_matches?"true":"false")<<",\"error_offset\":"<<d.error_offset<<",\"error\":\""<<esc(d.error)<<"\",";
+    o << "  \"dex\": {\"candidate\":"<<(d.candidate?"true":"false")<<",\"valid\":"<<(d.valid?"true":"false")<<",\"state\":\""<<(d.candidate?(d.valid?"CONFIRMED":"FAILED"):"ABSENT")<<"\",\"version\":\""<<esc(d.version)<<"\",\"offset_space\":\"current_input_file\",\"reverse_endian\":"<<(d.reverse_endian?"true":"false")<<",\"container_v41\":"<<(d.container_v41?"true":"false")<<",\"header_size\":"<<d.header_size<<",\"file_size\":"<<d.file_size<<",\"container_size\":"<<d.container_size<<",\"header_offset\":"<<d.header_offset<<",\"map_off\":"<<d.map_off<<",\"string_ids_size\":"<<d.string_ids_size<<",\"string_ids_off\":"<<d.string_ids_off<<",\"type_ids_size\":"<<d.type_ids_size<<",\"type_ids_off\":"<<d.type_ids_off<<",\"proto_ids_size\":"<<d.proto_ids_size<<",\"proto_ids_off\":"<<d.proto_ids_off<<",\"field_ids_size\":"<<d.field_ids_size<<",\"field_ids_off\":"<<d.field_ids_off<<",\"method_ids_size\":"<<d.method_ids_size<<",\"method_ids_off\":"<<d.method_ids_off<<",\"class_defs_size\":"<<d.class_defs_size<<",\"class_defs_off\":"<<d.class_defs_off<<",\"data_size\":"<<d.data_size<<",\"data_off\":"<<d.data_off<<",\"defined_field_count\":"<<d.defined_field_count<<",\"defined_method_count\":"<<d.defined_method_count<<",\"code_item_count\":"<<d.code_item_count<<",\"debug_info_count\":"<<d.debug_info_count<<",\"map_complete\":"<<(d.map_complete?"true":"false")<<",\"descriptor_parse_complete\":"<<(d.descriptor_parse_complete?"true":"false")<<",\"jni_surface_scan_complete\":"<<(d.jni_surface_scan_complete?"true":"false")<<",\"jni_surface_scan_error\":\""<<esc(d.jni_surface_scan_error)<<"\",\"library_load_count\":"<<d.library_loads.size()<<",\"checksum_checked\":"<<(d.checksum_checked?"true":"false")<<",\"checksum_matches\":"<<(d.checksum_matches?"true":"false")<<",\"signature_checked\":"<<(d.signature_checked?"true":"false")<<",\"signature_matches\":"<<(d.signature_matches?"true":"false")<<",\"error_offset\":"<<d.error_offset<<",\"error\":\""<<esc(d.error)<<"\",";
     render_cardinality(o,"map_items",d.map_items.size(),kChildDexMapItems);o<<",\"map_items\":[";for(std::size_t i=0;i<d.map_items.size()&&i<kChildDexMapItems;++i){if(i)o<<',';const auto&m=d.map_items[i];o<<"{\"type\":"<<m.type<<",\"name\":\""<<esc(m.name)<<"\",\"size\":"<<m.size<<",\"offset\":"<<m.offset<<",\"offset_space\":\"current_input_file\"}";}
     o<<"],";render_cardinality(o,"types",d.types.size(),kChildDexTypes);o<<",\"types\":[";for(std::size_t i=0;i<d.types.size()&&i<kChildDexTypes;++i){if(i)o<<',';o<<"\""<<esc(d.types[i])<<"\"";}
-    o<<"],";render_cardinality(o,"protos",d.protos.size(),kChildDexProtos);o<<",\"protos\":[";for(std::size_t i=0;i<d.protos.size()&&i<kChildDexProtos;++i){if(i)o<<',';const auto&p=d.protos[i];o<<"{\"index\":"<<p.index<<",\"shorty\":\""<<esc(p.shorty)<<"\",\"return_type\":\""<<esc(p.return_type)<<"\",\"signature\":\""<<esc(p.signature)<<"\",\"parameters_off\":"<<p.parameters_off<<",\"offset_space\":\"current_input_file\",\"parameter_types\":[";for(std::size_t z=0;z<p.parameter_types.size();++z){if(z)o<<',';o<<"\""<<esc(p.parameter_types[z])<<"\"";}o<<"]}";}
+    o<<"],";render_cardinality(o,"protos",d.protos.size(),kChildDexProtos);o<<",\"protos\":[";for(std::size_t i=0;i<d.protos.size()&&i<kChildDexProtos;++i){if(i)o<<',';const auto&p=d.protos[i];o<<"{\"index\":"<<p.index<<",\"shorty\":\""<<esc(p.shorty)<<"\",\"return_type\":\""<<esc(p.return_type)<<"\",\"signature\":\""<<esc(p.signature)<<"\",\"descriptor\":\""<<esc(p.descriptor)<<"\",\"parameters_off\":"<<p.parameters_off<<",\"offset_space\":\"current_input_file\",\"parameter_types\":[";for(std::size_t z=0;z<p.parameter_types.size();++z){if(z)o<<',';o<<"\""<<esc(p.parameter_types[z])<<"\"";}o<<"]}";}
     o<<"],";render_cardinality(o,"fields",d.fields.size(),kChildDexFields);o<<",\"fields\":[";for(std::size_t i=0;i<d.fields.size()&&i<kChildDexFields;++i){if(i)o<<',';const auto&f=d.fields[i];o<<"{\"index\":"<<f.index<<",\"defined\":"<<(f.defined?"true":"false")<<",\"owner\":\""<<esc(f.owner)<<"\",\"name\":\""<<esc(f.name)<<"\",\"type\":\""<<esc(f.type)<<"\",\"signature\":\""<<esc(f.signature)<<"\",\"access_flags\":"<<f.access_flags<<"}";}
-    o<<"],";render_cardinality(o,"methods",d.methods.size(),kChildDexMethods);o<<",\"methods\":[";for(std::size_t i=0;i<d.methods.size()&&i<kChildDexMethods;++i){if(i)o<<',';const auto&m=d.methods[i];o<<"{\"index\":"<<m.index<<",\"defined\":"<<(m.defined?"true":"false")<<",\"owner\":\""<<esc(m.owner)<<"\",\"name\":\""<<esc(m.name)<<"\",\"signature\":\""<<esc(m.signature)<<"\",\"access_flags\":"<<m.access_flags<<",\"code_off\":"<<m.code_off<<",\"offset_space\":\"current_input_file\"}";}
+    o<<"],";render_cardinality(o,"methods",d.methods.size(),kChildDexMethods);o<<",\"methods\":[";for(std::size_t i=0;i<d.methods.size()&&i<kChildDexMethods;++i){if(i)o<<',';const auto&m=d.methods[i];o<<"{\"index\":"<<m.index<<",\"defined\":"<<(m.defined?"true":"false")<<",\"owner\":\""<<esc(m.owner)<<"\",\"owner_descriptor\":\""<<esc(m.owner_descriptor)<<"\",\"name\":\""<<esc(m.name)<<"\",\"signature\":\""<<esc(m.signature)<<"\",\"descriptor\":\""<<esc(m.descriptor)<<"\",\"access_flags\":"<<m.access_flags<<",\"code_off\":"<<m.code_off<<",\"offset_space\":\"current_input_file\"}";}
     o<<"],";render_cardinality(o,"code_items",d.code_items.size(),kChildDexCodeItems);o<<",\"code_items\":[";for(std::size_t i=0;i<d.code_items.size()&&i<kChildDexCodeItems;++i){if(i)o<<',';const auto&c=d.code_items[i];o<<"{\"method_idx\":"<<c.method_idx<<",\"code_off\":"<<c.code_off<<",\"code_size_bytes\":"<<c.code_size_bytes<<",\"debug_info_off\":"<<c.debug_info_off<<",\"registers_size\":"<<c.registers_size<<",\"ins_size\":"<<c.ins_size<<",\"outs_size\":"<<c.outs_size<<",\"tries_size\":"<<c.tries_size<<",\"insns_size\":"<<c.insns_size<<",\"debug_line_start\":"<<c.debug_line_start<<",\"debug_position_count\":"<<c.debug_position_count<<",\"offset_space\":\"current_input_file\",\"parameter_names\":[";for(std::size_t z=0;z<c.parameter_names.size();++z){if(z)o<<',';o<<"\""<<esc(c.parameter_names[z])<<"\"";}o<<"]}";}
     o<<"],";render_cardinality(o,"classes",d.classes.size(),kChildDexClasses);o<<",\"classes\":[";for(std::size_t i=0;i<d.classes.size()&&i<kChildDexClasses;++i){if(i)o<<',';const auto&c=d.classes[i];o<<"{\"class_idx\":"<<c.class_idx<<",\"name\":\""<<esc(c.name)<<"\",\"superclass\":\""<<esc(c.superclass)<<"\",\"source_file\":\""<<esc(c.source_file)<<"\",\"access_flags\":"<<c.access_flags<<",\"interfaces_off\":"<<c.interfaces_off<<",\"class_data_off\":"<<c.class_data_off<<",\"static_values_off\":"<<c.static_values_off<<",\"static_field_count\":"<<c.static_field_count<<",\"instance_field_count\":"<<c.instance_field_count<<",\"direct_method_count\":"<<c.direct_method_count<<",\"virtual_method_count\":"<<c.virtual_method_count<<",\"offset_space\":\"current_input_file\",\"interfaces\":[";for(std::size_t z=0;z<c.interfaces.size();++z){if(z)o<<',';o<<"\""<<esc(c.interfaces[z])<<"\"";}o<<"]}";}
     o<<"],";render_cardinality(o,"method_handles",d.method_handles.size(),kChildDexMethodHandles);o<<",\"method_handles\":[";for(std::size_t i=0;i<d.method_handles.size()&&i<kChildDexMethodHandles;++i){if(i)o<<',';const auto&h=d.method_handles[i];o<<"{\"index\":"<<h.index<<",\"handle_type\":"<<h.handle_type<<",\"field_or_method_id\":"<<h.field_or_method_id<<",\"references_field\":"<<(h.references_field?"true":"false")<<",\"target\":\""<<esc(h.target)<<"\"}";}
     o<<"],";render_cardinality(o,"call_sites",d.call_sites.size(),kChildDexCallSites);o<<",\"call_sites\":[";for(std::size_t i=0;i<d.call_sites.size()&&i<kChildDexCallSites;++i){if(i)o<<',';const auto&c=d.call_sites[i];o<<"{\"index\":"<<c.index<<",\"call_site_off\":"<<c.call_site_off<<",\"bootstrap_method_handle_idx\":"<<c.bootstrap_method_handle_idx<<",\"method_name_idx\":"<<c.method_name_idx<<",\"method_type_idx\":"<<c.method_type_idx<<",\"extra_argument_count\":"<<c.extra_argument_count<<",\"method_name\":\""<<esc(c.method_name)<<"\",\"method_type\":\""<<esc(c.method_type)<<"\",\"bootstrap_target\":\""<<esc(c.bootstrap_target)<<"\",\"offset_space\":\"current_input_file\"}";}
+    o<<"],";render_cardinality(o,"library_loads",d.library_loads.size(),kChildDexLibraryLoads);o<<",\"library_loads\":[";for(std::size_t i=0;i<d.library_loads.size()&&i<kChildDexLibraryLoads;++i){if(i)o<<',';const auto&x=d.library_loads[i];o<<"{\"caller_method_idx\":"<<x.caller_method_idx<<",\"target_method_idx\":"<<x.target_method_idx<<",\"string_idx\":"<<x.string_idx<<",\"pc_code_units\":"<<x.pc_code_units<<",\"instruction_file_offset\":"<<x.instruction_file_offset<<",\"offset_space\":\"current_input_file\",\"library_name\":\""<<esc(x.library_name)<<"\"}";}
     o<<"],";render_cardinality(o,"strings",d.strings.size(),kChildDexStrings);o<<",\"strings\":[";for(std::size_t i=0;i<d.strings.size()&&i<kChildDexStrings;++i){if(i)o<<',';o<<"\""<<esc(d.strings[i])<<"\"";}
     o<<"],";render_cardinality(o,"string_hints",d.string_hints.size(),kChildDexStringHints);o<<",\"string_hints\":[";for(std::size_t i=0;i<d.string_hints.size()&&i<kChildDexStringHints;++i){if(i)o<<',';o<<"\""<<esc(d.string_hints[i])<<"\"";}
     o<<"],";render_cardinality(o,"anomalies",d.anomalies.size(),kChildDexAnomalies);o<<",\"anomalies\":[";for(std::size_t i=0;i<d.anomalies.size()&&i<kChildDexAnomalies;++i){if(i)o<<',';o<<"\""<<esc(d.anomalies[i])<<"\"";}
@@ -1281,6 +1402,32 @@ void render_dotnet_summary_json(std::ostream&o,const AnalysisReport&r){
     o<<"],";render_cardinality(o,"anomalies",d.anomalies.size(),kChildDotnetAnomalies);o<<",\"anomalies\":[";for(std::size_t i=0;i<d.anomalies.size()&&i<kChildDotnetAnomalies;++i){if(i)o<<',';o<<"\""<<esc(d.anomalies[i])<<"\"";}
     o<<"],\"extraction\":{\"success\":"<<(r.dotnet_extract.success?"true":"false")<<",\"symbols_csv\":\""<<esc(path_utf8(r.dotnet_extract.symbols_csv))<<"\",\"symbol_count\":"<<r.dotnet_extract.symbol_count<<",\"types_csv\":\""<<esc(path_utf8(r.dotnet_extract.types_csv))<<"\",\"type_count\":"<<r.dotnet_extract.type_count<<",\"members_csv\":\""<<esc(path_utf8(r.dotnet_extract.members_csv))<<"\",\"member_count\":"<<r.dotnet_extract.member_count<<"}},\n";
 }
+}
+
+
+void render_dotnet_native_json(std::ostream&o,const AnalysisReport&r,bool compact){
+    const auto&b=r.dotnet_bundle;
+    o<<"  \"dotnet_bundle\": {\"candidate\":"<<(b.candidate?"true":"false")<<",\"valid\":"<<(b.valid?"true":"false")
+     <<",\"state\":\""<<esc(b.state)<<"\",\"error\":\""<<esc(b.error)<<"\",\"version\":\""<<b.major_version<<'.'<<b.minor_version
+     <<"\",\"locator_offset\":"<<b.locator_offset<<",\"header_offset\":"<<b.header_offset<<",\"manifest_end\":"<<b.manifest_end
+     <<",\"trailing_bytes\":"<<b.trailing_bytes<<",\"file_count\":"<<b.file_count<<",\"bundle_id\":\""<<esc(b.bundle_id)
+     <<"\",\"deps_json_offset\":"<<b.deps_json_offset<<",\"deps_json_size\":"<<b.deps_json_size
+     <<",\"runtimeconfig_json_offset\":"<<b.runtimeconfig_json_offset<<",\"runtimeconfig_json_size\":"<<b.runtimeconfig_json_size
+     <<",\"flags\":"<<b.flags<<",\"stored_bytes\":"<<b.stored_bytes<<",\"uncompressed_bytes\":"<<b.uncompressed_bytes
+     <<",\"compressed_file_count\":"<<b.compressed_file_count<<",\"integrity_state\":\""<<esc(b.integrity_state)<<"\",\"entries_total\":"<<b.entries.size()<<",\"entries_rendered\":"<<std::min<std::size_t>(b.entries.size(),compact?64:512)<<",\"entries_omitted\":"<<(b.entries.size()-std::min<std::size_t>(b.entries.size(),compact?64:512))<<",\"entries_truncated\":"<<(b.entries.size()>(compact?64:512)?"true":"false")<<",\"entries\":[";
+    for(std::size_t x=0;x<b.entries.size()&&x<(compact?64:512);++x){if(x)o<<',';const auto&e=b.entries[x];o<<"{\"index\":"<<e.index<<",\"offset\":"<<e.offset<<",\"size\":"<<e.size<<",\"compressed_size\":"<<e.compressed_size<<",\"stored_size\":"<<e.stored_size<<",\"compressed\":"<<(e.compressed?"true":"false")<<",\"type\":"<<static_cast<unsigned>(e.type)<<",\"type_name\":\""<<esc(e.type_name)<<"\",\"relative_path\":\""<<esc(e.relative_path)<<"\"}";}
+    o<<"]},\n";
+    const auto&n=r.native_aot;
+    o<<"  \"native_aot\": {\"candidate\":"<<(n.candidate?"true":"false")<<",\"valid\":"<<(n.valid?"true":"false")
+     <<",\"state\":\""<<esc(n.state)<<"\",\"platform\":\""<<esc(n.platform)<<"\",\"error\":\""<<esc(n.error)
+     <<"\",\"modules_offset\":"<<n.modules_offset<<",\"modules_size\":"<<n.modules_size<<",\"header_offset\":"<<n.header_offset
+     <<",\"header_va\":"<<n.header_va<<",\"version\":\""<<n.major_version<<'.'<<n.minor_version<<"\",\"section_count\":"<<n.section_count
+     <<",\"entry_size\":"<<static_cast<unsigned>(n.entry_size)<<",\"entry_type\":"<<static_cast<unsigned>(n.entry_type)
+     <<",\"raw_rtr_magic_count\":"<<n.raw_rtr_magic_count<<",\"valid_rtr_header_count\":"<<n.valid_rtr_header_count
+     <<",\"native_section_id_count\":"<<n.native_section_id_count<<",\"has_managed_code_section\":"<<(n.has_managed_code_section?"true":"false")
+     <<",\"has_dotnet_eh_table\":"<<(n.has_dotnet_eh_table?"true":"false")<<",\"has_hydrated_section\":"<<(n.has_hydrated_section?"true":"false")<<",\"sections_total\":"<<n.sections.size()<<",\"sections_rendered\":"<<std::min<std::size_t>(n.sections.size(),compact?64:512)<<",\"sections_omitted\":"<<(n.sections.size()-std::min<std::size_t>(n.sections.size(),compact?64:512))<<",\"sections_truncated\":"<<(n.sections.size()>(compact?64:512)?"true":"false")<<",\"sections\":[";
+    for(std::size_t x=0;x<n.sections.size()&&x<(compact?64:512);++x){if(x)o<<',';const auto&e=n.sections[x];o<<"{\"id\":"<<e.id<<",\"flags\":"<<e.flags<<",\"start_va\":"<<e.start_va<<",\"end_va\":"<<e.end_va<<"}";}
+    o<<"]},\n";
 }
 
 void render_json_impl(std::ostream& o,const AnalysisReport& r,bool automatic_child_summary) {
@@ -1314,6 +1461,7 @@ void render_json_impl(std::ostream& o,const AnalysisReport& r,bool automatic_chi
           << ",\"section_table_present\":" << (r.elf.section_table_present?"true":"false");
     } else if (r.macho.valid) {
         o << "\"kind\":\"Mach-O\",\"fat\":"<<(r.macho.fat?"true":"false")<<",\"fat64\":"<<(r.macho.fat64?"true":"false")<<",\"slice_count\":"<<r.macho.slices.size()<<",\"file_offset_scope\":\"current_input_file\"";
+        o<<",\"slice_policy\":\""<<esc(r.macho.slice_policy)<<"\",\"selected_slice\":"<<r.macho.selected_slice<<",\"selection_basis\":\"ARCHITECTURE_INVENTORY_ONLY\"";
         if(!r.macho.fat&&!r.macho.slices.empty()){const auto&m=r.macho.slices.front();o<<",\"bits\":"<<(m.macho64?64:32)<<",\"machine\":\""<<esc(macho_cpu_name(m.cpu_type))<<"\",\"type\":\""<<esc(macho_filetype_name(m.filetype))<<"\",\"entry\":"<<m.entry_va;}
     } else if (r.python_bytecode.valid) {
         o << "\"kind\":\"CPython bytecode\",\"container\":\"pyc\",\"version_family\":\""<<esc(r.python_bytecode.magic.version_family)<<"\",\"version_authentication\":\"MAGIC_MINOR_FAMILY_AUTHENTICATED\",\"patch_version_state\":\"AMBIGUOUS_WITHIN_MINOR_FAMILY\",\"magic_number\":"<<r.python_bytecode.magic.magic_number<<",\"header_kind\":\""<<esc(r.python_bytecode.header_kind)<<"\",\"marshal_offset\":"<<r.python_bytecode.marshal_offset<<",\"code_objects\":"<<r.python_bytecode.marshal.code_object_count;
@@ -1348,17 +1496,52 @@ void render_json_impl(std::ostream& o,const AnalysisReport& r,bool automatic_chi
     o << "  \"elf_dynamic\": {\"state\":\""<<esc(r.elf.dynamic.state)<<"\",\"error\":\""<<esc(r.elf.dynamic.error)<<"\",\"symbol_count_source\":\""<<esc(r.elf.dynamic.symbol_count_source)<<"\",\"symbol_count\":"<<r.elf.dynamic.symbols.size()<<",\"relocation_count\":"<<r.elf.dynamic.relocations.size()<<"},\n";
     o << "  \"elf_extraction\": {\"dynamic\":{\"success\":"<<(r.elf_extract.success?"true":"false")<<",\"symbols_csv\":\""<<esc(path_utf8(r.elf_extract.symbols_csv))<<"\",\"symbol_count\":"<<r.elf_extract.symbol_count<<",\"relocations_csv\":\""<<esc(path_utf8(r.elf_extract.relocations_csv))<<"\",\"relocation_count\":"<<r.elf_extract.relocation_count<<",\"error\":\""<<esc(r.elf_extract.error)<<"\"},\"unwind\":{\"success\":"<<(r.elf_unwind_extract.success?"true":"false")<<",\"cies_csv\":\""<<esc(path_utf8(r.elf_unwind_extract.cies_csv))<<"\",\"cie_count\":"<<r.elf_unwind_extract.cie_count<<",\"fdes_csv\":\""<<esc(path_utf8(r.elf_unwind_extract.fdes_csv))<<"\",\"fde_count\":"<<r.elf_unwind_extract.fde_count<<",\"error\":\""<<esc(r.elf_unwind_extract.error)<<"\"}},\n";
     o << "  \"macho_slices\": [";
+    std::size_t swift_types_remaining=automatic_child_summary?kChildSwiftTypes:std::numeric_limits<std::size_t>::max();
+    std::size_t swift_fields_remaining=automatic_child_summary?kChildSwiftFields:std::numeric_limits<std::size_t>::max();
     for(std::size_t i=0;i<r.macho.slices.size();++i){
         if(i)o<<',';
         const auto&m=r.macho.slices[i];
+        const auto swift_plan=swift_slice_render_plan(m.swift,swift_types_remaining,swift_fields_remaining);
         o<<"{\"index\":"<<i<<",\"bits\":"<<(m.macho64?64:32)<<",\"little_endian\":"<<(m.little_endian?"true":"false")
          <<",\"machine\":\""<<esc(macho_cpu_name(m.cpu_type))<<"\",\"cpu_type\":"<<m.cpu_type<<",\"cpu_subtype\":"<<m.cpu_subtype
+         <<",\"architecture\":\""<<esc(m.architecture)<<"\",\"cpu_subtype_base\":"<<m.cpu_subtype_base
+         <<",\"arm64e\":"<<(m.arm64e?"true":"false")<<",\"ptrauth_versioned\":"<<(m.ptrauth_versioned?"true":"false")
+         <<",\"ptrauth_kernel\":"<<(m.ptrauth_kernel?"true":"false")<<",\"ptrauth_abi_version\":"<<m.ptrauth_abi_version
+         <<",\"architecture_claim_scope\":\"REPORT_ONLY_NO_SLICE_SELECTION\""
          <<",\"type\":\""<<esc(macho_filetype_name(m.filetype))<<"\",\"slice_offset\":"<<m.slice_offset<<",\"slice_size\":"<<m.slice_size
          <<",\"entry_file_offset\":"<<m.entry_file_offset<<",\"entry_va\":"<<m.entry_va<<",\"uuid\":\""<<esc(m.uuid)<<"\""
          <<",\"platform\":\""<<esc(macho_platform_name(m.platform))<<"\",\"min_os\":\""<<esc(macho_version_string(m.min_os))<<"\",\"sdk\":\""<<esc(macho_version_string(m.sdk))<<"\""
          <<",\"encrypted\":"<<(m.encrypted?"true":"false")<<",\"cryptid\":"<<m.cryptid<<",\"crypt_offset\":"<<m.crypt_offset<<",\"crypt_size\":"<<m.crypt_size
          <<",\"code_signature\":"<<(m.code_signature?"true":"false")<<",\"code_signature_offset\":"<<m.code_signature_offset<<",\"code_signature_size\":"<<m.code_signature_size
-         <<",\"symbol_count\":"<<m.symbols.size()<<",\"function_start_count\":"<<m.function_starts.size()<<",\"dylibs\":[";
+         <<",\"symbol_count\":"<<m.symbols.size()<<",\"function_start_count\":"<<m.function_starts.size();
+         o<<",\"code_signature_state\":\""<<esc(m.code_signature_state)<<"\",\"code_signature_verification\":\"NOT_PERFORMED\""
+          <<",\"bitcode_present\":"<<(m.bitcode_present?"true":"false")<<",\"bitcode_state\":\""<<esc(m.bitcode_state)<<"\""
+          <<",\"coverage_state\":\""<<esc(m.coverage_state)<<"\",\"load_command_coverage_state\":\""<<esc(m.load_command_coverage_state)<<"\""
+          <<",\"load_command_count\":"<<m.load_command_count<<",\"load_commands_retained\":"<<m.load_commands.size()<<",\"load_commands_truncated\":"<<(m.load_commands_truncated?"true":"false")
+          <<",\"unknown_load_command_count\":"<<m.unknown_load_command_count<<",\"unknown_load_commands_truncated\":"<<(m.unknown_load_commands_truncated?"true":"false")
+          <<",\"load_commands\":[";
+        for(std::size_t z=0;z<m.load_commands.size();++z){if(z)o<<',';const auto&x=m.load_commands[z];o<<"{\"name\":\""<<esc(x.name)<<"\",\"cmd\":"<<x.command<<",\"offset\":"<<x.offset<<",\"size\":"<<x.size<<",\"known\":"<<(x.known?"true":"false")<<'}';}
+        o<<"],\"unknown_load_commands\":[";
+        for(std::size_t z=0;z<m.unknown_load_commands.size();++z){if(z)o<<',';const auto&x=m.unknown_load_commands[z];o<<"{\"cmd\":"<<x.command<<",\"offset\":"<<x.offset<<",\"size\":"<<x.size<<'}';}
+        o<<"],\"coverage_reasons\":[";for(std::size_t z=0;z<m.coverage_reasons.size();++z){if(z)o<<',';o<<'\"'<<esc(m.coverage_reasons[z])<<'\"';}
+        o<<"],\"swift\":{\"present\":"<<(m.swift.present?"true":"false")<<",\"structured\":"<<(m.swift.structured?"true":"false")
+         <<",\"state\":\""<<esc(m.swift.state)<<"\",\"evidence_level\":\""<<esc(m.swift.evidence_level)<<"\",\"coverage_state\":\""<<esc(m.swift.coverage_state)<<"\""
+         <<",\"source_or_semantic_recovery\":\""<<esc(m.swift.source_or_semantic_recovery)<<"\",\"analysis_limited\":"<<(m.swift.analysis_limited?"true":"false")
+         <<",\"error\":\""<<esc(m.swift.error)<<"\",\"complete_type_closures\":"<<m.swift.complete_type_closures
+         <<",\"record_outcomes\":{\"type_records_skipped\":"<<m.swift.type_records_skipped<<",\"type_records_partial\":"<<m.swift.type_records_partial<<",\"type_records_unsupported\":"<<m.swift.type_records_unsupported
+         <<",\"field_descriptors_skipped\":"<<m.swift.field_descriptors_skipped<<",\"field_descriptors_partial\":"<<m.swift.field_descriptors_partial<<",\"field_records_skipped\":"<<m.swift.field_records_skipped<<",\"field_records_partial\":"<<m.swift.field_records_partial
+         <<",\"mangled_type_names_absent\":"<<m.swift.mangled_type_names_absent<<",\"mangled_type_names_symbolic\":"<<m.swift.mangled_type_names_symbolic<<"}"
+         <<",\"budgets\":{\"type_records_used\":"<<m.swift.type_records_used<<",\"type_records_limit\":4096"
+         <<",\"field_descriptors_used\":"<<m.swift.field_descriptors_used<<",\"field_descriptors_limit\":4096,\"field_records_used\":"<<m.swift.field_records_used<<",\"field_records_limit\":65536"
+         <<",\"relative_pointers_used\":"<<m.swift.relative_pointers_used<<",\"relative_pointers_limit\":131072,\"strings_used\":"<<m.swift.strings_used<<",\"strings_limit\":65536"
+         <<",\"string_bytes_used\":"<<m.swift.string_bytes_used<<",\"string_bytes_limit\":4194304},\"reasons\":[";
+        for(std::size_t z=0;z<m.swift.reasons.size();++z){if(z)o<<',';o<<'\"'<<esc(m.swift.reasons[z])<<'\"';}
+        o<<"],\"sections\":[";
+        for(std::size_t z=0;z<m.swift.sections.size();++z){if(z)o<<',';const auto&x=m.swift.sections[z];o<<"{\"segment\":\""<<esc(x.segment)<<"\",\"name\":\""<<esc(x.name)<<"\",\"offset\":"<<x.offset<<",\"size\":"<<x.size<<",\"state\":\""<<esc(x.state)<<"\",\"encrypted_overlap\":"<<(x.encrypted_overlap?"true":"false")<<'}';}
+        o<<"],";render_cardinality(o,"types",swift_plan.types_total,swift_plan.types_rendered);o<<",";render_cardinality(o,"fields",swift_plan.fields_total,swift_plan.fields_rendered);o<<",\"types\":[";
+        for(std::size_t z=0;z<swift_plan.types_rendered;++z){if(z)o<<',';const auto&x=m.swift.types[z];const auto fields_rendered=swift_plan.fields_rendered_per_type[z];o<<"{\"module\":\""<<esc(x.module_name)<<"\",\"name\":\""<<esc(x.type_name)<<"\",\"mangled_type_name\":\""<<esc(x.mangled_type_name)<<"\",\"mangled_type_present\":"<<(x.mangled_type_present?"true":"false")<<",\"mangled_type_plain_text\":"<<(x.mangled_type_plain_text?"true":"false")<<",\"mangled_type_byte_length\":"<<x.mangled_type_byte_length<<",\"mangled_type_symbolic_references\":"<<x.mangled_type_symbolic_references<<",\"mangled_type_sha256\":\""<<esc(x.mangled_type_sha256)<<"\",\"kind\":\""<<esc(x.kind)<<"\",\"type_descriptor_offset\":"<<x.type_descriptor_offset<<",\"field_descriptor_offset\":"<<x.field_descriptor_offset<<",";render_cardinality(o,"fields",x.fields.size(),fields_rendered);o<<",\"fields\":[";for(std::size_t q=0;q<fields_rendered;++q){if(q)o<<',';const auto&f=x.fields[q];o<<"{\"name\":\""<<esc(f.name)<<"\",\"mangled_type_name\":\""<<esc(f.mangled_type_name)<<"\",\"mangled_type_present\":"<<(f.mangled_type_present?"true":"false")<<",\"mangled_type_plain_text\":"<<(f.mangled_type_plain_text?"true":"false")<<",\"mangled_type_byte_length\":"<<f.mangled_type_byte_length<<",\"mangled_type_symbolic_references\":"<<f.mangled_type_symbolic_references<<",\"mangled_type_sha256\":\""<<esc(f.mangled_type_sha256)<<"\",\"record_offset\":"<<f.record_offset<<",\"flags\":"<<f.flags<<'}';}o<<"]}";}
+        o<<"]}";
+        o<<",\"dylibs\":[";
         for(std::size_t z=0;z<m.dylibs.size();++z){if(z)o<<',';o<<"\""<<esc(m.dylibs[z])<<"\"";}o<<"],\"symbols\":[";
         for(std::size_t z=0;z<m.symbols.size();++z){if(z)o<<',';const auto&x=m.symbols[z];o<<"{\"name\":\""<<esc(x.name)<<"\",\"value\":"<<x.value<<",\"file_offset\":"<<x.file_offset<<",\"type\":"<<unsigned(x.type)<<",\"section\":"<<unsigned(x.section)<<",\"desc\":"<<x.desc<<",\"external\":"<<(x.external?"true":"false")<<",\"private_external\":"<<(x.private_external?"true":"false")<<",\"defined\":"<<(x.defined?"true":"false")<<'}';}
         o<<"],\"function_starts\":[";
@@ -1444,16 +1627,22 @@ void render_json_impl(std::ostream& o,const AnalysisReport& r,bool automatic_chi
     }
 
     {
-        constexpr std::size_t kEntryRender=256,kPermRender=128,kCompRender=128,kPairRender=64,kDexEntryRender=64,kFileRender=512;
+        constexpr std::size_t kEntryRender=256,kPermRender=128,kCompRender=128,kPairRender=64,kDexEntryRender=64,kJniRelationRender=512,kFileRender=512;
         o << "  \"apk\": {\"candidate\":"<<(r.apk.candidate?"true":"false")<<",\"valid\":"<<(r.apk.valid?"true":"false")<<",\"state\":\""<<(r.apk.valid?"CONFIRMED":(r.apk.candidate?"FAILED":"ABSENT"))
           <<"\",\"zip_valid\":"<<(r.apk.zip_valid?"true":"false")<<",\"zip64\":"<<(r.apk.zip64?"true":"false")<<",\"offset_space\":\"current_input_file\",\"central_directory_offset\":"<<r.apk.central_directory_offset
           <<",\"entry_count\":"<<r.apk.entry_count<<",\"total_compressed\":"<<r.apk.total_compressed<<",\"total_uncompressed\":"<<r.apk.total_uncompressed
           <<",\"extractable_files\":"<<r.apk.extractable_files<<",\"extractable_bytes\":"<<r.apk.extractable_bytes<<",\"analysis_candidate_files\":"<<r.apk.analysis_candidate_files<<",\"analysis_candidate_bytes\":"<<r.apk.analysis_candidate_bytes
           <<",\"dex_count\":"<<r.apk.dex_count<<",\"validated_dex_count\":"<<r.apk.validated_dex_count<<",\"native_library_count\":"<<r.apk.native_library_count<<",\"validated_native_elf_count\":"<<r.apk.validated_native_elf_count
+          <<",\"deep_native_elf_count\":"<<r.apk.deep_native_elf_count<<",\"native_dynamic_resolved_count\":"<<r.apk.native_dynamic_resolved_count
+          <<",\"native_unwind_resolved_count\":"<<r.apk.native_unwind_resolved_count<<",\"native_jni_onload_count\":"<<r.apk.native_jni_onload_count
+          <<",\"native_abi_mismatch_count\":"<<r.apk.native_abi_mismatch_count<<",\"native_deep_skipped_budget_count\":"<<r.apk.native_deep_skipped_budget_count
+          <<",\"native_import_count\":"<<r.apk.native_import_count<<",\"native_export_count\":"<<r.apk.native_export_count
+          <<",\"native_relocation_count\":"<<r.apk.native_relocation_count<<",\"native_fde_count\":"<<r.apk.native_fde_count
+          <<",\"dex_deep_resolved_count\":"<<r.apk.dex_deep_resolved_count<<",\"dex_deep_partial_count\":"<<r.apk.dex_deep_partial_count<<",\"jni_relations_state\":\""<<esc(r.apk.jni_relations_state)<<"\",\"jni_relations_limited\":"<<(r.apk.jni_relations_limited?"true":"false")<<",\"jni_relations_error\":\""<<esc(r.apk.jni_relations_error)<<"\",\"jni_packaged_count\":"<<r.apk.jni_packaged_count<<",\"jni_referenced_count\":"<<r.apk.jni_referenced_count<<",\"jni_declared_count\":"<<r.apk.jni_declared_count<<",\"jni_exported_count\":"<<r.apk.jni_exported_count<<",\"jni_registration_confirmed_count\":"<<r.apk.jni_registration_confirmed_count
           <<",\"asset_count\":"<<r.apk.asset_count<<",\"resource_count\":"<<r.apk.resource_count<<",\"nested_archive_count\":"<<r.apk.nested_archive_count
           <<",\"has_v1_signature_files\":"<<(r.apk.has_v1_signature_files?"true":"false")<<",\"unsafe_path_count\":"<<r.apk.unsafe_path_count<<",\"symlink_entry_count\":"<<r.apk.symlink_entry_count
           <<",\"encrypted_entry_count\":"<<r.apk.encrypted_entry_count<<",\"unsupported_entry_count\":"<<r.apk.unsupported_entry_count<<",\"path_collision_entry_count\":"<<r.apk.duplicate_path_entry_count
-          <<",\"invalid_dex_entry_count\":"<<r.apk.invalid_dex_entry_count<<",\"invalid_native_entry_count\":"<<r.apk.invalid_native_entry_count<<",\"godot_legacy_engine_config_candidate_count\":"<<r.apk.godot_legacy_engine_config_candidate_count<<",\"godot_legacy_engine_config_valid_count\":"<<r.apk.godot_legacy_engine_config_valid_count<<",\"unity_il2cpp_metadata_candidate_count\":"<<r.apk.unity_il2cpp_metadata_candidate_count<<",\"unity_il2cpp_metadata_valid_count\":"<<r.apk.unity_il2cpp_metadata_valid_count<<",\"unity_il2cpp_metadata_parse_count\":"<<r.apk.unity_il2cpp_metadata_parse_count<<",\"unity_il2cpp_metadata_parse_bytes\":"<<r.apk.unity_il2cpp_metadata_parse_bytes<<",\"unity_il2cpp_metadata_parse_budget_exhausted\":"<<(r.apk.unity_il2cpp_metadata_parse_budget_exhausted?"true":"false")<<",\"anomaly_samples_truncated\":"<<(r.apk.anomaly_samples_truncated?"true":"false")
+          <<",\"invalid_dex_entry_count\":"<<r.apk.invalid_dex_entry_count<<",\"invalid_native_entry_count\":"<<r.apk.invalid_native_entry_count<<",\"godot_legacy_engine_config_candidate_count\":"<<r.apk.godot_legacy_engine_config_candidate_count<<",\"godot_legacy_engine_config_valid_count\":"<<r.apk.godot_legacy_engine_config_valid_count<<",\"unity_il2cpp_metadata_candidate_count\":"<<r.apk.unity_il2cpp_metadata_candidate_count<<",\"unity_il2cpp_metadata_valid_count\":"<<r.apk.unity_il2cpp_metadata_valid_count<<",\"unity_il2cpp_metadata_parse_count\":"<<r.apk.unity_il2cpp_metadata_parse_count<<",\"unity_il2cpp_metadata_parse_bytes\":"<<r.apk.unity_il2cpp_metadata_parse_bytes<<",\"unity_il2cpp_metadata_parse_budget_exhausted\":"<<(r.apk.unity_il2cpp_metadata_parse_budget_exhausted?"true":"false")<<",\"hermes_probe_entry_count\":"<<r.apk.hermes_probe_entry_count<<",\"hermes_magic_count\":"<<r.apk.hermes_magic_count<<",\"hermes_integrity_valid_count\":"<<r.apk.hermes_integrity_valid_count<<",\"hermes_supported_epoch_count\":"<<r.apk.hermes_supported_epoch_count<<",\"hermes_parse_complete_count\":"<<r.apk.hermes_parse_complete_count<<",\"hermes_integrity_failure_count\":"<<r.apk.hermes_integrity_failure_count<<",\"hermes_probe_skipped_budget_count\":"<<r.apk.hermes_probe_skipped_budget_count<<",\"hermes_probe_budget_exhausted\":"<<(r.apk.hermes_probe_budget_exhausted?"true":"false")<<",\"hermes_probe_validated_bytes\":"<<r.apk.hermes_probe_validated_bytes<<",\"hermes_probe_entry_limit\":512,\"hermes_probe_byte_limit\":67108864,\"anomaly_samples_truncated\":"<<(r.apk.anomaly_samples_truncated?"true":"false")
           <<",\"manifest_path_ambiguous\":"<<(r.apk.manifest_path_ambiguous?"true":"false")<<",\"resources_path_ambiguous\":"<<(r.apk.resources_path_ambiguous?"true":"false")<<",\"dex_path_ambiguous\":"<<(r.apk.dex_path_ambiguous?"true":"false")<<",\"error\":\""<<esc(r.apk.error)<<"\",";
         {const auto&g=r.apk.godot_legacy_config;o<<"\"godot_legacy_config\":{\"candidate\":"<<(g.candidate?"true":"false")<<",\"valid\":"<<(g.valid?"true":"false")<<",\"property_count\":"<<g.property_count<<",\"application_name\":\""<<esc(g.application_name)<<"\",\"main_scene\":\""<<esc(g.main_scene)<<"\",\"icon\":\""<<esc(g.icon)<<"\",\"remap_count\":"<<g.remaps.size()<<",\"autoload_count\":"<<g.autoloads.size()<<",\"error_offset\":"<<g.error_offset<<",\"error\":\""<<esc(g.error)<<"\"},";}
         const auto&m=r.apk.manifest;
@@ -1472,23 +1661,101 @@ void render_json_impl(std::ostream& o,const AnalysisReport& r,bool automatic_chi
         o<<"\"signing_block\":{\"present\":"<<(sb.present?"true":"false")<<",\"valid\":"<<(sb.valid?"true":"false")<<",\"cryptographic_verification_performed\":"<<(sb.cryptographic_verification_performed?"true":"false")<<",\"block_offset\":"<<sb.block_offset<<",\"block_size\":"<<sb.block_size<<",\"offset_space\":\"current_input_file\",\"has_v2\":"<<(sb.has_v2?"true":"false")<<",\"has_v3\":"<<(sb.has_v3?"true":"false")<<",\"has_v31\":"<<(sb.has_v31?"true":"false")<<",\"has_v32\":"<<(sb.has_v32?"true":"false")<<",\"has_source_stamp_v1\":"<<(sb.has_source_stamp_v1?"true":"false")<<",\"has_source_stamp_v2\":"<<(sb.has_source_stamp_v2?"true":"false")<<",\"has_verity_padding\":"<<(sb.has_verity_padding?"true":"false")<<",\"has_unknown_pairs\":"<<(sb.has_unknown_pairs?"true":"false")<<",\"pair_count\":"<<sb.pairs.size()<<",\"pairs_rendered\":"<<std::min(sb.pairs.size(),kPairRender)<<",\"pairs_truncated\":"<<(sb.pairs.size()>kPairRender?"true":"false")<<",\"pairs\":[";
         for(std::size_t z=0;z<sb.pairs.size()&&z<kPairRender;++z){if(z)o<<',';const auto&q=sb.pairs[z];o<<"{\"id\":"<<q.id<<",\"value_size\":"<<q.value_size<<",\"pair_offset\":"<<q.pair_offset<<",\"offset_space\":\"current_input_file\",\"label\":\""<<esc(q.label)<<"\"}";}o<<"],\"anomalies\":[";for(std::size_t z=0;z<sb.anomalies.size();++z){if(z)o<<',';o<<"\""<<esc(sb.anomalies[z])<<"\"";}o<<"],\"error_offset\":"<<sb.error_offset<<",\"error\":\""<<esc(sb.error)<<"\"},";
         o<<"\"dex_entries_rendered\":"<<std::min(r.apk.dex_entries.size(),kDexEntryRender)<<",\"dex_entries_truncated\":"<<(r.apk.dex_entries.size()>kDexEntryRender?"true":"false")<<",\"dex_entries\":[";for(std::size_t z=0;z<r.apk.dex_entries.size()&&z<kDexEntryRender;++z){if(z)o<<',';o<<"\""<<esc(r.apk.dex_entries[z])<<"\"";}o<<"],\"native_abis\":[";for(std::size_t z=0;z<r.apk.native_abis.size();++z){if(z)o<<',';o<<"\""<<esc(r.apk.native_abis[z])<<"\"";}o<<"],\"interesting_entries\":[";for(std::size_t z=0;z<r.apk.interesting_entries.size();++z){if(z)o<<',';o<<"\""<<esc(r.apk.interesting_entries[z])<<"\"";}o<<"],\"anomalies\":[";for(std::size_t z=0;z<r.apk.anomalies.size();++z){if(z)o<<',';o<<"\""<<esc(r.apk.anomalies[z])<<"\"";}o<<"],";
+        {
+            constexpr std::size_t kNativeDeepRender=256;
+            std::vector<const ApkEntryInfo*> native_entries;
+            for(const auto&e:r.apk.entries)if(e.native_library)native_entries.push_back(&e);
+            o<<"\"native_deep_entries_total\":"<<native_entries.size()
+             <<",\"native_deep_entries_rendered\":"<<std::min(native_entries.size(),kNativeDeepRender)
+             <<",\"native_deep_entries_truncated\":"<<(native_entries.size()>kNativeDeepRender?"true":"false")
+             <<",\"native_deep_entries\":[";
+            for(std::size_t z=0;z<native_entries.size()&&z<kNativeDeepRender;++z){
+                if(z)o<<',';
+                const auto&e=*native_entries[z];
+                o<<"{\"index\":"<<e.index<<",\"name\":\""<<esc(e.normalized_name)
+                 <<"\",\"duplicate_path\":"<<(e.duplicate_path?"true":"false")
+                 <<",\"abi\":\""<<esc(e.abi)<<"\",\"native_elf\":"<<(e.native_elf?"true":"false")
+                 <<",\"native_deep_state\":\""<<esc(e.native_deep_state)<<"\",\"native_deep_error\":\""<<esc(e.native_deep_error)
+                 <<"\",\"native_dynamic_state\":\""<<esc(e.native_dynamic_state)<<"\",\"native_dynamic_error\":\""<<esc(e.native_dynamic_error)
+                 <<"\",\"native_unwind_state\":\""<<esc(e.native_unwind_state)<<"\",\"native_unwind_error\":\""<<esc(e.native_unwind_error)
+                 <<"\",\"native_machine\":"<<e.native_machine<<",\"native_elf64\":"<<(e.native_elf64?"true":"false")
+                 <<",\"native_abi_consistent_known\":"<<(e.native_abi_consistent_known?"true":"false")
+                 <<",\"native_abi_consistent\":"<<(e.native_abi_consistent?"true":"false")
+                 <<",\"native_import_count\":"<<e.native_import_count<<",\"native_export_count\":"<<e.native_export_count
+                 <<",\"native_relocation_count\":"<<e.native_relocation_count<<",\"native_fde_count\":"<<e.native_fde_count
+                 <<",\"native_jni_evidence_limited\":"<<(e.native_jni_evidence_limited?"true":"false")
+                 <<",\"native_jni_evidence_error\":\""<<esc(e.native_jni_evidence_error)
+                 <<"\",\"jni_onload_export\":"<<(e.jni_onload_export?"true":"false")
+                 <<",\"jni_onload_symbol_file_offset\":"<<e.jni_onload_symbol_file_offset<<",\"jni_onload_va\":"<<e.jni_onload_va
+                 <<",\"jni_onload_file_backed\":"<<(e.jni_onload_file_backed?"true":"false")
+                 <<",\"jni_onload_file_offset\":"<<e.jni_onload_file_offset<<"}";
+            }
+            o<<"],";
+        }
+        o<<"\"jni_relations_rendered\":"<<std::min(r.apk.jni_relations.size(),kJniRelationRender)<<",\"jni_relations_truncated\":"<<(r.apk.jni_relations.size()>kJniRelationRender?"true":"false")<<",\"jni_relations\":[";
+        for(std::size_t z=0;z<r.apk.jni_relations.size()&&z<kJniRelationRender;++z){if(z)o<<',';const auto&j=r.apk.jni_relations[z];o<<"{\"index\":"<<j.index<<",\"state\":\""<<esc(j.state)<<"\",\"evidence_level\":\""<<esc(j.evidence_level)<<"\",\"dex_entry\":\""<<esc(j.dex_entry)<<"\",\"native_entry\":\""<<esc(j.native_entry)<<"\",\"abi\":\""<<esc(j.abi)<<"\",\"library_name\":\""<<esc(j.library_name)<<"\",\"class_descriptor\":\""<<esc(j.class_descriptor)<<"\",\"method_name\":\""<<esc(j.method_name)<<"\",\"method_descriptor\":\""<<esc(j.method_descriptor)<<"\",\"jni_symbol\":\""<<esc(j.jni_symbol)<<"\",\"packaged\":"<<(j.packaged?"true":"false")<<",\"load_library_referenced\":"<<(j.load_library_referenced?"true":"false")<<",\"native_declared\":"<<(j.native_declared?"true":"false")<<",\"exported\":"<<(j.exported?"true":"false")<<",\"registration_confirmed\":"<<(j.registration_confirmed?"true":"false")<<",\"abi_consistent\":"<<(j.abi_consistent?"true":"false")<<",\"fde_boundary_confirmed\":"<<(j.fde_boundary_confirmed?"true":"false")<<",\"dex_method_index\":"<<j.dex_method_index<<",\"dex_load_instruction_offset\":"<<j.dex_load_instruction_offset<<",\"elf_symbol_index\":"<<j.elf_symbol_index<<",\"function_va\":"<<j.function_va<<",\"function_file_offset\":"<<j.function_file_offset<<",\"function_end_va\":"<<j.function_end_va<<",\"offset_spaces\":{\"dex_load_instruction_offset\":\"child_dex\",\"function_file_offset\":\"child_elf\",\"function_va\":\"child_elf_va\"},\"detail\":\""<<esc(j.detail)<<"\"}";}o<<"],";
+        constexpr std::size_t kHermesEntryRender=32;
+        std::vector<const ApkEntryInfo*> hermes_entries;
+        for(const auto&e:r.apk.entries)if(e.hermes_magic&&hermes_entries.size()<kHermesEntryRender)hermes_entries.push_back(&e);
+        o<<"\"hermes_entries_rendered\":"<<hermes_entries.size()<<",\"hermes_entries_truncated\":"<<(r.apk.hermes_magic_count>hermes_entries.size()?"true":"false")<<",\"hermes_entries\":[";
+        for(std::size_t z=0;z<hermes_entries.size();++z){if(z)o<<',';const auto&e=*hermes_entries[z];o<<"{\"index\":"<<e.index<<",\"name\":\""<<esc(e.name)<<"\",\"normalized_name\":\""<<esc(e.normalized_name)<<"\",\"central_directory_offset\":"<<e.central_directory_offset<<",\"local_header_offset\":"<<e.local_header_offset<<",\"data_offset\":"<<e.data_offset<<",\"compressed_size\":"<<e.compressed_size<<",\"uncompressed_size\":"<<e.uncompressed_size<<",\"crc32\":"<<e.crc32<<",\"offset_space\":\"current_input_file\",\"duplicate_path\":"<<(e.duplicate_path?"true":"false")<<",\"integrity_valid\":"<<(e.hermes_integrity_valid?"true":"false")<<",\"probe_skipped_budget\":"<<(e.hermes_probe_skipped_budget?"true":"false")<<",\"version\":"<<e.hermes_version<<",\"supported_epoch\":"<<(e.hermes_supported_epoch?"true":"false")<<",\"valid\":"<<(e.hermes_valid?"true":"false")<<",\"parse_complete\":"<<(e.hermes_parse_complete?"true":"false")<<",\"sha256\":\""<<esc(e.hermes_sha256)<<"\",\"error\":\""<<esc(e.hermes_error)<<"\"}";}
+        o<<"],";
         const auto rendered_entries=apk_render_entries(r.apk,kEntryRender);o<<"\"entries_sample_policy\":\"STRUCTURAL_CATEGORIES_THEN_ANALYSIS_PRIORITY_THEN_ARCHIVE_ORDER\",\"entries_rendered\":"<<rendered_entries.size()<<",\"entries_truncated\":"<<(r.apk.entries.size()>rendered_entries.size()?"true":"false")<<",\"entries\":[";
-        for(std::size_t z=0;z<rendered_entries.size();++z){if(z)o<<',';const auto&e=*rendered_entries[z];o<<"{\"index\":"<<e.index<<",\"name\":\""<<esc(e.name)<<"\",\"normalized_name\":\""<<esc(e.normalized_name)<<"\",\"compressed_size\":"<<e.compressed_size<<",\"uncompressed_size\":"<<e.uncompressed_size<<",\"crc32\":"<<e.crc32<<",\"method\":"<<e.method<<",\"flags\":"<<e.flags<<",\"local_header_offset\":"<<e.local_header_offset<<",\"data_offset\":"<<e.data_offset<<",\"central_directory_offset\":"<<e.central_directory_offset<<",\"offset_space\":\"current_input_file\",\"directory\":"<<(e.directory?"true":"false")<<",\"encrypted\":"<<(e.encrypted?"true":"false")<<",\"supported\":"<<(e.supported?"true":"false")<<",\"safe_path\":"<<(e.safe_path?"true":"false")<<",\"symlink\":"<<(e.symlink?"true":"false")<<",\"duplicate_path\":"<<(e.duplicate_path?"true":"false")<<",\"manifest\":"<<(e.manifest?"true":"false")<<",\"manifest_binary_xml\":"<<(e.manifest_binary_xml?"true":"false")<<",\"dex\":"<<(e.dex?"true":"false")<<",\"dex_magic\":"<<(e.dex_magic?"true":"false")<<",\"resources_arsc\":"<<(e.resources_arsc?"true":"false")<<",\"resources_table\":"<<(e.resources_table?"true":"false")<<",\"native_library\":"<<(e.native_library?"true":"false")<<",\"native_elf\":"<<(e.native_elf?"true":"false")<<",\"godot_legacy_engine_config_candidate\":"<<(e.godot_legacy_engine_config_candidate?"true":"false")<<",\"godot_legacy_engine_config_valid\":"<<(e.godot_legacy_engine_config_valid?"true":"false")<<",\"godot_legacy_engine_config_error\":\""<<esc(e.godot_legacy_engine_config_error)<<"\",\"unity_il2cpp_metadata_candidate\":"<<(e.unity_il2cpp_metadata_candidate?"true":"false")<<",\"unity_il2cpp_metadata_valid\":"<<(e.unity_il2cpp_metadata_valid?"true":"false")<<",\"unity_il2cpp_metadata_parse_skipped_budget\":"<<(e.unity_il2cpp_metadata_parse_skipped_budget?"true":"false")<<",\"unity_il2cpp_metadata_version\":"<<e.unity_il2cpp_metadata_version<<",\"unity_il2cpp_metadata_layout\":\""<<esc(e.unity_il2cpp_metadata_layout)<<"\",\"unity_il2cpp_metadata_error\":\""<<esc(e.unity_il2cpp_metadata_error)<<"\",\"asset\":"<<(e.asset?"true":"false")<<",\"resource\":"<<(e.resource?"true":"false")<<",\"v1_signature_file\":"<<(e.v1_signature_file?"true":"false")<<",\"nested_archive\":"<<(e.nested_archive?"true":"false")<<",\"analysis_priority\":"<<unsigned(e.analysis_priority)<<",\"abi\":\""<<esc(e.abi)<<"\"}";}
+        for(std::size_t z=0;z<rendered_entries.size();++z){if(z)o<<',';const auto&e=*rendered_entries[z];o<<"{\"index\":"<<e.index<<",\"name\":\""<<esc(e.name)<<"\",\"normalized_name\":\""<<esc(e.normalized_name)<<"\",\"compressed_size\":"<<e.compressed_size<<",\"uncompressed_size\":"<<e.uncompressed_size<<",\"crc32\":"<<e.crc32<<",\"method\":"<<e.method<<",\"flags\":"<<e.flags<<",\"local_header_offset\":"<<e.local_header_offset<<",\"data_offset\":"<<e.data_offset<<",\"central_directory_offset\":"<<e.central_directory_offset<<",\"offset_space\":\"current_input_file\",\"directory\":"<<(e.directory?"true":"false")<<",\"encrypted\":"<<(e.encrypted?"true":"false")<<",\"supported\":"<<(e.supported?"true":"false")<<",\"safe_path\":"<<(e.safe_path?"true":"false")<<",\"symlink\":"<<(e.symlink?"true":"false")<<",\"duplicate_path\":"<<(e.duplicate_path?"true":"false")<<",\"manifest\":"<<(e.manifest?"true":"false")<<",\"manifest_binary_xml\":"<<(e.manifest_binary_xml?"true":"false")<<",\"dex\":"<<(e.dex?"true":"false")<<",\"dex_magic\":"<<(e.dex_magic?"true":"false")<<",\"dex_deep_state\":\""<<esc(e.dex_deep_state)<<"\",\"dex_deep_error\":\""<<esc(e.dex_deep_error)<<"\",\"dex_native_declaration_count\":"<<e.dex_native_declaration_count<<",\"dex_load_library_count\":"<<e.dex_load_library_count<<",\"resources_arsc\":"<<(e.resources_arsc?"true":"false")<<",\"resources_table\":"<<(e.resources_table?"true":"false")<<",\"native_library\":"<<(e.native_library?"true":"false")<<",\"native_elf\":"<<(e.native_elf?"true":"false")<<",\"godot_legacy_engine_config_candidate\":"<<(e.godot_legacy_engine_config_candidate?"true":"false")<<",\"godot_legacy_engine_config_valid\":"<<(e.godot_legacy_engine_config_valid?"true":"false")<<",\"godot_legacy_engine_config_error\":\""<<esc(e.godot_legacy_engine_config_error)<<"\",\"unity_il2cpp_metadata_candidate\":"<<(e.unity_il2cpp_metadata_candidate?"true":"false")<<",\"unity_il2cpp_metadata_valid\":"<<(e.unity_il2cpp_metadata_valid?"true":"false")<<",\"unity_il2cpp_metadata_parse_skipped_budget\":"<<(e.unity_il2cpp_metadata_parse_skipped_budget?"true":"false")<<",\"unity_il2cpp_metadata_version\":"<<e.unity_il2cpp_metadata_version<<",\"unity_il2cpp_metadata_layout\":\""<<esc(e.unity_il2cpp_metadata_layout)<<"\",\"unity_il2cpp_metadata_error\":\""<<esc(e.unity_il2cpp_metadata_error)<<"\",\"asset\":"<<(e.asset?"true":"false")<<",\"resource\":"<<(e.resource?"true":"false")<<",\"v1_signature_file\":"<<(e.v1_signature_file?"true":"false")<<",\"nested_archive\":"<<(e.nested_archive?"true":"false")<<",\"analysis_priority\":"<<unsigned(e.analysis_priority)<<",\"abi\":\""<<esc(e.abi)<<"\"}";}
         const auto&ex=r.apk_extract;o<<"],\"extraction\":{\"success\":"<<(ex.success?"true":"false")<<",\"budget_exhausted\":"<<(ex.budget_exhausted?"true":"false")<<",\"analysis_only\":"<<(ex.analysis_only?"true":"false")<<",\"output_dir\":\""<<esc(path_utf8(ex.output_dir))<<"\",\"file_count\":"<<ex.file_count<<",\"output_bytes\":"<<ex.output_bytes<<",\"files_rendered\":"<<std::min(ex.files.size(),kFileRender)<<",\"files_truncated\":"<<(ex.files.size()>kFileRender?"true":"false")<<",\"files\":[";for(std::size_t z=0;z<ex.files.size()&&z<kFileRender;++z){if(z)o<<',';o<<"\""<<esc(path_utf8(ex.files[z]))<<"\"";}o<<"],\"warnings\":[";for(std::size_t z=0;z<ex.warnings.size();++z){if(z)o<<',';o<<"\""<<esc(ex.warnings[z])<<"\"";}o<<"],\"error\":\""<<esc(ex.error)<<"\"}},\n";
     }
 
+    {
+        const auto&u=r.unreal;const auto&p=u.pak;const auto&i=u.iostore;
+        o<<"  \"unreal_container\":{\"candidate\":"<<(u.candidate?"true":"false")<<",\"valid\":"<<(u.valid?"true":"false")
+         <<",\"kind\":\""<<esc(u.kind)<<"\",\"state\":\""<<esc(u.state)<<"\",\"error\":\""<<esc(u.error)<<"\""
+         <<",\"capability_scope\":\"STATIC_STRUCTURAL_RECOGNITION_ONLY\""
+         <<",\"pak\":{\"candidate\":"<<(p.candidate?"true":"false")<<",\"valid\":"<<(p.valid?"true":"false")
+         <<",\"supported_version\":"<<(p.supported_version?"true":"false")<<",\"state\":\""<<esc(p.state)<<"\",\"footer_profile\":\""<<esc(p.footer_profile)
+         <<"\",\"version\":"<<p.version<<",\"footer_offset\":"<<p.footer_offset<<",\"footer_size\":"<<p.footer_size
+         <<",\"index_offset\":"<<p.index_offset<<",\"index_size\":"<<p.index_size<<",\"entry_count\":"<<p.entry_count
+         <<",\"mount_point\":\""<<esc(p.mount_point)<<"\",\"encrypted_index\":"<<(p.encrypted_index?"true":"false")
+         <<",\"secondary_index_count\":"<<p.secondary_index_count
+         <<",\"secondary_index_hashes_checked\":"<<(p.secondary_index_hashes_checked?"true":"false")
+         <<",\"secondary_index_hashes_match\":"<<(p.secondary_index_hashes_match?"true":"false")
+         <<",\"encoded_entry_bytes\":"<<p.encoded_entry_bytes<<",\"non_encoded_entry_count\":"<<p.non_encoded_entry_count
+         <<",\"frozen_index\":"<<(p.frozen_index?"true":"false")<<",\"index_hash_checked\":"<<(p.index_hash_checked?"true":"false")
+         <<",\"index_hash_matches\":"<<(p.index_hash_matches?"true":"false")<<",\"index_header_valid\":"<<(p.index_header_valid?"true":"false")
+         <<",\"budget_exhausted\":"<<(p.budget_exhausted?"true":"false")<<",\"compression_methods\":[";
+        for(std::size_t z=0;z<p.compression_methods.size();++z){if(z)o<<',';o<<"\""<<esc(p.compression_methods[z])<<"\"";}
+        o<<"],\"error\":\""<<esc(p.error)<<"\"}"
+         <<",\"iostore\":{\"candidate\":"<<(i.candidate?"true":"false")<<",\"valid\":"<<(i.valid?"true":"false")
+         <<",\"toc_valid\":"<<(i.toc_valid?"true":"false")<<",\"supported_version\":"<<(i.supported_version?"true":"false")
+         <<",\"state\":\""<<esc(i.state)<<"\",\"version\":"<<unsigned(i.version)<<",\"container_flags\":"<<unsigned(i.container_flags)
+         <<",\"header_size\":"<<i.header_size<<",\"entry_count\":"<<i.entry_count<<",\"compressed_block_count\":"<<i.compressed_block_count
+         <<",\"compression_block_size\":"<<i.compression_block_size<<",\"directory_index_size\":"<<i.directory_index_size
+         <<",\"partition_count\":"<<i.partition_count<<",\"partition_size\":"<<i.partition_size
+         <<",\"perfect_hash_seed_count\":"<<i.perfect_hash_seed_count<<",\"chunks_without_perfect_hash_count\":"<<i.chunks_without_perfect_hash_count
+         <<",\"encrypted\":"<<(i.encrypted?"true":"false")<<",\"signed_flag\":"<<(i.signed_container?"true":"false")
+         <<",\"signature_table_structurally_present\":"<<(i.signature_table_structurally_present?"true":"false")
+         <<",\"signature_verification_performed\":false,\"content_readable\":false"
+         <<",\"indexed\":"<<(i.indexed?"true":"false")<<",\"pair_checked\":"<<(i.pair_checked?"true":"false")
+         <<",\"pair_valid\":"<<(i.pair_valid?"true":"false")<<",\"budget_exhausted\":"<<(i.budget_exhausted?"true":"false")
+         <<",\"duplicate_chunk_ids\":"<<(i.duplicate_chunk_ids?"true":"false")<<",\"sibling_inventory_truncated\":"<<(i.sibling_inventory_truncated?"true":"false")
+         <<",\"compression_methods\":[";
+        for(std::size_t z=0;z<i.compression_methods.size();++z){if(z)o<<',';o<<"\""<<esc(i.compression_methods[z])<<"\"";}
+        o<<"],\"partitions\":[";
+        for(std::size_t z=0;z<i.partitions.size();++z){if(z)o<<',';const auto&x=i.partitions[z];o<<"{\"index\":"<<x.index<<",\"path\":\""<<esc(path_utf8(x.path))<<"\",\"required_bytes\":"<<x.required_bytes<<",\"file_size\":"<<x.file_size<<",\"state\":\""<<esc(x.state)<<"\",\"error\":\""<<esc(x.error)<<"\"}";}
+        o<<"],\"error\":\""<<esc(i.error)<<"\"}},\n";
+    }
     if(automatic_child_summary)render_dex_summary_json(o,r);
     else {
-    o << "  \"dex\": {\"candidate\":"<<(r.dex.candidate?"true":"false")<<",\"valid\":"<<(r.dex.valid?"true":"false")<<",\"state\":\""<<(r.dex.candidate?(r.dex.valid?"CONFIRMED":"FAILED"):"ABSENT")<<"\",\"version\":\""<<esc(r.dex.version)<<"\",\"offset_space\":\"current_input_file\",\"reverse_endian\":"<<(r.dex.reverse_endian?"true":"false")<<",\"container_v41\":"<<(r.dex.container_v41?"true":"false")<<",\"header_size\":"<<r.dex.header_size<<",\"file_size\":"<<r.dex.file_size<<",\"container_size\":"<<r.dex.container_size<<",\"header_offset\":"<<r.dex.header_offset<<",\"map_off\":"<<r.dex.map_off<<",\"string_ids_size\":"<<r.dex.string_ids_size<<",\"string_ids_off\":"<<r.dex.string_ids_off<<",\"type_ids_size\":"<<r.dex.type_ids_size<<",\"type_ids_off\":"<<r.dex.type_ids_off<<",\"proto_ids_size\":"<<r.dex.proto_ids_size<<",\"proto_ids_off\":"<<r.dex.proto_ids_off<<",\"field_ids_size\":"<<r.dex.field_ids_size<<",\"field_ids_off\":"<<r.dex.field_ids_off<<",\"method_ids_size\":"<<r.dex.method_ids_size<<",\"method_ids_off\":"<<r.dex.method_ids_off<<",\"class_defs_size\":"<<r.dex.class_defs_size<<",\"class_defs_off\":"<<r.dex.class_defs_off<<",\"data_size\":"<<r.dex.data_size<<",\"data_off\":"<<r.dex.data_off<<",\"defined_field_count\":"<<r.dex.defined_field_count<<",\"defined_method_count\":"<<r.dex.defined_method_count<<",\"code_item_count\":"<<r.dex.code_item_count<<",\"debug_info_count\":"<<r.dex.debug_info_count<<",\"map_complete\":"<<(r.dex.map_complete?"true":"false")<<",\"descriptor_parse_complete\":"<<(r.dex.descriptor_parse_complete?"true":"false")<<",\"checksum_checked\":"<<(r.dex.checksum_checked?"true":"false")<<",\"checksum_matches\":"<<(r.dex.checksum_matches?"true":"false")<<",\"signature_checked\":"<<(r.dex.signature_checked?"true":"false")<<",\"signature_matches\":"<<(r.dex.signature_matches?"true":"false")<<",\"error_offset\":"<<r.dex.error_offset<<",\"error\":\""<<esc(r.dex.error)<<"\",\"map_items\":[";
+    o << "  \"dex\": {\"candidate\":"<<(r.dex.candidate?"true":"false")<<",\"valid\":"<<(r.dex.valid?"true":"false")<<",\"state\":\""<<(r.dex.candidate?(r.dex.valid?"CONFIRMED":"FAILED"):"ABSENT")<<"\",\"version\":\""<<esc(r.dex.version)<<"\",\"offset_space\":\"current_input_file\",\"reverse_endian\":"<<(r.dex.reverse_endian?"true":"false")<<",\"container_v41\":"<<(r.dex.container_v41?"true":"false")<<",\"header_size\":"<<r.dex.header_size<<",\"file_size\":"<<r.dex.file_size<<",\"container_size\":"<<r.dex.container_size<<",\"header_offset\":"<<r.dex.header_offset<<",\"map_off\":"<<r.dex.map_off<<",\"string_ids_size\":"<<r.dex.string_ids_size<<",\"string_ids_off\":"<<r.dex.string_ids_off<<",\"type_ids_size\":"<<r.dex.type_ids_size<<",\"type_ids_off\":"<<r.dex.type_ids_off<<",\"proto_ids_size\":"<<r.dex.proto_ids_size<<",\"proto_ids_off\":"<<r.dex.proto_ids_off<<",\"field_ids_size\":"<<r.dex.field_ids_size<<",\"field_ids_off\":"<<r.dex.field_ids_off<<",\"method_ids_size\":"<<r.dex.method_ids_size<<",\"method_ids_off\":"<<r.dex.method_ids_off<<",\"class_defs_size\":"<<r.dex.class_defs_size<<",\"class_defs_off\":"<<r.dex.class_defs_off<<",\"data_size\":"<<r.dex.data_size<<",\"data_off\":"<<r.dex.data_off<<",\"defined_field_count\":"<<r.dex.defined_field_count<<",\"defined_method_count\":"<<r.dex.defined_method_count<<",\"code_item_count\":"<<r.dex.code_item_count<<",\"debug_info_count\":"<<r.dex.debug_info_count<<",\"map_complete\":"<<(r.dex.map_complete?"true":"false")<<",\"descriptor_parse_complete\":"<<(r.dex.descriptor_parse_complete?"true":"false")<<",\"jni_surface_scan_complete\":"<<(r.dex.jni_surface_scan_complete?"true":"false")<<",\"jni_surface_scan_error\":\""<<esc(r.dex.jni_surface_scan_error)<<"\",\"library_load_count\":"<<r.dex.library_loads.size()<<",\"checksum_checked\":"<<(r.dex.checksum_checked?"true":"false")<<",\"checksum_matches\":"<<(r.dex.checksum_matches?"true":"false")<<",\"signature_checked\":"<<(r.dex.signature_checked?"true":"false")<<",\"signature_matches\":"<<(r.dex.signature_matches?"true":"false")<<",\"error_offset\":"<<r.dex.error_offset<<",\"error\":\""<<esc(r.dex.error)<<"\",\"map_items\":[";
     for(std::size_t i=0;i<r.dex.map_items.size();++i){if(i)o<<',';const auto&m=r.dex.map_items[i];o<<"{\"type\":"<<m.type<<",\"name\":\""<<esc(m.name)<<"\",\"size\":"<<m.size<<",\"offset\":"<<m.offset<<",\"offset_space\":\"current_input_file\"}";}
     o<<"],\"types\":[";for(std::size_t i=0;i<r.dex.types.size();++i){if(i)o<<',';o<<"\""<<esc(r.dex.types[i])<<"\"";}
-    o<<"],\"protos\":[";for(std::size_t i=0;i<r.dex.protos.size();++i){if(i)o<<',';const auto&p=r.dex.protos[i];o<<"{\"index\":"<<p.index<<",\"shorty\":\""<<esc(p.shorty)<<"\",\"return_type\":\""<<esc(p.return_type)<<"\",\"signature\":\""<<esc(p.signature)<<"\",\"parameters_off\":"<<p.parameters_off<<",\"offset_space\":\"current_input_file\",\"parameter_types\":[";for(std::size_t z=0;z<p.parameter_types.size();++z){if(z)o<<',';o<<"\""<<esc(p.parameter_types[z])<<"\"";}o<<"]}";}
+    o<<"],\"protos\":[";for(std::size_t i=0;i<r.dex.protos.size();++i){if(i)o<<',';const auto&p=r.dex.protos[i];o<<"{\"index\":"<<p.index<<",\"shorty\":\""<<esc(p.shorty)<<"\",\"return_type\":\""<<esc(p.return_type)<<"\",\"signature\":\""<<esc(p.signature)<<"\",\"descriptor\":\""<<esc(p.descriptor)<<"\",\"parameters_off\":"<<p.parameters_off<<",\"offset_space\":\"current_input_file\",\"parameter_types\":[";for(std::size_t z=0;z<p.parameter_types.size();++z){if(z)o<<',';o<<"\""<<esc(p.parameter_types[z])<<"\"";}o<<"]}";}
     o<<"],\"fields\":[";for(std::size_t i=0;i<r.dex.fields.size();++i){if(i)o<<',';const auto&f=r.dex.fields[i];o<<"{\"index\":"<<f.index<<",\"defined\":"<<(f.defined?"true":"false")<<",\"owner\":\""<<esc(f.owner)<<"\",\"name\":\""<<esc(f.name)<<"\",\"type\":\""<<esc(f.type)<<"\",\"signature\":\""<<esc(f.signature)<<"\",\"access_flags\":"<<f.access_flags<<"}";}
-    o<<"],\"methods\":[";for(std::size_t i=0;i<r.dex.methods.size();++i){if(i)o<<',';const auto&m=r.dex.methods[i];o<<"{\"index\":"<<m.index<<",\"defined\":"<<(m.defined?"true":"false")<<",\"owner\":\""<<esc(m.owner)<<"\",\"name\":\""<<esc(m.name)<<"\",\"signature\":\""<<esc(m.signature)<<"\",\"access_flags\":"<<m.access_flags<<",\"code_off\":"<<m.code_off<<",\"offset_space\":\"current_input_file\"}";}
+    o<<"],\"methods\":[";for(std::size_t i=0;i<r.dex.methods.size();++i){if(i)o<<',';const auto&m=r.dex.methods[i];o<<"{\"index\":"<<m.index<<",\"defined\":"<<(m.defined?"true":"false")<<",\"owner\":\""<<esc(m.owner)<<"\",\"owner_descriptor\":\""<<esc(m.owner_descriptor)<<"\",\"name\":\""<<esc(m.name)<<"\",\"signature\":\""<<esc(m.signature)<<"\",\"descriptor\":\""<<esc(m.descriptor)<<"\",\"access_flags\":"<<m.access_flags<<",\"code_off\":"<<m.code_off<<",\"offset_space\":\"current_input_file\"}";}
     o<<"],\"code_items\":[";for(std::size_t i=0;i<r.dex.code_items.size();++i){if(i)o<<',';const auto&c=r.dex.code_items[i];o<<"{\"method_idx\":"<<c.method_idx<<",\"code_off\":"<<c.code_off<<",\"code_size_bytes\":"<<c.code_size_bytes<<",\"debug_info_off\":"<<c.debug_info_off<<",\"registers_size\":"<<c.registers_size<<",\"ins_size\":"<<c.ins_size<<",\"outs_size\":"<<c.outs_size<<",\"tries_size\":"<<c.tries_size<<",\"insns_size\":"<<c.insns_size<<",\"debug_line_start\":"<<c.debug_line_start<<",\"debug_position_count\":"<<c.debug_position_count<<",\"offset_space\":\"current_input_file\",\"parameter_names\":[";for(std::size_t z=0;z<c.parameter_names.size();++z){if(z)o<<',';o<<"\""<<esc(c.parameter_names[z])<<"\"";}o<<"]}";}
     o<<"],\"classes\":[";for(std::size_t i=0;i<r.dex.classes.size();++i){if(i)o<<',';const auto&c=r.dex.classes[i];o<<"{\"class_idx\":"<<c.class_idx<<",\"name\":\""<<esc(c.name)<<"\",\"superclass\":\""<<esc(c.superclass)<<"\",\"source_file\":\""<<esc(c.source_file)<<"\",\"access_flags\":"<<c.access_flags<<",\"interfaces_off\":"<<c.interfaces_off<<",\"class_data_off\":"<<c.class_data_off<<",\"static_values_off\":"<<c.static_values_off<<",\"static_field_count\":"<<c.static_field_count<<",\"instance_field_count\":"<<c.instance_field_count<<",\"direct_method_count\":"<<c.direct_method_count<<",\"virtual_method_count\":"<<c.virtual_method_count<<",\"offset_space\":\"current_input_file\",\"interfaces\":[";for(std::size_t z=0;z<c.interfaces.size();++z){if(z)o<<',';o<<"\""<<esc(c.interfaces[z])<<"\"";}o<<"]}";}
     o<<"],\"method_handles\":[";for(std::size_t i=0;i<r.dex.method_handles.size();++i){if(i)o<<',';const auto&h=r.dex.method_handles[i];o<<"{\"index\":"<<h.index<<",\"handle_type\":"<<h.handle_type<<",\"field_or_method_id\":"<<h.field_or_method_id<<",\"references_field\":"<<(h.references_field?"true":"false")<<",\"target\":\""<<esc(h.target)<<"\"}";}
     o<<"],\"call_sites\":[";for(std::size_t i=0;i<r.dex.call_sites.size();++i){if(i)o<<',';const auto&c=r.dex.call_sites[i];o<<"{\"index\":"<<c.index<<",\"call_site_off\":"<<c.call_site_off<<",\"bootstrap_method_handle_idx\":"<<c.bootstrap_method_handle_idx<<",\"method_name_idx\":"<<c.method_name_idx<<",\"method_type_idx\":"<<c.method_type_idx<<",\"extra_argument_count\":"<<c.extra_argument_count<<",\"method_name\":\""<<esc(c.method_name)<<"\",\"method_type\":\""<<esc(c.method_type)<<"\",\"bootstrap_target\":\""<<esc(c.bootstrap_target)<<"\",\"offset_space\":\"current_input_file\"}";}
+    o<<"],\"library_loads\":[";for(std::size_t i=0;i<r.dex.library_loads.size();++i){if(i)o<<',';const auto&x=r.dex.library_loads[i];o<<"{\"caller_method_idx\":"<<x.caller_method_idx<<",\"target_method_idx\":"<<x.target_method_idx<<",\"string_idx\":"<<x.string_idx<<",\"pc_code_units\":"<<x.pc_code_units<<",\"instruction_file_offset\":"<<x.instruction_file_offset<<",\"offset_space\":\"current_input_file\",\"library_name\":\""<<esc(x.library_name)<<"\"}";}
     o<<"],\"strings\":[";for(std::size_t i=0;i<r.dex.strings.size();++i){if(i)o<<',';o<<"\""<<esc(r.dex.strings[i])<<"\"";}
     o<<"],\"string_hints\":[";for(std::size_t i=0;i<r.dex.string_hints.size();++i){if(i)o<<',';o<<"\""<<esc(r.dex.string_hints[i])<<"\"";}
     o<<"],\"anomalies\":[";for(std::size_t i=0;i<r.dex.anomalies.size();++i){if(i)o<<',';o<<"\""<<esc(r.dex.anomalies[i])<<"\"";}
@@ -1506,6 +1773,7 @@ void render_json_impl(std::ostream& o,const AnalysisReport& r,bool automatic_chi
     for(std::size_t i=0;i<r.jar.entries.size();++i){if(i)o<<',';const auto&e=r.jar.entries[i];o<<"{\"name\":\""<<esc(e.name)<<"\",\"compressed_size\":"<<e.compressed_size<<",\"uncompressed_size\":"<<e.uncompressed_size<<",\"crc32\":"<<e.crc32<<",\"method\":"<<e.method<<",\"directory\":"<<(e.directory?"true":"false")<<",\"encrypted\":"<<(e.encrypted?"true":"false")<<",\"supported\":"<<(e.supported?"true":"false")<<",\"safe_path\":"<<(e.safe_path?"true":"false")<<",\"symlink\":"<<(e.symlink?"true":"false")<<",\"class_file\":"<<(e.class_file?"true":"false")<<",\"nested_archive\":"<<(e.nested_archive?"true":"false")<<"}";}
     o<<"],\"manifest_lines\":[";for(std::size_t i=0;i<r.jar.manifest_lines.size();++i){if(i)o<<',';o<<"\""<<esc(r.jar.manifest_lines[i])<<"\"";}o<<"],\"interesting_entries\":[";for(std::size_t i=0;i<r.jar.interesting_entries.size();++i){if(i)o<<',';o<<"\""<<esc(r.jar.interesting_entries[i])<<"\"";}o<<"],\"anomalies\":[";for(std::size_t i=0;i<r.jar.anomalies.size();++i){if(i)o<<',';o<<"\""<<esc(r.jar.anomalies[i])<<"\"";}o<<"],\"extraction\":{\"success\":"<<(r.jar_extract.success?"true":"false")<<",\"budget_exhausted\":"<<(r.jar_extract.budget_exhausted?"true":"false")<<",\"output_dir\":\""<<esc(path_utf8(r.jar_extract.output_dir))<<"\",\"file_count\":"<<r.jar_extract.file_count<<",\"output_bytes\":"<<r.jar_extract.output_bytes<<",\"error\":\""<<esc(r.jar_extract.error)<<"\"}},\n";
 
+    render_dotnet_native_json(o,r,automatic_child_summary);
     if(automatic_child_summary)render_dotnet_summary_json(o,r);
     else {
     o << "  \"dotnet\": {\"candidate\":"<<(r.pe.clr.present?"true":"false")<<",\"valid\":"<<(r.dotnet.valid?"true":"false")<<",\"state\":\""<<(r.pe.clr.present?(r.dotnet.valid?"CONFIRMED":"FAILED"):"ABSENT")<<"\",\"unity_managed\":"<<(r.dotnet.unity_managed?"true":"false")<<",\"unity_mono\":"<<(r.dotnet.unity_mono?"true":"false")<<",\"unity_path_hint\":"<<(r.dotnet.unity_path_hint?"true":"false")<<",\"unity_engine_reference\":"<<(r.dotnet.unity_engine_reference?"true":"false")<<",\"runtime_version\":\""<<esc(r.dotnet.runtime_version)<<"\",\"metadata_offset\":"<<r.dotnet.metadata_offset<<",\"metadata_size\":"<<r.dotnet.metadata_size<<",\"blob_heap_size\":"<<r.dotnet.blob_heap_size<<",\"resources_offset\":"<<r.dotnet.resources_offset<<",\"resources_size\":"<<r.dotnet.resources_size<<",\"signature_parse_complete\":"<<(r.dotnet.signature_parse_complete?"true":"false")<<",\"error\":\""<<esc(r.dotnet.error)<<"\",\"table_rows\":[";
@@ -1534,6 +1802,34 @@ void render_json_impl(std::ostream& o,const AnalysisReport& r,bool automatic_chi
     o<<"],\"custom_sections\":[";for(std::size_t i=0;i<r.wasm.custom_sections.size();++i){if(i)o<<',';const auto&x=r.wasm.custom_sections[i];o<<"{\"name\":\""<<esc(x.name)<<"\",\"offset\":"<<x.offset<<",\"size\":"<<x.size<<"}";}
     o<<"],\"data_segments\":[";for(std::size_t i=0;i<r.wasm.data_segments.size();++i){if(i)o<<',';const auto&x=r.wasm.data_segments[i];o<<"{\"index\":"<<x.index<<",\"memory_index\":"<<x.memory_index<<",\"passive\":"<<(x.passive?"true":"false")<<",\"offset_known\":"<<(x.offset_known?"true":"false")<<",\"offset\":"<<x.offset<<",\"data_offset\":"<<x.data_offset<<",\"size\":"<<x.size<<"}";}
     o<<"],\"string_hints\":[";for(std::size_t i=0;i<r.wasm.string_hints.size();++i){if(i)o<<',';o<<"\""<<esc(r.wasm.string_hints[i])<<"\"";}o<<"],\"dwarf_sections\":[";for(std::size_t i=0;i<r.wasm.dwarf_sections.size();++i){if(i)o<<',';o<<"\""<<esc(r.wasm.dwarf_sections[i])<<"\"";}o<<"],\"anomalies\":[";for(std::size_t i=0;i<r.wasm.anomalies.size();++i){if(i)o<<',';o<<"\""<<esc(r.wasm.anomalies[i])<<"\"";}o<<"],\"extraction\":{\"success\":"<<(r.wasm_extract.success?"true":"false")<<",\"functions_csv\":\""<<esc(path_utf8(r.wasm_extract.functions_csv))<<"\",\"function_count\":"<<r.wasm_extract.function_count<<",\"strings_txt\":\""<<esc(path_utf8(r.wasm_extract.strings_txt))<<"\",\"string_count\":"<<r.wasm_extract.string_count<<"}},\n";
+
+    {
+        const auto state=!r.hermes.candidate?"ABSENT":(!r.hermes.supported_epoch?"PARTIAL":((!r.hermes.valid&&!r.hermes.budget_limited)?"FAILED":(r.hermes.parse_complete?"CONFIRMED":"PARTIAL")));
+        const std::size_t function_cap=automatic_child_summary?256:r.hermes.functions.size();
+        const std::size_t string_cap=automatic_child_summary?512:r.hermes.strings.size();
+        o<<"  \"hermes\": {\"candidate\":"<<(r.hermes.candidate?"true":"false")<<",\"supported_epoch\":"<<(r.hermes.supported_epoch?"true":"false")
+         <<",\"valid\":"<<(r.hermes.valid?"true":"false")<<",\"parse_complete\":"<<(r.hermes.parse_complete?"true":"false")<<",\"state\":\""<<state
+         <<"\",\"version\":"<<r.hermes.version<<",\"epoch\":\""<<esc(r.hermes.epoch)<<"\",\"file_size\":"<<r.hermes.file_size
+         <<",\"declared_file_length\":"<<r.hermes.declared_file_length<<",\"source_hash\":\""<<esc(r.hermes.source_hash)<<"\",\"file_hash\":\""<<esc(r.hermes.file_hash)
+         <<"\",\"footer_hash_checked\":"<<(r.hermes.footer_hash_checked?"true":"false")<<",\"footer_hash_matches\":"<<(r.hermes.footer_hash_matches?"true":"false")
+         <<",\"budget_limited\":"<<(r.hermes.budget_limited?"true":"false")<<",\"function_count\":"<<r.hermes.function_count<<",\"string_kind_count\":"<<r.hermes.string_kind_count
+         <<",\"identifier_count\":"<<r.hermes.identifier_count<<",\"string_count\":"<<r.hermes.string_count<<",\"overflow_string_count\":"<<r.hermes.overflow_string_count
+         <<",\"string_storage_size\":"<<r.hermes.string_storage_size<<",\"bigint_count\":"<<r.hermes.bigint_count<<",\"regexp_count\":"<<r.hermes.regexp_count
+         <<",\"cjs_module_count\":"<<r.hermes.cjs_module_count<<",\"function_source_count\":"<<r.hermes.function_source_count<<",\"deduplicated_function_bodies\":"<<r.hermes.deduplicated_function_bodies
+         <<",\"function_table_offset\":"<<r.hermes.function_table_offset<<",\"string_kind_table_offset\":"<<r.hermes.string_kind_table_offset<<",\"identifier_hash_table_offset\":"<<r.hermes.identifier_hash_table_offset
+         <<",\"string_table_offset\":"<<r.hermes.string_table_offset<<",\"overflow_string_table_offset\":"<<r.hermes.overflow_string_table_offset<<",\"string_storage_offset\":"<<r.hermes.string_storage_offset
+         <<",\"function_bytecode_begin\":"<<r.hermes.function_bytecode_begin<<",\"function_bytecode_end\":"<<r.hermes.function_bytecode_end<<",\"error_offset\":"<<r.hermes.error_offset<<",\"error\":\""<<esc(r.hermes.error)
+         <<"\",\"debug\":{\"present\":"<<(r.hermes.debug.present?"true":"false")<<",\"valid\":"<<(r.hermes.debug.valid?"true":"false")<<",\"offset\":"<<r.hermes.debug.offset
+         <<",\"filename_count\":"<<r.hermes.debug.filename_count<<",\"filename_storage_size\":"<<r.hermes.debug.filename_storage_size<<",\"file_region_count\":"<<r.hermes.debug.file_region_count
+         <<",\"debug_data_size\":"<<r.hermes.debug.debug_data_size<<",\"lexical_data_offset\":"<<r.hermes.debug.lexical_data_offset<<",\"scope_desc_data_offset\":"<<r.hermes.debug.scope_desc_data_offset
+         <<",\"textified_callee_offset\":"<<r.hermes.debug.textified_callee_offset<<",\"string_table_offset\":"<<r.hermes.debug.string_table_offset<<",\"end_offset\":"<<r.hermes.debug.end_offset<<"},\"functions\":[";
+        for(std::size_t i=0;i<r.hermes.functions.size()&&i<function_cap;++i){if(i)o<<',';const auto&f=r.hermes.functions[i];o<<"{\"index\":"<<f.index<<",\"header_offset\":"<<f.header_offset<<",\"bytecode_offset\":"<<f.bytecode_offset<<",\"bytecode_size\":"<<f.bytecode_size<<",\"info_offset\":"<<f.info_offset<<",\"function_name_id\":"<<f.function_name_id<<",\"function_name\":\""<<esc(f.function_name)<<"\",\"param_count\":"<<f.param_count<<",\"frame_size\":"<<f.frame_size<<",\"environment_size\":"<<f.environment_size<<",\"instruction_count\":"<<f.instruction_count<<",\"overflow_header\":"<<(f.overflow_header?"true":"false")<<",\"strict_mode\":"<<(f.strict_mode?"true":"false")<<",\"has_exception_handler\":"<<(f.has_exception_handler?"true":"false")<<",\"has_debug_info\":"<<(f.has_debug_info?"true":"false")<<",\"opcodes\":[";for(std::size_t z=0;z<f.opcodes.size();++z){if(z)o<<',';const auto&x=f.opcodes[z];o<<"{\"opcode\":"<<x.opcode<<",\"name\":\""<<esc(x.name)<<"\",\"count\":"<<x.count<<"}";}o<<"]}";}
+        o<<"],\"functions_total\":"<<r.hermes.functions.size()<<",\"functions_rendered\":"<<std::min(function_cap,r.hermes.functions.size())<<",\"functions_omitted\":"<<(r.hermes.functions.size()-std::min(function_cap,r.hermes.functions.size()))<<",\"functions_truncated\":"<<(r.hermes.functions.size()>function_cap?"true":"false")<<",\"strings\":[";
+        for(std::size_t i=0;i<r.hermes.strings.size()&&i<string_cap;++i){if(i)o<<',';const auto&s=r.hermes.strings[i];o<<"{\"index\":"<<s.index<<",\"storage_offset\":"<<s.storage_offset<<",\"length\":"<<s.length<<",\"utf16\":"<<(s.utf16?"true":"false")<<",\"identifier\":"<<(s.identifier?"true":"false")<<",\"value\":\""<<esc(s.value)<<"\"}";}
+        o<<"],\"strings_total\":"<<r.hermes.strings.size()<<",\"strings_rendered\":"<<std::min(string_cap,r.hermes.strings.size())<<",\"strings_omitted\":"<<(r.hermes.strings.size()-std::min(string_cap,r.hermes.strings.size()))<<",\"strings_truncated\":"<<(r.hermes.strings.size()>string_cap?"true":"false")<<",\"opcodes\":[";
+        for(std::size_t i=0;i<r.hermes.opcodes.size();++i){if(i)o<<',';const auto&x=r.hermes.opcodes[i];o<<"{\"opcode\":"<<x.opcode<<",\"name\":\""<<esc(x.name)<<"\",\"count\":"<<x.count<<"}";}
+        o<<"],\"anomalies\":[";for(std::size_t i=0;i<r.hermes.anomalies.size();++i){if(i)o<<',';o<<"\""<<esc(r.hermes.anomalies[i])<<"\"";}o<<"],\"extraction\":{\"success\":"<<(r.hermes_extract.success?"true":"false")<<",\"functions_csv\":\""<<esc(path_utf8(r.hermes_extract.functions_csv))<<"\",\"strings_csv\":\""<<esc(path_utf8(r.hermes_extract.strings_csv))<<"\",\"opcodes_csv\":\""<<esc(path_utf8(r.hermes_extract.opcodes_csv))<<"\"}},\n";
+    }
 
     {
         const auto facts=implicit_render_fact_positions(r.implicit_exec);
@@ -1629,7 +1925,7 @@ void render_json_impl(std::ostream& o,const AnalysisReport& r,bool automatic_chi
       << "}";
 }
 
-bool automatic_child_json_uses_summary(const AnalysisReport&r){for(const auto&x:child_json_plane_limits(r))if(x.total>x.cap)return true;return false;}
+bool automatic_child_json_uses_summary(const AnalysisReport&r){for(const auto&x:child_json_plane_limits(r))if(x.total>x.rendered())return true;return false;}
 
 void render_json(std::ostream&o,const AnalysisReport&r){render_json_impl(o,r,false);}
 

@@ -25,6 +25,7 @@ struct DexProtoInfo {
     std::string shorty;
     std::string return_type;
     std::string signature;
+    std::string descriptor;
     std::vector<std::string> parameter_types;
 };
 
@@ -52,6 +53,17 @@ struct DexMethodInfo {
     std::string owner;
     std::string name;
     std::string signature;
+    std::string owner_descriptor;
+    std::string descriptor;
+};
+
+struct DexLibraryLoadInfo {
+    std::uint32_t caller_method_idx = 0;
+    std::uint32_t target_method_idx = 0;
+    std::uint32_t string_idx = 0;
+    std::uint32_t pc_code_units = 0;
+    std::uint64_t instruction_file_offset = 0;
+    std::string library_name;
 };
 
 struct DexMethodHandleInfo {
@@ -120,6 +132,7 @@ struct DexInfo {
     bool signature_matches = false;
     bool map_complete = false;
     bool descriptor_parse_complete = true;
+    bool jni_surface_scan_complete = true;
 
     std::string version;
     std::uint32_t checksum = 0;
@@ -161,11 +174,13 @@ struct DexInfo {
     std::vector<DexCallSiteInfo> call_sites;
     std::vector<DexClassInfo> classes;
     std::vector<DexCodeInfo> code_items;
+    std::vector<DexLibraryLoadInfo> library_loads;
     std::vector<std::string> string_hints;
     std::vector<std::string> anomalies;
     ImplicitExecutionInfo implicit_exec;
 
     std::string error;
+    std::string jni_surface_scan_error;
     std::uint64_t error_offset = 0;
 };
 

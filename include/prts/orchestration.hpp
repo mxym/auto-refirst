@@ -147,6 +147,13 @@ struct DirectoryGodotLibraryFact {
     std::string target_entry;
 };
 
+struct DirectoryUnrealPartitionFact {
+    std::filesystem::path path;
+    std::uint32_t index=0;
+    std::uint64_t required_bytes=0;
+    std::string state;
+};
+
 // Compact cross-file evidence view.  It intentionally contains only facts
 // consumed by directory relationship/ranking/summary logic; the owning full
 // AnalysisReport may be serialized and released before cross-file analysis.
@@ -218,6 +225,11 @@ struct DirectoryReportIndex {
 
     std::vector<DirectoryArtifactFact> artifacts;
     std::vector<DirectoryGodotLibraryFact> godot_library_refs;
+    bool unreal_iostore_toc_valid=false;
+    bool unreal_iostore_pair_valid=false;
+    bool unreal_iostore_encrypted=false;
+    std::vector<DirectoryUnrealPartitionFact> unreal_iostore_partitions;
+
 
     // Set only when relationship closure changes user-visible report state.
     // The optimized directory path treats this as a retention invariant.

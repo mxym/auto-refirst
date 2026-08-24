@@ -19,6 +19,7 @@
 #include "prts/cpython.hpp"
 #include "prts/cpython_static.hpp"
 #include "prts/golang.hpp"
+#include "prts/hermes.hpp"
 #include "prts/rust.hpp"
 #include "prts/nuitka.hpp"
 #include "prts/lua.hpp"
@@ -26,10 +27,12 @@
 #include "prts/jvm.hpp"
 #include "prts/android.hpp"
 #include "prts/apk.hpp"
+#include "prts/unreal.hpp"
 #include "prts/dart.hpp"
 #include "prts/flutter.hpp"
 #include "prts/unity.hpp"
 #include "prts/dotnet.hpp"
+#include "prts/dotnet_native.hpp"
 #include "prts/wxapkg.hpp"
 #include "prts/asar.hpp"
 #include "prts/autoit.hpp"
@@ -62,7 +65,7 @@ struct ArtifactMaterializationInfo {
     std::uint64_t omitted_count=0,omitted_bytes=0;
     std::vector<std::string> reasons;
 };
-struct AnalysisReport { std::filesystem::path input; FileSnapshot input_snapshot; PeInfo pe; AuthenticodeInfo authenticode; ElfInfo elf; ElfExtractResult elf_extract; ElfUnwindExtractResult elf_unwind_extract; MachOInfo macho; ImplicitExecutionInfo implicit_exec; ImplicitExecutionExtractResult implicit_exec_extract; StaticScanReport static_scan; PyInstArchiveInfo pyinstaller; PyInstExtractResult pyinstaller_extract; PythonBytecodeInfo python_bytecode; PythonBytecodeExtractResult python_bytecode_extract; CPythonMarshalLoaderInfo cpython_marshal_loader; GodotPckInfo godot; GodotExtractResult godot_extract; GodotLegacyEngineConfigInfo godot_legacy_config; GDExtensionDescriptorInfo gdextension_descriptor; GDScriptMaterializeResult gdscript_extract; CPythonStaticInfo cpython_static; std::vector<CPythonInfo> cpython_runtimes; GoInfo golang; GoExtractResult golang_extract; RustInfo rust; LuaInfo lua; LuaExtractResult lua_extract; WasmInfo wasm; WasmExtractResult wasm_extract; DexInfo dex; DexExtractResult dex_extract; ApkInfo apk; ApkExtractResult apk_extract; DartInfo dart; FlutterAssetManifestInfo flutter_asset_manifest; JvmClassInfo jvm_class; JvmExtractResult jvm_extract; JarInfo jar; JarExtractResult jar_extract; UnityInfo unity; UnityExtractResult unity_extract; DotNetInfo dotnet; DotNetExtractResult dotnet_extract; WxapkgInfo wxapkg; WxapkgExtractResult wxapkg_extract; AsarInfo asar; AsarExtractResult asar_extract; AutoItInfo autoit; AutoItExtractResult autoit_extract; CryptoInfo crypto; RenpyRpycInfo renpy_rpyc; RenpyExtractResult renpy_extract; RenpyRpaInfo renpy_rpa; RenpyRpaExtractResult renpy_rpa_extract; NuitkaInfo nuitka; NuitkaExtractResult nuitka_extract; InterpreterBoundaryInfo interpreter_boundary; AnalysisGuidance analysis_guidance; RuntimePlan runtime_plan; std::vector<Finding> findings; RuntimeReport runtime; ReplacementReport replacement; ArtifactNodeInfo artifact; ArtifactGraphInfo artifact_graph; ArtifactMaterializationInfo materialization; std::vector<AnalysisArtifact> artifacts; std::vector<ArtifactRelationship> artifact_relationships; };
+struct AnalysisReport { std::filesystem::path input; FileSnapshot input_snapshot; PeInfo pe; AuthenticodeInfo authenticode; ElfInfo elf; ElfExtractResult elf_extract; ElfUnwindExtractResult elf_unwind_extract; MachOInfo macho; ImplicitExecutionInfo implicit_exec; ImplicitExecutionExtractResult implicit_exec_extract; StaticScanReport static_scan; PyInstArchiveInfo pyinstaller; PyInstExtractResult pyinstaller_extract; PythonBytecodeInfo python_bytecode; PythonBytecodeExtractResult python_bytecode_extract; CPythonMarshalLoaderInfo cpython_marshal_loader; GodotPckInfo godot; GodotExtractResult godot_extract; GodotLegacyEngineConfigInfo godot_legacy_config; GDExtensionDescriptorInfo gdextension_descriptor; GDScriptMaterializeResult gdscript_extract; CPythonStaticInfo cpython_static; std::vector<CPythonInfo> cpython_runtimes; GoInfo golang; GoExtractResult golang_extract; RustInfo rust; LuaInfo lua; LuaExtractResult lua_extract; WasmInfo wasm; WasmExtractResult wasm_extract; HermesInfo hermes; HermesExtractResult hermes_extract; DexInfo dex; DexExtractResult dex_extract; ApkInfo apk; ApkExtractResult apk_extract; UnrealInfo unreal; DartInfo dart; FlutterAssetManifestInfo flutter_asset_manifest; JvmClassInfo jvm_class; JvmExtractResult jvm_extract; JarInfo jar; JarExtractResult jar_extract; UnityInfo unity; UnityExtractResult unity_extract; DotNetInfo dotnet; DotNetExtractResult dotnet_extract; DotNetBundleInfo dotnet_bundle; NativeAotInfo native_aot; WxapkgInfo wxapkg; WxapkgExtractResult wxapkg_extract; AsarInfo asar; AsarExtractResult asar_extract; AutoItInfo autoit; AutoItExtractResult autoit_extract; CryptoInfo crypto; RenpyRpycInfo renpy_rpyc; RenpyExtractResult renpy_extract; RenpyRpaInfo renpy_rpa; RenpyRpaExtractResult renpy_rpa_extract; NuitkaInfo nuitka; NuitkaExtractResult nuitka_extract; InterpreterBoundaryInfo interpreter_boundary; AnalysisGuidance analysis_guidance; RuntimePlan runtime_plan; std::vector<Finding> findings; RuntimeReport runtime; ReplacementReport replacement; ArtifactNodeInfo artifact; ArtifactGraphInfo artifact_graph; ArtifactMaterializationInfo materialization; std::vector<AnalysisArtifact> artifacts; std::vector<ArtifactRelationship> artifact_relationships; };
 enum class ReportLanguage { English, Chinese };
 std::string render_text(const AnalysisReport& r);
 std::string render_text(const AnalysisReport& r,ReportLanguage language);

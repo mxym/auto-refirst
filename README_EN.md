@@ -44,9 +44,9 @@ See [docs/CLI.md](docs/CLI.md), the exact [CLI process and authorization contrac
 
 ## Capability groups
 
-- Native executable parsing: PE, ELF, Mach-O/Universal Mach-O.
-- Managed and bytecode formats: JVM/JAR, DEX/APK, WebAssembly, Lua, ECMA-335/.NET, CPython bytecode/runtime evidence.
-- Packers and ecosystems: UPX and bounded PE packer/protector evidence, PyInstaller, Nuitka, Electron/ASAR, AutoIt, Ren'Py/RPA, wxapkg, Go, Rust, Dart/Flutter.
+- Native executable parsing: PE, ELF, Mach-O/Universal Mach-O, including bounded Swift metadata records without source or full-semantic recovery claims.
+- Managed and bytecode formats: JVM/JAR, DEX/APK/JNI relations, WebAssembly, Lua, Hermes HBC, ECMA-335/.NET single-file/NativeAOT, and CPython bytecode/runtime evidence.
+- Packers and ecosystems: UPX and bounded PE packer/protector evidence, PyInstaller, Nuitka, Electron/ASAR, AutoIt, Ren'Py/RPA, wxapkg, Unreal Pak/IoStore, Go, Rust, and Dart/Flutter.
 - Unity and Godot routing/materialization, including Mono/IL2CPP and PCK/GDScript/GDExtension evidence.
 - Anti-debug, crypto-use, implicit execution, interpreter boundaries, exceptional control flow, cross-file relationships and analysis guidance.
 - Bounded recursive artifact graph with provenance, SHA-256 deduplication and static child re-analysis.

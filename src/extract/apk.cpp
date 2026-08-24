@@ -1,6 +1,10 @@
 #include "prts/apk.hpp"
+#include "prts/android.hpp"
 #include "prts/unity.hpp"
 #include "prts/elf.hpp"
+#include "Zydis.h"
+#include "prts/hermes.hpp"
+#include "prts/sha256.hpp"
 
 #define MINIZ_NO_ZLIB_APIS
 #include "miniz.h"
@@ -9,6 +13,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <deque>
 #include <fstream>
 #include <limits>
 #include <map>
@@ -33,6 +38,11 @@ constexpr std::uint32_t kSourceStampV1BlockId = 0x2b09189eu;
 constexpr std::uint32_t kSourceStampV2BlockId = 0x6dff800du;
 constexpr std::uint32_t kVerityPaddingBlockId = 0x42726577u;
 constexpr std::uint16_t kZipFlagEncrypted = 0x0001u;
+constexpr std::array<std::uint8_t, 8> kHermesMagic = {
+    0xc6, 0x1f, 0xbc, 0x03, 0xc1, 0x03, 0x19, 0x1f
+};
+constexpr std::uint32_t kMaxHermesProbeEntries = 512;
+constexpr std::uint64_t kMaxHermesProbeBytes = 64ull * 1024 * 1024;
 constexpr std::uint16_t kZipFlagStrongEncryption = 0x0040u;
 constexpr std::array<std::uint8_t, 16> kApkSigMagic = {
     'A','P','K',' ','S','i','g',' ','B','l','o','c','k',' ','4','2'
@@ -1223,6 +1233,794 @@ struct ZipCloser {
     ~ZipCloser() { if (zip && zip->m_pState) mz_zip_reader_end(zip); }
 };
 
+struct DexDeclarationEvidence {
+    std::string entry;
+    DexMethodInfo method;
+};
+
+struct DexLoadEvidence {
+    std::string entry;
+    DexLibraryLoadInfo load;
+};
+
+struct NativeExportEvidence {
+    std::string entry;
+    std::string abi;
+    ElfDynamicSymbol symbol;
+    bool abi_consistent = false;
+    bool fde_exact = false;
+    std::uint64_t fde_end_va = 0;
+};
+
+struct NativeRegistrationEvidence {
+    std::string entry;
+    std::string abi;
+    std::string class_descriptor;
+    std::string method_name;
+    std::string method_descriptor;
+    std::uint64_t function_va = 0;
+    std::uint64_t function_file_offset = 0;
+    std::uint64_t function_end_va = 0;
+    bool fde_exact = false;
+};
+
+struct NativeRegistrationScan {
+    std::vector<NativeRegistrationEvidence> evidence;
+    bool limited = false;
+    std::string error;
+};
+
+struct JniDecoded {
+    std::uint64_t va = 0;
+    ZydisDecodedInstruction instruction{};
+    std::array<ZydisDecodedOperand, ZYDIS_MAX_OPERAND_COUNT> operands{};
+};
+
+ZydisRegister jni_reg64(ZydisRegister reg) {
+    return reg == ZYDIS_REGISTER_NONE ? reg : ZydisRegisterGetLargestEnclosing(ZYDIS_MACHINE_MODE_LONG_64, reg);
+}
+
+std::optional<std::uint64_t> jni_add_signed(std::uint64_t base, std::int64_t delta) {
+    if (delta >= 0) {
+        const auto add = static_cast<std::uint64_t>(delta);
+        if (base > std::numeric_limits<std::uint64_t>::max() - add) return std::nullopt;
+        return base + add;
+    }
+    const auto sub = static_cast<std::uint64_t>(-(delta + 1)) + 1;
+    if (base < sub) return std::nullopt;
+    return base - sub;
+}
+
+std::optional<std::pair<std::size_t, std::size_t>> jni_va_extent(
+    std::span<const std::uint8_t> data, const ElfInfo& elf, std::uint64_t va) {
+    for (const auto& segment : elf.segments) {
+        if (segment.type != 1 || va < segment.address) continue;
+        const auto delta = va - segment.address;
+        if (delta >= segment.file_size || segment.offset > data.size() || delta > data.size() - segment.offset) continue;
+        const auto offset = segment.offset + delta;
+        if (offset >= data.size()) continue;
+        const auto available = std::min<std::uint64_t>(segment.file_size - delta, data.size() - offset);
+        return std::pair<std::size_t, std::size_t>{static_cast<std::size_t>(offset), static_cast<std::size_t>(available)};
+    }
+    return std::nullopt;
+}
+
+std::vector<JniDecoded> jni_decode_fde(std::span<const std::uint8_t> data, const ElfInfo& elf,
+                                      const ElfUnwindFde& fde, bool& limited) {
+    std::vector<JniDecoded> out;
+    if (!fde.function_file_backed || !fde.function_size) return out;
+    if (fde.function_size > (1u << 20)) {
+        limited = true;
+        return out;
+    }
+    ZydisDecoder decoder;
+    if (!ZYAN_SUCCESS(ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64))) return out;
+    auto va = fde.function_start_va;
+    while (va < fde.function_end_va) {
+        if (out.size() >= 8192) {
+            limited = true;
+            return {};
+        }
+        const auto extent = jni_va_extent(data, elf, va);
+        if (!extent) return {};
+        JniDecoded decoded;
+        decoded.va = va;
+        const auto size = std::min<std::size_t>(ZYDIS_MAX_INSTRUCTION_LENGTH, extent->second);
+        if (!ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, data.data() + extent->first, size,
+                                                 &decoded.instruction, decoded.operands.data())) ||
+            !decoded.instruction.length || decoded.instruction.length > fde.function_end_va - va) return {};
+        va += decoded.instruction.length;
+        out.push_back(decoded);
+    }
+    return out;
+}
+
+struct JniFlow {
+    bool complete = false;
+    std::vector<std::vector<std::size_t>> edges;
+    std::vector<bool> reachable;
+};
+
+JniFlow jni_build_flow(const std::vector<JniDecoded>& instructions) {
+    JniFlow flow;
+    if (instructions.empty()) return flow;
+    flow.edges.resize(instructions.size());
+    std::unordered_map<std::uint64_t, std::size_t> by_va;
+    for (std::size_t i = 0; i < instructions.size(); ++i) {
+        if (!by_va.emplace(instructions[i].va, i).second) return flow;
+    }
+    auto add_fallthrough = [&](std::size_t from) {
+        if (from + 1 >= instructions.size() ||
+            instructions[from].va + instructions[from].instruction.length != instructions[from + 1].va) return false;
+        flow.edges[from].push_back(from + 1);
+        return true;
+    };
+    auto add_direct_target = [&](std::size_t from) {
+        const auto& decoded = instructions[from];
+        if (!decoded.instruction.operand_count_visible ||
+            decoded.operands[0].type != ZYDIS_OPERAND_TYPE_IMMEDIATE || !decoded.operands[0].imm.is_relative) return false;
+        ZyanU64 target = 0;
+        if (!ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(&decoded.instruction, &decoded.operands[0], decoded.va, &target))) return false;
+        const auto it = by_va.find(target);
+        if (it == by_va.end()) return false;
+        flow.edges[from].push_back(it->second);
+        return true;
+    };
+    for (std::size_t i = 0; i < instructions.size(); ++i) {
+        const auto category = instructions[i].instruction.meta.category;
+        if (category == ZYDIS_CATEGORY_RET) continue;
+        if (category == ZYDIS_CATEGORY_UNCOND_BR) {
+            if (instructions[i].instruction.operand_count_visible &&
+                instructions[i].operands[0].type == ZYDIS_OPERAND_TYPE_IMMEDIATE &&
+                instructions[i].operands[0].imm.is_relative && !add_direct_target(i)) return flow;
+            continue;
+        }
+        if (category == ZYDIS_CATEGORY_COND_BR) {
+            if (!add_direct_target(i) || !add_fallthrough(i)) return flow;
+            continue;
+        }
+        if (i + 1 < instructions.size()) {
+            if (!add_fallthrough(i)) return flow;
+        } else if (category != ZYDIS_CATEGORY_CALL) {
+            return flow;
+        }
+    }
+    for (auto& edges : flow.edges) {
+        std::sort(edges.begin(), edges.end());
+        edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    }
+    flow.reachable.assign(instructions.size(), false);
+    std::deque<std::size_t> pending;
+    flow.reachable[0] = true;
+    pending.push_back(0);
+    while (!pending.empty()) {
+        const auto at = pending.front();
+        pending.pop_front();
+        for (const auto to : flow.edges[at]) if (!flow.reachable[to]) {
+            flow.reachable[to] = true;
+            pending.push_back(to);
+        }
+    }
+    flow.complete = true;
+    return flow;
+}
+
+bool jni_dominates(const JniFlow& flow, std::size_t blocker, std::size_t target) {
+    if (!flow.complete || blocker >= flow.edges.size() || target >= flow.edges.size() ||
+        !flow.reachable[blocker] || !flow.reachable[target]) return false;
+    if (blocker == 0 || blocker == target) return true;
+    std::vector<bool> visited(flow.edges.size(), false);
+    std::deque<std::size_t> pending;
+    visited[0] = true;
+    pending.push_back(0);
+    while (!pending.empty()) {
+        const auto at = pending.front();
+        pending.pop_front();
+        for (const auto to : flow.edges[at]) {
+            if (to == blocker || visited[to]) continue;
+            visited[to] = true;
+            pending.push_back(to);
+        }
+    }
+    return !visited[target];
+}
+
+bool jni_writes_register(const JniDecoded& decoded, ZydisRegister wanted) {
+    wanted = jni_reg64(wanted);
+    for (std::uint8_t i = 0; i < decoded.instruction.operand_count_visible; ++i) {
+        const auto& operand = decoded.operands[i];
+        if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER && jni_reg64(operand.reg.value) == wanted &&
+            (operand.actions & ZYDIS_OPERAND_ACTION_WRITE) != 0) return true;
+    }
+    return false;
+}
+
+std::optional<std::size_t> jni_last_writer(const std::vector<JniDecoded>& instructions,
+                                           std::size_t before, ZydisRegister wanted) {
+    for (std::size_t i = before; i-- > 0;) if (jni_writes_register(instructions[i], wanted)) return i;
+    return std::nullopt;
+}
+
+std::optional<std::uint64_t> jni_rip_literal(const JniDecoded& decoded, ZydisRegister target) {
+    if (decoded.instruction.mnemonic != ZYDIS_MNEMONIC_LEA || decoded.instruction.operand_count_visible < 2 ||
+        decoded.operands[0].type != ZYDIS_OPERAND_TYPE_REGISTER ||
+        jni_reg64(decoded.operands[0].reg.value) != jni_reg64(target)) return std::nullopt;
+    const auto& memory = decoded.operands[1];
+    if (memory.type != ZYDIS_OPERAND_TYPE_MEMORY || jni_reg64(memory.mem.base) != ZYDIS_REGISTER_RIP ||
+        memory.mem.index != ZYDIS_REGISTER_NONE) return std::nullopt;
+    return jni_add_signed(decoded.va + decoded.instruction.length,
+                          memory.mem.disp.has_displacement ? memory.mem.disp.value : 0);
+}
+
+std::optional<std::uint64_t> jni_immediate(const JniDecoded& decoded, ZydisRegister target) {
+    if (decoded.instruction.mnemonic != ZYDIS_MNEMONIC_MOV || decoded.instruction.operand_count_visible < 2 ||
+        decoded.operands[0].type != ZYDIS_OPERAND_TYPE_REGISTER ||
+        jni_reg64(decoded.operands[0].reg.value) != jni_reg64(target) ||
+        decoded.operands[1].type != ZYDIS_OPERAND_TYPE_IMMEDIATE || decoded.operands[1].imm.is_relative) return std::nullopt;
+    return decoded.operands[1].imm.value.u;
+}
+
+bool jni_register_move(const JniDecoded& decoded, ZydisRegister target, ZydisRegister source) {
+    return decoded.instruction.mnemonic == ZYDIS_MNEMONIC_MOV && decoded.instruction.operand_count_visible >= 2 &&
+           decoded.operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER &&
+           decoded.operands[1].type == ZYDIS_OPERAND_TYPE_REGISTER &&
+           jni_reg64(decoded.operands[0].reg.value) == jni_reg64(target) &&
+           jni_reg64(decoded.operands[1].reg.value) == jni_reg64(source);
+}
+
+std::optional<ZydisRegister> jni_indirect_table_call_base(const JniDecoded& decoded, std::int64_t displacement) {
+    if (decoded.instruction.meta.category != ZYDIS_CATEGORY_CALL || !decoded.instruction.operand_count_visible) return std::nullopt;
+    const auto& operand = decoded.operands[0];
+    if (operand.type != ZYDIS_OPERAND_TYPE_MEMORY || operand.mem.index != ZYDIS_REGISTER_NONE ||
+        !operand.mem.disp.has_displacement || operand.mem.disp.value != displacement ||
+        operand.mem.base == ZYDIS_REGISTER_NONE || operand.mem.base == ZYDIS_REGISTER_RIP) return std::nullopt;
+    return jni_reg64(operand.mem.base);
+}
+
+bool jni_interface_table_load(const JniDecoded& decoded, ZydisRegister target) {
+    if (decoded.instruction.mnemonic != ZYDIS_MNEMONIC_MOV || decoded.instruction.operand_count_visible < 2 ||
+        decoded.operands[0].type != ZYDIS_OPERAND_TYPE_REGISTER ||
+        jni_reg64(decoded.operands[0].reg.value) != jni_reg64(target)) return false;
+    const auto& source = decoded.operands[1];
+    return source.type == ZYDIS_OPERAND_TYPE_MEMORY && jni_reg64(source.mem.base) == ZYDIS_REGISTER_RDI &&
+           source.mem.index == ZYDIS_REGISTER_NONE &&
+           (!source.mem.disp.has_displacement || source.mem.disp.value == 0);
+}
+
+std::optional<std::string> jni_cstring(std::span<const std::uint8_t> data, const ElfInfo& elf,
+                                       std::uint64_t va, std::size_t limit = 512) {
+    const auto extent = jni_va_extent(data, elf, va);
+    if (!extent) return std::nullopt;
+    std::vector<std::uint16_t> units;
+    const auto count = std::min(limit, extent->second);
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto c = data[extent->first + i];
+        if (c == 0) {
+            if (units.empty()) return std::nullopt;
+            std::string out;
+            for (std::size_t z = 0; z < units.size(); ++z) {
+                const auto unit = units[z];
+                if (unit >= 0xd800 && unit <= 0xdbff) {
+                    if (z + 1 >= units.size() || units[z + 1] < 0xdc00 || units[z + 1] > 0xdfff)
+                        return std::nullopt;
+                    const auto code_point = 0x10000u +
+                        (static_cast<std::uint32_t>(unit - 0xd800) << 10) +
+                        static_cast<std::uint32_t>(units[++z] - 0xdc00);
+                    append_utf8_cp(out, code_point);
+                } else {
+                    if (unit >= 0xdc00 && unit <= 0xdfff) return std::nullopt;
+                    append_utf8_cp(out, unit);
+                }
+            }
+            return out;
+        }
+        if (c < 0x80) {
+            if (c < 0x20 || c == 0x7f) return std::nullopt;
+            units.push_back(c);
+            continue;
+        }
+        if ((c & 0xe0u) == 0xc0u) {
+            if (++i >= count) return std::nullopt;
+            const auto c2 = data[extent->first + i];
+            if ((c2 & 0xc0u) != 0x80u) return std::nullopt;
+            const auto unit = static_cast<std::uint16_t>(((c & 0x1fu) << 6) | (c2 & 0x3fu));
+            if (unit == 0) {
+                if (c != 0xc0 || c2 != 0x80) return std::nullopt;
+            } else if (unit < 0x80) return std::nullopt;
+            units.push_back(unit);
+            continue;
+        }
+        if ((c & 0xf0u) == 0xe0u) {
+            if (i + 2 >= count) return std::nullopt;
+            const auto c2 = data[extent->first + ++i], c3 = data[extent->first + ++i];
+            if ((c2 & 0xc0u) != 0x80u || (c3 & 0xc0u) != 0x80u) return std::nullopt;
+            const auto unit = static_cast<std::uint16_t>(
+                ((c & 0x0fu) << 12) | ((c2 & 0x3fu) << 6) | (c3 & 0x3fu));
+            if (unit < 0x800) return std::nullopt;
+            units.push_back(unit);
+            continue;
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::uint64_t> jni_relocated_pointer(const ElfInfo& elf, std::uint64_t slot_va) {
+    const auto relative_type = elf.machine == 62 ? 8u : 1027u;
+    for (const auto& relocation : elf.dynamic.relocations) {
+        if (relocation.target_va == slot_va && relocation.target_file_backed &&
+            relocation.type == relative_type && relocation.has_addend && relocation.addend >= 0)
+            return static_cast<std::uint64_t>(relocation.addend);
+    }
+    return std::nullopt;
+}
+
+const ElfUnwindFde* jni_exact_fde(const ElfInfo& elf, std::uint64_t va) {
+    for (const auto& fde : elf.unwind.fdes) {
+        if (fde.function_file_backed && fde.function_start_va == va && fde.function_end_va > va) return &fde;
+    }
+    return nullptr;
+}
+
+struct JniA64Decoded {
+    std::uint64_t va = 0;
+    std::uint32_t word = 0;
+};
+
+std::int64_t jni_a64_sign_extend(std::uint64_t value, unsigned bits) {
+    const auto sign = std::uint64_t{1} << (bits - 1);
+    return static_cast<std::int64_t>((value ^ sign) - sign);
+}
+
+bool jni_a64_blr(std::uint32_t word, std::uint8_t& target) {
+    if ((word & 0xfffffc1fu) != 0xd63f0000u) return false;
+    target = static_cast<std::uint8_t>((word >> 5) & 31u);
+    return true;
+}
+
+bool jni_a64_ldr_unsigned(std::uint32_t word, std::uint8_t& target,
+                          std::uint8_t& base, std::uint64_t& offset) {
+    if ((word & 0xffc00000u) != 0xf9400000u) return false;
+    target = static_cast<std::uint8_t>(word & 31u);
+    base = static_cast<std::uint8_t>((word >> 5) & 31u);
+    offset = std::uint64_t((word >> 10) & 0xfffu) * 8;
+    return true;
+}
+
+bool jni_a64_move(std::uint32_t word, std::uint8_t target, std::uint8_t source) {
+    return (word & 0xffe0ffe0u) == 0xaa0003e0u &&
+           (word & 31u) == target && ((word >> 16) & 31u) == source;
+}
+
+std::optional<std::uint64_t> jni_a64_movz(std::uint32_t word, std::uint8_t target) {
+    if ((word & 0x7f800000u) != 0x52800000u || (word & 31u) != target) return std::nullopt;
+    const auto shift = unsigned((word >> 21) & 3u) * 16;
+    if ((word & 0x80000000u) == 0 && shift > 16) return std::nullopt;
+    return std::uint64_t((word >> 5) & 0xffffu) << shift;
+}
+
+bool jni_a64_control(std::uint32_t word) {
+    return (word & 0xfc000000u) == 0x14000000u ||
+           (word & 0xfc000000u) == 0x94000000u ||
+           (word & 0xff000010u) == 0x54000000u ||
+           (word & 0x7e000000u) == 0x34000000u ||
+           (word & 0x7e000000u) == 0x36000000u ||
+           (word & 0xfffffc1fu) == 0xd61f0000u ||
+           (word & 0xfffffc1fu) == 0xd63f0000u ||
+           (word & 0xfffffc1fu) == 0xd65f0000u;
+}
+
+std::optional<std::size_t> jni_a64_last_writer(const std::vector<JniA64Decoded>& instructions,
+                                               std::size_t before, std::uint8_t wanted) {
+    for (std::size_t i = before; i-- > 0;) {
+        const auto word = instructions[i].word;
+        std::uint8_t ignored = 0;
+        if (((word & 0xfc000000u) == 0x94000000u || jni_a64_blr(word, ignored)) && wanted <= 18)
+            return std::nullopt;
+        if (!jni_a64_control(word) && (word & 31u) == wanted) return i;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::uint64_t> jni_a64_pc_address(const JniA64Decoded& decoded,
+                                                std::uint8_t target) {
+    const auto word = decoded.word;
+    if ((word & 31u) != target || (word & 0x1f000000u) != 0x10000000u) return std::nullopt;
+    const auto immediate = ((std::uint64_t(word >> 29) & 3u) |
+                            (std::uint64_t(word >> 5) & 0x7ffffu) << 2);
+    const bool page = (word & 0x80000000u) != 0;
+    const auto base = page ? decoded.va & ~std::uint64_t{0xfff} : decoded.va;
+    return jni_add_signed(base, jni_a64_sign_extend(immediate, 21) * (page ? 4096 : 1));
+}
+
+std::optional<std::uint64_t> jni_a64_address(const std::vector<JniA64Decoded>& instructions,
+                                             std::size_t writer, std::uint8_t target) {
+    if (const auto direct = jni_a64_pc_address(instructions[writer], target)) return direct;
+    const auto word = instructions[writer].word;
+    if ((word & 0xffc00000u) != 0x91000000u || (word & 31u) != target) return std::nullopt;
+    const auto base = static_cast<std::uint8_t>((word >> 5) & 31u);
+    const auto base_writer = jni_a64_last_writer(instructions, writer, base);
+    if (!base_writer) return std::nullopt;
+    const auto page = jni_a64_pc_address(instructions[*base_writer], base);
+    if (!page || (instructions[*base_writer].word & 0x80000000u) == 0) return std::nullopt;
+    const auto shift = (word >> 22) & 1u;
+    const auto add = std::uint64_t((word >> 10) & 0xfffu) << (shift ? 12 : 0);
+    if (*page > std::numeric_limits<std::uint64_t>::max() - add) return std::nullopt;
+    return *page + add;
+}
+
+std::optional<std::uint64_t> jni_a64_branch_target(const JniA64Decoded& decoded) {
+    const auto word = decoded.word;
+    if ((word & 0xfc000000u) == 0x14000000u || (word & 0xfc000000u) == 0x94000000u)
+        return jni_add_signed(decoded.va, jni_a64_sign_extend(word & 0x03ffffffu, 26) * 4);
+    if ((word & 0xff000010u) == 0x54000000u || (word & 0x7e000000u) == 0x34000000u)
+        return jni_add_signed(decoded.va, jni_a64_sign_extend((word >> 5) & 0x7ffffu, 19) * 4);
+    if ((word & 0x7e000000u) == 0x36000000u)
+        return jni_add_signed(decoded.va, jni_a64_sign_extend((word >> 5) & 0x3fffu, 14) * 4);
+    return std::nullopt;
+}
+
+std::vector<JniA64Decoded> jni_a64_decode_fde(std::span<const std::uint8_t> data,
+                                              const ElfInfo& elf, const ElfUnwindFde& fde,
+                                              bool& limited) {
+    std::vector<JniA64Decoded> out;
+    if (!fde.function_file_backed || !fde.function_size || (fde.function_size & 3u)) return out;
+    if (fde.function_size > (1u << 20) || fde.function_size / 4 > 8192) {
+        limited = true;
+        return out;
+    }
+    out.reserve(static_cast<std::size_t>(fde.function_size / 4));
+    for (auto va = fde.function_start_va; va < fde.function_end_va; va += 4) {
+        const auto extent = jni_va_extent(data, elf, va);
+        if (!extent || extent->second < 4) return {};
+        out.push_back({va, le32(data, extent->first)});
+    }
+    return out;
+}
+
+JniFlow jni_a64_build_flow(const std::vector<JniA64Decoded>& instructions) {
+    JniFlow flow;
+    if (instructions.empty()) return flow;
+    flow.edges.resize(instructions.size());
+    std::unordered_map<std::uint64_t, std::size_t> by_va;
+    for (std::size_t i = 0; i < instructions.size(); ++i)
+        if (!by_va.emplace(instructions[i].va, i).second) return flow;
+    auto fallthrough = [&](std::size_t i) {
+        if (i + 1 >= instructions.size() || instructions[i + 1].va != instructions[i].va + 4) return false;
+        flow.edges[i].push_back(i + 1);
+        return true;
+    };
+    auto target = [&](std::size_t i) {
+        const auto address = jni_a64_branch_target(instructions[i]);
+        if (!address) return false;
+        const auto found = by_va.find(*address);
+        if (found == by_va.end()) return false;
+        flow.edges[i].push_back(found->second);
+        return true;
+    };
+    for (std::size_t i = 0; i < instructions.size(); ++i) {
+        const auto word = instructions[i].word;
+        if ((word & 0xfffffc1fu) == 0xd65f0000u) continue;
+        if ((word & 0xfffffc1fu) == 0xd61f0000u) return flow;
+        if ((word & 0xfc000000u) == 0x14000000u) {
+            if (!target(i)) return flow;
+            continue;
+        }
+        const bool conditional = (word & 0xff000010u) == 0x54000000u ||
+                                 (word & 0x7e000000u) == 0x34000000u ||
+                                 (word & 0x7e000000u) == 0x36000000u;
+        if (conditional) {
+            if (!target(i) || !fallthrough(i)) return flow;
+            continue;
+        }
+        if (i + 1 < instructions.size()) {
+            if (!fallthrough(i)) return flow;
+        } else {
+            return flow;
+        }
+    }
+    flow.reachable.assign(instructions.size(), false);
+    std::deque<std::size_t> pending{0};
+    flow.reachable[0] = true;
+    while (!pending.empty()) {
+        const auto at = pending.front();
+        pending.pop_front();
+        for (const auto next : flow.edges[at]) if (!flow.reachable[next]) {
+            flow.reachable[next] = true;
+            pending.push_back(next);
+        }
+    }
+    flow.complete = true;
+    return flow;
+}
+
+struct JniA64InterfaceCall {
+    std::size_t table_writer = 0;
+    std::size_t target_writer = 0;
+};
+
+std::optional<JniA64InterfaceCall> jni_a64_interface_call(
+    const std::vector<JniA64Decoded>& instructions, std::size_t call, std::uint64_t offset) {
+    std::uint8_t call_register = 0;
+    if (!jni_a64_blr(instructions[call].word, call_register)) return std::nullopt;
+    const auto target_writer = jni_a64_last_writer(instructions, call, call_register);
+    if (!target_writer) return std::nullopt;
+    std::uint8_t target = 0, table = 0;
+    std::uint64_t target_offset = 0;
+
+    if (!jni_a64_ldr_unsigned(instructions[*target_writer].word, target, table, target_offset) ||
+        target != call_register || target_offset != offset) return std::nullopt;
+    const auto table_writer = jni_a64_last_writer(instructions, *target_writer, table);
+    if (!table_writer) return std::nullopt;
+    std::uint8_t loaded = 0, base = 0;
+    std::uint64_t table_offset = 0;
+    if (!jni_a64_ldr_unsigned(instructions[*table_writer].word, loaded, base, table_offset) ||
+        loaded != table || base != 0 || table_offset != 0) return std::nullopt;
+    return JniA64InterfaceCall{*table_writer, *target_writer};
+}
+
+NativeRegistrationScan recover_register_natives_x86_64(
+    std::span<const std::uint8_t> data, const ElfInfo& elf, std::string_view entry, std::string_view abi) {
+    NativeRegistrationScan result;
+    auto& out = result.evidence;
+    if (!elf.valid || !elf.elf64 || !elf.little_endian || elf.machine != 62 ||
+        elf.dynamic.state != "RESOLVED" || elf.unwind.state != "RESOLVED") return result;
+    const ElfDynamicSymbol* onload = nullptr;
+    for (const auto& symbol : elf.dynamic.symbols) {
+        if (symbol.exported && symbol.type == 2 && symbol.name == "JNI_OnLoad") { onload = &symbol; break; }
+    }
+    if (!onload) return result;
+    const auto* fde = jni_exact_fde(elf, onload->value);
+    if (!fde) return result;
+    bool decode_limited = false;
+    const auto instructions = jni_decode_fde(data, elf, *fde, decode_limited);
+    result.limited = decode_limited;
+    if (decode_limited)
+        result.error = "x86-64 JNI_OnLoad exceeded the 1 MiB/8192-instruction decode budget; RegisterNatives evidence omitted";
+    if (instructions.empty()) return result;
+    const auto flow = jni_build_flow(instructions);
+    if (!flow.complete) return result;
+    for (std::size_t call = 0; call < instructions.size(); ++call) {
+        const auto register_table_base = jni_indirect_table_call_base(instructions[call], 215 * 8);
+        if (!register_table_base || !flow.reachable[call]) continue;
+        const auto methods_writer = jni_last_writer(instructions, call, ZYDIS_REGISTER_RDX);
+        const auto count_writer = jni_last_writer(instructions, call, ZYDIS_REGISTER_RCX);
+        const auto class_writer = jni_last_writer(instructions, call, ZYDIS_REGISTER_RSI);
+        const auto register_table_writer = jni_last_writer(instructions, call, *register_table_base);
+        if (!methods_writer || !count_writer || !class_writer || !register_table_writer || *class_writer == 0 ||
+            !jni_interface_table_load(instructions[*register_table_writer], *register_table_base) ||
+            !jni_register_move(instructions[*class_writer], ZYDIS_REGISTER_RSI, ZYDIS_REGISTER_RAX) ||
+            !jni_indirect_table_call_base(instructions[*class_writer - 1], 6 * 8)) continue;
+        const auto find_call = *class_writer - 1;
+        const auto find_table_base = jni_indirect_table_call_base(instructions[find_call], 6 * 8);
+        if (!find_table_base) continue;
+        const auto find_table_writer = jni_last_writer(instructions, find_call, *find_table_base);
+        const auto class_literal_writer = jni_last_writer(instructions, find_call, ZYDIS_REGISTER_RSI);
+        if (!find_table_writer || !class_literal_writer ||
+            !jni_interface_table_load(instructions[*find_table_writer], *find_table_base)) continue;
+        const std::array<std::size_t, 7> required = {*methods_writer, *count_writer, *class_writer,
+            *register_table_writer, find_call, *find_table_writer, *class_literal_writer};
+        if (!std::ranges::all_of(required, [&](std::size_t writer) { return jni_dominates(flow, writer, call); })) continue;
+        const auto methods_va = jni_rip_literal(instructions[*methods_writer], ZYDIS_REGISTER_RDX);
+        const auto class_va = jni_rip_literal(instructions[*class_literal_writer], ZYDIS_REGISTER_RSI);
+        const auto count = jni_immediate(instructions[*count_writer], ZYDIS_REGISTER_RCX);
+        if (!methods_va || !class_va || !count || !*count) continue;
+        if (*count > 64) {
+            result.limited = true;
+            result.error = "x86-64 RegisterNatives method count exceeded the 64-row table budget; table evidence omitted";
+            continue;
+        }
+        const auto class_name = jni_cstring(data, elf, *class_va);
+        if (!class_name) {
+            result.limited = true;
+            result.error = "x86-64 RegisterNatives class literal is not bounded valid JNI modified UTF-8; table evidence omitted";
+            continue;
+        }
+        if (class_name->front() == '/' || class_name->back() == '/' ||
+            class_name->find("//") != std::string::npos) continue;
+        const auto descriptor = "L" + *class_name + ";";
+        for (std::uint64_t i = 0; i < *count; ++i) {
+            const auto row_va = *methods_va + i * 24;
+            const auto name_va = jni_relocated_pointer(elf, row_va);
+            const auto signature_va = jni_relocated_pointer(elf, row_va + 8);
+            const auto function_va = jni_relocated_pointer(elf, row_va + 16);
+            if (!name_va || !signature_va || !function_va || !*function_va) break;
+            const auto name = jni_cstring(data, elf, *name_va);
+            const auto signature = jni_cstring(data, elf, *signature_va);
+            if (!name || !signature) {
+                result.limited = true;
+                result.error = "x86-64 RegisterNatives row is not bounded valid JNI modified UTF-8; table evidence omitted";
+                break;
+            }
+            if (signature->front() != '(' || signature->find(')') == std::string::npos) break;
+            if (out.size() >= 256) {
+                result.limited = true;
+                result.error = "x86-64 RegisterNatives evidence exceeded the 256-row library budget; additional rows omitted";
+                return result;
+            }
+            NativeRegistrationEvidence evidence;
+            evidence.entry = std::string(entry);
+            evidence.abi = std::string(abi);
+            evidence.class_descriptor = descriptor;
+            evidence.method_name = *name;
+            evidence.method_descriptor = *signature;
+            evidence.function_va = *function_va;
+            if (const auto extent = jni_va_extent(data, elf, *function_va)) evidence.function_file_offset = extent->first;
+            if (const auto* function_fde = jni_exact_fde(elf, *function_va)) {
+                evidence.fde_exact = true;
+                evidence.function_end_va = function_fde->function_end_va;
+            }
+            out.push_back(std::move(evidence));
+        }
+    }
+    return result;
+}
+
+NativeRegistrationScan recover_register_natives_aarch64(
+    std::span<const std::uint8_t> data, const ElfInfo& elf, std::string_view entry, std::string_view abi) {
+    NativeRegistrationScan result;
+    auto& out = result.evidence;
+    if (!elf.valid || !elf.elf64 || !elf.little_endian || elf.machine != 183 ||
+        elf.dynamic.state != "RESOLVED" || elf.unwind.state != "RESOLVED") return result;
+    const ElfDynamicSymbol* onload = nullptr;
+    for (const auto& symbol : elf.dynamic.symbols) {
+        if (symbol.exported && symbol.type == 2 && symbol.name == "JNI_OnLoad") {
+            onload = &symbol;
+            break;
+        }
+    }
+    if (!onload) return result;
+    const auto* fde = jni_exact_fde(elf, onload->value);
+    if (!fde) return result;
+    bool decode_limited = false;
+    const auto instructions = jni_a64_decode_fde(data, elf, *fde, decode_limited);
+    if (decode_limited) {
+        result.limited = true;
+        result.error = "AArch64 JNI_OnLoad exceeded the 1 MiB/8192-instruction decode budget; RegisterNatives evidence omitted";
+    }
+    if (instructions.empty()) return result;
+    const auto flow = jni_a64_build_flow(instructions);
+    if (!flow.complete) return result;
+    for (std::size_t call = 0; call < instructions.size(); ++call) {
+        if (!flow.reachable[call]) continue;
+        const auto registration_call = jni_a64_interface_call(instructions, call, 215 * 8);
+        if (!registration_call) continue;
+        const auto methods_writer = jni_a64_last_writer(instructions, call, 2);
+        const auto count_writer = jni_a64_last_writer(instructions, call, 3);
+        const auto class_writer = jni_a64_last_writer(instructions, call, 1);
+        if (!methods_writer || !count_writer || !class_writer ||
+            !jni_a64_move(instructions[*class_writer].word, 1, 0)) continue;
+        std::optional<std::size_t> find_call;
+        std::optional<JniA64InterfaceCall> find_interface;
+        for (std::size_t at = *class_writer; at-- > 0;) {
+            if (!flow.reachable[at]) continue;
+            const auto candidate = jni_a64_interface_call(instructions, at, 6 * 8);
+            if (candidate) {
+                find_call = at;
+                find_interface = candidate;
+                break;
+            }
+        }
+        if (!find_call || !find_interface) continue;
+        const auto class_literal_writer = jni_a64_last_writer(instructions, *find_call, 1);
+        if (!class_literal_writer) continue;
+        const std::array<std::size_t, 9> required = {
+            *methods_writer, *count_writer, *class_writer,
+            registration_call->table_writer, registration_call->target_writer,
+            *find_call, find_interface->table_writer, find_interface->target_writer,
+            *class_literal_writer
+        };
+        if (!std::ranges::all_of(required, [&](std::size_t writer) {
+                return jni_dominates(flow, writer, call);
+            }) || !jni_dominates(flow, *class_literal_writer, *find_call)) continue;
+        const auto methods_va = jni_a64_address(instructions, *methods_writer, 2);
+        const auto class_va = jni_a64_address(instructions, *class_literal_writer, 1);
+        const auto count = jni_a64_movz(instructions[*count_writer].word, 3);
+        if (!methods_va || !class_va || !count || !*count) continue;
+        if (*count > 64) {
+            result.limited = true;
+            result.error = "AArch64 RegisterNatives method count exceeded the 64-row table budget; table evidence omitted";
+            continue;
+        }
+        const auto class_name = jni_cstring(data, elf, *class_va);
+        if (!class_name) {
+            result.limited = true;
+            result.error = "AArch64 RegisterNatives class literal is not bounded valid JNI modified UTF-8; table evidence omitted";
+            continue;
+        }
+        if (class_name->front() == '/' || class_name->back() == '/' ||
+            class_name->find("//") != std::string::npos) continue;
+        const auto descriptor = "L" + *class_name + ";";
+        for (std::uint64_t i = 0; i < *count; ++i) {
+            const auto row_va = *methods_va + i * 24;
+            const auto name_va = jni_relocated_pointer(elf, row_va);
+            const auto signature_va = jni_relocated_pointer(elf, row_va + 8);
+            const auto function_va = jni_relocated_pointer(elf, row_va + 16);
+            if (!name_va || !signature_va || !function_va || !*function_va) break;
+            const auto name = jni_cstring(data, elf, *name_va);
+            const auto signature = jni_cstring(data, elf, *signature_va);
+            if (!name || !signature) {
+                result.limited = true;
+                result.error = "AArch64 RegisterNatives row is not bounded valid JNI modified UTF-8; table evidence omitted";
+                break;
+            }
+            if (signature->front() != '(' || signature->find(')') == std::string::npos)
+                break;
+            if (out.size() >= 256) {
+                result.limited = true;
+                result.error = "AArch64 RegisterNatives evidence exceeded the 256-row library budget; additional rows omitted";
+                return result;
+            }
+            NativeRegistrationEvidence evidence;
+            evidence.entry = std::string(entry);
+            evidence.abi = std::string(abi);
+            evidence.class_descriptor = descriptor;
+            evidence.method_name = *name;
+            evidence.method_descriptor = *signature;
+            evidence.function_va = *function_va;
+            if (const auto extent = jni_va_extent(data, elf, *function_va))
+                evidence.function_file_offset = extent->first;
+            if (const auto* function_fde = jni_exact_fde(elf, *function_va)) {
+                evidence.fde_exact = true;
+                evidence.function_end_va = function_fde->function_end_va;
+            }
+            out.push_back(std::move(evidence));
+        }
+    }
+    return result;
+}
+
+NativeRegistrationScan recover_register_natives(
+    std::span<const std::uint8_t> data, const ElfInfo& elf, std::string_view entry, std::string_view abi) {
+    if (elf.machine == 62) return recover_register_natives_x86_64(data, elf, entry, abi);
+    if (elf.machine == 183) return recover_register_natives_aarch64(data, elf, entry, abi);
+    return {};
+}
+std::optional<std::string> jni_mangle_ascii(std::string_view value) {
+    static constexpr char hex[] = "0123456789abcdef";
+    std::string out;
+    for (const unsigned char c : value) {
+        if (c >= 0x80) return std::nullopt;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) out.push_back(static_cast<char>(c));
+        else if (c == '/') out.push_back('_');
+        else if (c == '_') out += "_1";
+        else if (c == ';') out += "_2";
+        else if (c == '[') out += "_3";
+        else {
+            const auto code_unit = static_cast<std::uint32_t>(c);
+            out += "_0";
+            out.push_back(hex[(code_unit >> 12) & 0xf]);
+            out.push_back(hex[(code_unit >> 8) & 0xf]);
+            out.push_back(hex[(code_unit >> 4) & 0xf]);
+            out.push_back(hex[code_unit & 0xf]);
+        }
+    }
+    return out;
+}
+
+std::optional<std::pair<std::string, std::string>> jni_symbol_names(const DexMethodInfo& method) {
+    if (method.owner_descriptor.size() < 3 || method.owner_descriptor.front() != 'L' ||
+        method.owner_descriptor.back() != ';') return std::nullopt;
+    const auto owner = jni_mangle_ascii(std::string_view(method.owner_descriptor).substr(1, method.owner_descriptor.size() - 2));
+    const auto name = jni_mangle_ascii(method.name);
+    const auto close = method.descriptor.find(')');
+    if (!owner || !name || method.descriptor.empty() || method.descriptor.front() != '(' || close == std::string::npos) return std::nullopt;
+    const auto parameters = jni_mangle_ascii(std::string_view(method.descriptor).substr(1, close - 1));
+    if (!parameters) return std::nullopt;
+    const auto short_name = "Java_" + *owner + "_" + *name;
+    return std::pair<std::string, std::string>{short_name, short_name + "__" + *parameters};
+}
+
+std::optional<std::string> apk_load_library_name(std::string_view normalized_path) {
+    const auto slash = normalized_path.rfind('/');
+    const auto leaf = slash == std::string_view::npos ? normalized_path : normalized_path.substr(slash + 1);
+    if (leaf.size() <= 6 || !leaf.starts_with("lib") || !ends_with_ci(leaf, ".so")) return std::nullopt;
+    const auto name = leaf.substr(3, leaf.size() - 6);
+    if (name.empty() || name.size() > 255) return std::nullopt;
+    for (const unsigned char c : name) if (c < 0x21 || c > 0x7e || c == '/' || c == '\\') return std::nullopt;
+    return std::string(name);
+}
+
 }  // namespace
 
 ApkInfo detect_apk(std::span<const std::uint8_t> data) {
@@ -1249,6 +2047,15 @@ ApkInfo detect_apk(std::span<const std::uint8_t> data) {
     constexpr std::uint64_t kMaxNativeDeepEntryBytes = 64ull * 1024 * 1024;
     constexpr std::uint64_t kMaxNativeDeepTotalBytes = 128ull * 1024 * 1024;
     std::uint64_t native_deep_budget_left = kMaxNativeDeepTotalBytes;
+    constexpr std::uint64_t kMaxDexDeepEntryBytes = 32ull * 1024 * 1024;
+    constexpr std::uint64_t kMaxDexDeepTotalBytes = 64ull * 1024 * 1024;
+    constexpr std::uint32_t kMaxDexDeepEntries = 32;
+    std::uint64_t dex_deep_budget_left = kMaxDexDeepTotalBytes;
+    std::uint32_t dex_deep_entries = 0;
+    std::vector<DexDeclarationEvidence> dex_declarations;
+    std::vector<DexLoadEvidence> dex_loads;
+    std::vector<NativeExportEvidence> native_exports;
+    std::vector<NativeRegistrationEvidence> native_registrations;
     constexpr std::uint32_t kMaxUnityMetadataParses = 8;
     constexpr std::uint64_t kMaxUnityMetadataParseBytes = 128ull * 1024 * 1024;
 
@@ -1386,6 +2193,55 @@ ApkInfo detect_apk(std::span<const std::uint8_t> data) {
             e.analysis_priority = analysis_priority_for(e, logical);
         }
 
+        // Hermes is a content route, not a filename route. Probe every otherwise safe
+        // regular member in archive order, but cap both the number of probes and the
+        // aggregate bytes that may be fully decompressed/CRC-validated for HBC identity.
+        // Direct child analysis will perform the independently versioned semantic parse.
+        if (!e.directory && e.safe_path && !e.symlink && !e.encrypted && e.supported && !e.duplicate_path) {
+            if (out.hermes_probe_entry_count >= kMaxHermesProbeEntries) {
+                out.hermes_probe_budget_exhausted = true;
+            } else {
+                ++out.hermes_probe_entry_count;
+                const auto prefix = entry_prefix(zip, e, kHermesMagic.size(), data);
+                if (prefix.size() == kHermesMagic.size() &&
+                    std::equal(kHermesMagic.begin(), kHermesMagic.end(), prefix.begin())) {
+                    e.hermes_magic = true;
+                    ++out.hermes_magic_count;
+                    push_interesting(out, e.name);
+                    const bool one_entry_budget = e.uncompressed_size <= kMaxHermesProbeBytes;
+                    const bool aggregate_budget = out.hermes_probe_validated_bytes <= kMaxHermesProbeBytes &&
+                        e.uncompressed_size <= kMaxHermesProbeBytes - out.hermes_probe_validated_bytes;
+                    if (!one_entry_budget || !aggregate_budget) {
+                        e.hermes_probe_skipped_budget = true;
+                        e.hermes_error = one_entry_budget
+                            ? "Hermes HBC integrity probe deferred by bounded 64 MiB aggregate byte budget"
+                            : "Hermes HBC member exceeds bounded 64 MiB per-entry byte budget";
+                        ++out.hermes_probe_skipped_budget_count;
+                        out.hermes_probe_budget_exhausted = true;
+                        e.analysis_priority = 0;
+                    } else {
+                        auto full = entry_full_bounded(zip, e, kMaxHermesProbeBytes, data);
+                        if (full.empty()) {
+                            e.hermes_error = "Hermes HBC full-entry decompression/CRC validation failed";
+                            ++out.hermes_integrity_failure_count;
+                            e.analysis_priority = 0;
+                        } else {
+                            out.hermes_probe_validated_bytes += e.uncompressed_size;
+                            e.hermes_integrity_valid = true;
+                            e.hermes_sha256 = sha256_bytes(full);
+                            const auto hermes = parse_hermes_bytecode(full);
+                            e.hermes_version = hermes.version;
+                            e.hermes_supported_epoch = hermes.supported_epoch;
+                            e.hermes_valid = hermes.valid;
+                            e.hermes_parse_complete = hermes.parse_complete;
+                            e.hermes_error = hermes.error;
+                            e.analysis_priority = std::max<std::uint8_t>(e.analysis_priority, 99);
+                        }
+                    }
+                }
+            }
+        }
+
         if (e.manifest && !e.directory) {
             out.has_manifest = true;
             constexpr std::uint64_t kMaxManifestBytes = 8ull * 1024 * 1024;
@@ -1404,7 +2260,47 @@ ApkInfo detect_apk(std::span<const std::uint8_t> data) {
             out.dex_entries.push_back(e.name);
             const auto p = entry_prefix(zip, e, 0x78, data);
             e.dex_magic = dex_header(p, e.uncompressed_size);
-            if (e.dex_magic) ++out.validated_dex_count;
+            if (e.dex_magic) {
+                ++out.validated_dex_count;
+                if (!e.duplicate_path && e.safe_path && !e.symlink && !e.encrypted && e.supported) {
+                    if (e.uncompressed_size > kMaxDexDeepEntryBytes || e.uncompressed_size > dex_deep_budget_left ||
+                        dex_deep_entries >= kMaxDexDeepEntries) {
+                        e.dex_deep_state = "SKIPPED_BUDGET";
+                        e.dex_deep_error = "bounded APK child DEX deep-analysis budget exhausted";
+                    } else {
+                        ++dex_deep_entries;
+                        dex_deep_budget_left -= e.uncompressed_size;
+                        const auto full = entry_full_bounded(zip, e, kMaxDexDeepEntryBytes, data);
+                        if (full.empty() && e.uncompressed_size != 0) {
+                            e.dex_deep_state = "FAILED_EXTRACTION";
+                            e.dex_deep_error = "bounded child DEX extraction/CRC validation failed";
+                        } else {
+                            const auto dex = parse_dex(full);
+                            const bool integrity = dex.valid && !dex.container_v41 && dex.checksum_checked &&
+                                                   dex.checksum_matches && dex.signature_checked && dex.signature_matches;
+                            if (!integrity) {
+                                e.dex_deep_state = "FAILED_DEX";
+                                e.dex_deep_error = dex.error.empty() ?
+                                    "child DEX did not pass exact standalone checksum/signature validation" : dex.error;
+                            } else {
+                                e.dex_deep_state = dex.jni_surface_scan_complete ? "DEX_VALID" : "PARTIAL";
+                                e.dex_deep_error = dex.jni_surface_scan_error;
+                                for (const auto& method : dex.methods) {
+                                    if (!method.defined || (method.access_flags & 0x0100u) == 0) continue;
+                                    ++e.dex_native_declaration_count;
+                                    if (dex_declarations.size() < 4096) dex_declarations.push_back({e.normalized_name, method});
+                                    else { e.dex_deep_state = "PARTIAL"; e.dex_deep_error = "APK JNI native declaration budget exceeded"; }
+                                }
+                                for (const auto& load : dex.library_loads) {
+                                    ++e.dex_load_library_count;
+                                    if (dex_loads.size() < 4096) dex_loads.push_back({e.normalized_name, load});
+                                    else { e.dex_deep_state = "PARTIAL"; e.dex_deep_error = "APK JNI loadLibrary evidence budget exceeded"; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             push_interesting(out, e.name);
         }
         if (e.resources_arsc && !e.directory) {
@@ -1451,7 +2347,9 @@ ApkInfo detect_apk(std::span<const std::uint8_t> data) {
                                 e.native_machine = elf.machine;
                                 e.native_elf64 = elf.elf64;
                                 e.native_dynamic_state = elf.dynamic.state;
+                                e.native_dynamic_error = elf.dynamic.error;
                                 e.native_unwind_state = elf.unwind.state;
+                                e.native_unwind_error = elf.unwind.error;
                                 if (const auto match = apk_abi_matches_elf(e.abi, elf)) {
                                     e.native_abi_consistent_known = true;
                                     e.native_abi_consistent = *match;
@@ -1468,10 +2366,46 @@ ApkInfo detect_apk(std::span<const std::uint8_t> data) {
                                             e.jni_onload_file_backed = sym.value_file_backed;
                                             e.jni_onload_file_offset = sym.value_file_offset;
                                         }
+                                        if (sym.exported && sym.type == 2 && sym.name.starts_with("Java_")) {
+                                            if (native_exports.size() >= 4096) {
+                                                e.native_jni_evidence_limited = true;
+                                                e.native_jni_evidence_error = "APK JNI native export evidence budget exceeded; additional Java_* exports omitted";
+                                                continue;
+                                            }
+                                            NativeExportEvidence evidence;
+                                            evidence.entry = e.normalized_name;
+                                            evidence.abi = e.abi;
+                                            evidence.symbol = sym;
+                                            evidence.abi_consistent = e.native_abi_consistent_known && e.native_abi_consistent;
+                                            if (const auto* fde = jni_exact_fde(elf, sym.value)) {
+                                                evidence.fde_exact = true;
+                                                evidence.fde_end_va = fde->function_end_va;
+                                            }
+                                            native_exports.push_back(std::move(evidence));
+                                        }
                                     }
                                     e.native_relocation_count = elf.dynamic.relocations.size();
                                 }
                                 if (elf.unwind.state == "RESOLVED") e.native_fde_count = elf.unwind.fdes.size();
+                                if (e.native_abi_consistent_known && e.native_abi_consistent) {
+                                    auto registrations = recover_register_natives(full, elf, e.normalized_name, e.abi);
+                                    if (registrations.limited) {
+                                        e.native_jni_evidence_limited = true;
+                                        const auto warning = registrations.error.empty() ?
+                                            "APK JNI RegisterNatives evidence budget exceeded; omitted evidence" :
+                                            registrations.error;
+                                        if (e.native_jni_evidence_error.empty()) e.native_jni_evidence_error = warning;
+                                        else e.native_jni_evidence_error += "; " + warning;
+                                    }
+                                    for (auto& registration : registrations.evidence) {
+                                        if (native_registrations.size() >= 4096) {
+                                            e.native_jni_evidence_limited = true;
+                                            e.native_jni_evidence_error = "APK JNI native registration evidence budget exceeded; additional table rows omitted";
+                                            break;
+                                        }
+                                        native_registrations.push_back(std::move(registration));
+                                    }
+                                }
                             }
                         }
                     }
@@ -1621,8 +2555,16 @@ ApkInfo detect_apk(std::span<const std::uint8_t> data) {
     std::size_t manifest_entries = 0, resources_entries = 0;
     bool unique_manifest_valid = false, unique_resources_valid = false;
     out.unity_il2cpp_metadata_valid_count = 0;
+    out.hermes_integrity_valid_count = 0;
+    out.hermes_supported_epoch_count = 0;
+    out.hermes_parse_complete_count = 0;
     for (const auto& e : out.entries) {
         if(e.unity_il2cpp_metadata_valid&&!e.duplicate_path)++out.unity_il2cpp_metadata_valid_count;
+        if (!e.duplicate_path && e.hermes_integrity_valid) {
+            ++out.hermes_integrity_valid_count;
+            if (e.hermes_supported_epoch) ++out.hermes_supported_epoch_count;
+            if (e.hermes_parse_complete) ++out.hermes_parse_complete_count;
+        }
         const auto low = lower_ascii(e.normalized_name);
         if (low == "androidmanifest.xml") {
             ++manifest_entries;
@@ -1677,6 +2619,198 @@ ApkInfo detect_apk(std::span<const std::uint8_t> data) {
         push_anomaly(out, std::to_string(out.native_abi_mismatch_count) + " native ELF entries disagree with their lib/<abi>/ path architecture; APK confirmation is unchanged");
     }
     out.native_abis.assign(abis.begin(), abis.end());
+    {
+        constexpr std::size_t kMaxRelations = 4096;
+        bool partial = false;
+        auto mark_partial = [&](std::string message) {
+            partial = true;
+            out.jni_relations_limited = true;
+            if (out.jni_relations_error.empty()) out.jni_relations_error = std::move(message);
+        };
+        auto add_relation = [&](ApkJniRelation relation) {
+            if (out.jni_relations.size() >= kMaxRelations) {
+                mark_partial("APK JNI relation budget exceeded");
+                return;
+            }
+            relation.index = static_cast<std::uint32_t>(out.jni_relations.size());
+            out.jni_relations.push_back(std::move(relation));
+        };
+        auto eligible_dex_entry = [&](std::string_view name) {
+            return std::ranges::any_of(out.entries, [&](const ApkEntryInfo& entry) {
+                return entry.normalized_name == name && entry.dex && !entry.duplicate_path && entry.dex_magic &&
+                       (entry.dex_deep_state == "DEX_VALID" || entry.dex_deep_state == "PARTIAL");
+            });
+        };
+        auto eligible_native_entry = [&](std::string_view name) {
+            return std::ranges::any_of(out.entries, [&](const ApkEntryInfo& entry) {
+                return entry.normalized_name == name && entry.native_library && !entry.duplicate_path &&
+                       entry.native_elf && entry.native_deep_state == "ELF_VALID";
+            });
+        };
+        for (const auto& entry : out.entries) {
+            if (entry.duplicate_path && (entry.dex || entry.native_library))
+                mark_partial("duplicate APK DEX/native paths were excluded from JNI relation evidence");
+            if (!entry.duplicate_path && entry.dex_deep_state == "DEX_VALID") ++out.dex_deep_resolved_count;
+            else if (!entry.duplicate_path && (entry.dex_deep_state == "PARTIAL" || entry.dex_deep_state == "SKIPPED_BUDGET" ||
+                      entry.dex_deep_state == "FAILED_EXTRACTION" || entry.dex_deep_state == "FAILED_DEX")) {
+                ++out.dex_deep_partial_count;
+                mark_partial(entry.dex_deep_error.empty() ? "one or more APK child DEX surfaces were not fully analyzed" : entry.dex_deep_error);
+            }
+            if (entry.native_library && !entry.duplicate_path && entry.native_elf) {
+                ++out.jni_packaged_count;
+                ApkJniRelation relation;
+                relation.state = "PACKAGED";
+                relation.evidence_level = "J0_PACKAGED";
+                relation.native_entry = entry.normalized_name;
+                relation.abi = entry.abi;
+                relation.packaged = true;
+                relation.abi_consistent = entry.native_abi_consistent_known && entry.native_abi_consistent;
+                relation.detail = "validated lib/<abi> ELF member; packaging does not prove loading or execution";
+                add_relation(std::move(relation));
+            }
+            if (entry.native_library && !entry.duplicate_path && entry.native_elf &&
+                entry.native_deep_state == "SKIPPED_BUDGET")
+                mark_partial("one or more APK child native ELF entries exceeded the deep-analysis budget");
+            else if (entry.native_library && !entry.duplicate_path && entry.native_elf &&
+                     (entry.native_deep_state == "FAILED_EXTRACTION" || entry.native_deep_state == "FAILED_ELF"))
+                mark_partial(entry.native_deep_error.empty() ?
+                    "one or more APK child native ELF surfaces were not fully analyzed" : entry.native_deep_error);
+            if (entry.native_library && !entry.duplicate_path && entry.native_elf &&
+                entry.native_deep_state == "ELF_VALID" &&
+                (entry.native_dynamic_state == "FAILED" || entry.native_dynamic_state == "PARTIAL" ||
+                 entry.native_dynamic_state == "UNSUPPORTED"))
+                mark_partial(entry.native_dynamic_error.empty() ?
+                    "one or more APK child native ELF dynamic surfaces were not fully analyzed" :
+                    entry.native_dynamic_error);
+            if (entry.native_library && !entry.duplicate_path && entry.native_elf &&
+                entry.native_deep_state == "ELF_VALID" &&
+                (entry.native_unwind_state == "FAILED" || entry.native_unwind_state == "PARTIAL" ||
+                 entry.native_unwind_state == "UNSUPPORTED"))
+                mark_partial(entry.native_unwind_error.empty() ?
+                    "one or more APK child native ELF unwind surfaces were not fully analyzed" :
+                    entry.native_unwind_error);
+            if (entry.native_library && !entry.duplicate_path && entry.native_elf &&
+                entry.native_jni_evidence_limited)
+                mark_partial(entry.native_jni_evidence_error.empty() ?
+                    "one or more APK child native JNI evidence surfaces were truncated" : entry.native_jni_evidence_error);
+        }
+        auto sane_library_name = [](std::string_view name) {
+            if (name.empty() || name.size() > 255) return false;
+            for (const unsigned char c : name) if (c < 0x21 || c > 0x7e || c == '/' || c == '\\') return false;
+            return true;
+        };
+        std::set<std::string> referenced_entries;
+        for (const auto& load : dex_loads) {
+            if (!eligible_dex_entry(load.entry)) continue;
+            if (!sane_library_name(load.load.library_name)) continue;
+            for (const auto& entry : out.entries) {
+                const auto packaged_name = apk_load_library_name(entry.normalized_name);
+                if (!packaged_name || *packaged_name != load.load.library_name || !entry.native_library ||
+                    entry.duplicate_path || !entry.native_elf) continue;
+                referenced_entries.insert(entry.normalized_name);
+                ++out.jni_referenced_count;
+                ApkJniRelation relation;
+                relation.state = "REFERENCED";
+                relation.evidence_level = "J1_STATIC_LOAD_REFERENCE";
+                relation.dex_entry = load.entry;
+                relation.native_entry = entry.normalized_name;
+                relation.abi = entry.abi;
+                relation.library_name = load.load.library_name;
+                relation.packaged = true;
+                relation.load_library_referenced = true;
+                relation.abi_consistent = entry.native_abi_consistent_known && entry.native_abi_consistent;
+                relation.dex_load_instruction_offset = load.load.instruction_file_offset;
+                relation.detail = "reachable DEX const-string immediately supplies java.lang.System.loadLibrary; application startup reachability and actual loading are not inferred";
+                add_relation(std::move(relation));
+            }
+        }
+        std::map<std::string, std::size_t> overloads;
+        for (const auto& declaration : dex_declarations)
+            if (eligible_dex_entry(declaration.entry))
+                ++overloads[declaration.method.owner_descriptor + "\n" + declaration.method.name];
+        for (const auto& declaration : dex_declarations) {
+            if (!eligible_dex_entry(declaration.entry)) continue;
+            ++out.jni_declared_count;
+            ApkJniRelation declared;
+            declared.state = "DECLARED";
+            declared.evidence_level = "J2_DEX_NATIVE_DECLARATION";
+            declared.dex_entry = declaration.entry;
+            declared.class_descriptor = declaration.method.owner_descriptor;
+            declared.method_name = declaration.method.name;
+            declared.method_descriptor = declaration.method.descriptor;
+            declared.native_declared = true;
+            declared.dex_method_index = declaration.method.index;
+            declared.detail = "strictly parsed defined DEX method carries ACC_NATIVE; no native implementation is inferred";
+            add_relation(std::move(declared));
+            const auto names = jni_symbol_names(declaration.method);
+            if (!names) mark_partial("non-ASCII JNI name mangling is outside the bounded APK JNI relation plane");
+            else {
+                const bool overloaded = overloads[declaration.method.owner_descriptor + "\n" + declaration.method.name] > 1;
+                for (const auto& exported : native_exports) {
+                    if (!eligible_native_entry(exported.entry) || !exported.abi_consistent || (exported.symbol.name != names->second &&
+                        (overloaded || exported.symbol.name != names->first))) continue;
+                    ++out.jni_exported_count;
+                    ApkJniRelation relation;
+                    relation.state = "EXPORTED";
+                    relation.evidence_level = "J3_JNI_MANGLED_EXPORT";
+                    relation.dex_entry = declaration.entry;
+                    relation.native_entry = exported.entry;
+                    relation.abi = exported.abi;
+                    relation.class_descriptor = declaration.method.owner_descriptor;
+                    relation.method_name = declaration.method.name;
+                    relation.method_descriptor = declaration.method.descriptor;
+                    relation.jni_symbol = exported.symbol.name;
+                    relation.packaged = true;
+                    relation.load_library_referenced = referenced_entries.contains(exported.entry);
+                    relation.native_declared = true;
+                    relation.exported = true;
+                    relation.abi_consistent = true;
+                    relation.fde_boundary_confirmed = exported.fde_exact;
+                    relation.dex_method_index = declaration.method.index;
+                    relation.elf_symbol_index = exported.symbol.index;
+                    relation.function_va = exported.symbol.value;
+                    relation.function_file_offset = exported.symbol.value_file_offset;
+                    relation.function_end_va = exported.fde_end_va;
+                    relation.detail = exported.fde_exact ?
+                        "ABI-consistent dynamic JNI export matches the exact DEX native declaration and an exact file-backed FDE function boundary" :
+                        "ABI-consistent dynamic JNI export matches the exact DEX native declaration; an exact FDE boundary was not available";
+                    add_relation(std::move(relation));
+                }
+            }
+            for (const auto& registration : native_registrations) {
+                if (!eligible_native_entry(registration.entry) ||
+                    registration.class_descriptor != declaration.method.owner_descriptor ||
+                    registration.method_name != declaration.method.name ||
+                    registration.method_descriptor != declaration.method.descriptor || !registration.fde_exact) continue;
+                ++out.jni_registration_confirmed_count;
+                ApkJniRelation relation;
+                relation.state = "REGISTRATION_CONFIRMED";
+                relation.evidence_level = "J4_REGISTERNATIVES_TABLE_FDE";
+                relation.dex_entry = declaration.entry;
+                relation.native_entry = registration.entry;
+                relation.abi = registration.abi;
+                relation.class_descriptor = registration.class_descriptor;
+                relation.method_name = registration.method_name;
+                relation.method_descriptor = registration.method_descriptor;
+                relation.packaged = true;
+                relation.load_library_referenced = referenced_entries.contains(registration.entry);
+                relation.native_declared = true;
+                relation.registration_confirmed = true;
+                relation.abi_consistent = true;
+                relation.fde_boundary_confirmed = true;
+                relation.dex_method_index = declaration.method.index;
+                relation.function_va = registration.function_va;
+                relation.function_file_offset = registration.function_file_offset;
+                relation.function_end_va = registration.function_end_va;
+                relation.detail = registration.abi == "arm64-v8a" ? "AArch64" : "x86-64";
+                relation.detail += " JNI_OnLoad exact FDE contains a bounded JNIEnv RegisterNatives call with exact FindClass literal, RELA-backed JNINativeMethod row, matching DEX declaration, and exact target FDE; invocation is not observed";
+                add_relation(std::move(relation));
+            }
+        }
+        if (partial) out.jni_relations_state = "PARTIAL";
+        else if (!out.jni_relations.empty()) out.jni_relations_state = "RESOLVED";
+        else out.jni_relations_state = "NOT_PRESENT";
+    }
     resolve_manifest_resources(out.manifest, resource_parse);
     out.signing_block = parse_signing_block(data, out.central_directory_offset);
     for (const auto& a : out.signing_block.anomalies) push_anomaly(out, "APK Signing Block: " + a);
@@ -1774,6 +2908,10 @@ Finding apk_finding(const ApkInfo& info) {
     if (info.validated_dex_count) f.evidence.push_back("classes*.dex entries passed DEX header/table geometry routing checks");
     if (info.resources_table_valid) f.evidence.push_back("resources.arsc passed package/typeSpec/type/default-scalar structural validation");
     if (info.validated_native_elf_count) f.evidence.push_back("lib/<abi>/*.so entries passed bounded ELF header validation");
+    if (info.jni_referenced_count) f.evidence.push_back("reachable DEX const-string/loadLibrary call sites were related to exact packaged lib/<abi>/libNAME.so members; actual loading was not observed");
+    if (info.jni_declared_count) f.evidence.push_back("strict DEX method definitions contain ACC_NATIVE declarations with raw owner/method descriptors");
+    if (info.jni_exported_count) f.evidence.push_back("ABI-consistent JNI-mangled dynamic exports were matched to exact DEX native declarations; invocation was not observed");
+    if (info.jni_registration_confirmed_count) f.evidence.push_back("bounded x86-64/AArch64 JNI_OnLoad analysis recovered RELA-backed FindClass/RegisterNatives table rows and exact target FDE boundaries; invocation was not observed");
     if (info.signing_block.present && info.signing_block.valid) {
         f.evidence.push_back("APK Signing Block framing and ID-value pair geometry validated; cryptographic signature verification was not performed");
     }
@@ -1788,6 +2926,16 @@ Finding apk_finding(const ApkInfo& info) {
     f.fields["native_jni_onload"] = std::to_string(info.native_jni_onload_count);
     f.fields["native_abi_mismatch"] = std::to_string(info.native_abi_mismatch_count);
     f.fields["native_deep_skipped_budget"] = std::to_string(info.native_deep_skipped_budget_count);
+    f.fields["dex_deep_resolved"] = std::to_string(info.dex_deep_resolved_count);
+    f.fields["dex_deep_partial"] = std::to_string(info.dex_deep_partial_count);
+    f.fields["jni_relations_state"] = info.jni_relations_state;
+    f.fields["jni_packaged"] = std::to_string(info.jni_packaged_count);
+    f.fields["jni_referenced"] = std::to_string(info.jni_referenced_count);
+    f.fields["jni_declared"] = std::to_string(info.jni_declared_count);
+    f.fields["jni_exported"] = std::to_string(info.jni_exported_count);
+    f.fields["jni_registration_confirmed"] = std::to_string(info.jni_registration_confirmed_count);
+    f.fields["jni_static_only"] = "true";
+    if (!info.jni_relations_error.empty()) f.negative_evidence.push_back(info.jni_relations_error);
     f.fields["godot_legacy_engine_config_candidates"] = std::to_string(info.godot_legacy_engine_config_candidate_count);
     f.fields["godot_legacy_engine_config_valid"] = std::to_string(info.godot_legacy_engine_config_valid_count);
     f.fields["unity_il2cpp_metadata_candidates"] = std::to_string(info.unity_il2cpp_metadata_candidate_count);
@@ -1796,6 +2944,18 @@ Finding apk_finding(const ApkInfo& info) {
     f.fields["unity_il2cpp_metadata_parse_bytes"] = std::to_string(info.unity_il2cpp_metadata_parse_bytes);
     f.fields["unity_il2cpp_metadata_parse_budget_exhausted"] = info.unity_il2cpp_metadata_parse_budget_exhausted ? "true" : "false";
     f.fields["native_imports"] = std::to_string(info.native_import_count);
+    f.fields["hermes_probe_entries"] = std::to_string(info.hermes_probe_entry_count);
+    f.fields["hermes_magic_entries"] = std::to_string(info.hermes_magic_count);
+    f.fields["hermes_integrity_valid_entries"] = std::to_string(info.hermes_integrity_valid_count);
+    f.fields["hermes_supported_epoch_entries"] = std::to_string(info.hermes_supported_epoch_count);
+    f.fields["hermes_parse_complete_entries"] = std::to_string(info.hermes_parse_complete_count);
+    f.fields["hermes_integrity_failures"] = std::to_string(info.hermes_integrity_failure_count);
+    f.fields["hermes_probe_skipped_budget"] = std::to_string(info.hermes_probe_skipped_budget_count);
+    f.fields["hermes_probe_budget_exhausted"] = info.hermes_probe_budget_exhausted ? "true" : "false";
+    f.fields["hermes_probe_validated_bytes"] = std::to_string(info.hermes_probe_validated_bytes);
+    f.fields["hermes_probe_entry_limit"] = std::to_string(kMaxHermesProbeEntries);
+    f.fields["hermes_probe_byte_limit"] = std::to_string(kMaxHermesProbeBytes);
+    if (info.hermes_integrity_valid_count) f.evidence.push_back("ZIP members with exact Hermes HBC magic passed bounded decompression, CRC32, size, and SHA-256 identity checks");
     f.fields["native_exports"] = std::to_string(info.native_export_count);
     f.fields["native_relocations"] = std::to_string(info.native_relocation_count);
     f.fields["native_fdes"] = std::to_string(info.native_fde_count);
@@ -1861,8 +3021,9 @@ ApkExtractResult extract_apk(std::span<const std::uint8_t> data,
     ApkExtractResult out;
     out.output_dir = output_dir;
     out.analysis_only = analysis_only;
-    if (!info.valid) {
-        out.error = "APK structure is not valid";
+    const bool hermes_only_zip = analysis_only && !info.valid && info.zip_valid && info.hermes_integrity_valid_count != 0;
+    if (!info.valid && !hermes_only_zip) {
+        out.error = "APK/ZIP structure has no validated analysis-child route";
         return out;
     }
     std::vector<const ApkEntryInfo*> selected;
@@ -1878,7 +3039,8 @@ ApkExtractResult extract_apk(std::span<const std::uint8_t> data,
     } else {
         std::vector<const ApkEntryInfo*> candidates;
         for (const auto& e : info.entries) {
-            if (!e.directory && e.safe_path && !e.symlink && !e.encrypted && e.supported && !e.duplicate_path && e.analysis_priority != 0) {
+            const bool selected_route = hermes_only_zip ? e.hermes_integrity_valid : e.analysis_priority != 0;
+            if (!e.directory && e.safe_path && !e.symlink && !e.encrypted && e.supported && !e.duplicate_path && selected_route) {
                 candidates.push_back(&e);
             }
         }

@@ -89,6 +89,10 @@ struct ApkEntryInfo {
     bool manifest_binary_xml = false;
     bool dex = false;
     bool dex_magic = false;
+    std::string dex_deep_state = "NOT_ATTEMPTED";
+    std::string dex_deep_error;
+    std::uint32_t dex_native_declaration_count = 0;
+    std::uint32_t dex_load_library_count = 0;
     bool resources_arsc = false;
     bool resources_table = false;
     bool native_library = false;
@@ -102,10 +106,21 @@ struct ApkEntryInfo {
     std::int32_t unity_il2cpp_metadata_version = 0;
     std::string unity_il2cpp_metadata_layout;
     std::string unity_il2cpp_metadata_error;
+    bool hermes_magic = false;
+    bool hermes_integrity_valid = false;
+    bool hermes_probe_skipped_budget = false;
+    bool hermes_supported_epoch = false;
+    bool hermes_valid = false;
+    bool hermes_parse_complete = false;
+    std::uint32_t hermes_version = 0;
+    std::string hermes_sha256;
+    std::string hermes_error;
     std::string native_deep_state = "NOT_ATTEMPTED";
     std::string native_deep_error;
     std::string native_dynamic_state;
+    std::string native_dynamic_error;
     std::string native_unwind_state;
+    std::string native_unwind_error;
     std::uint16_t native_machine = 0;
     bool native_elf64 = false;
     bool native_abi_consistent_known = false;
@@ -114,6 +129,8 @@ struct ApkEntryInfo {
     std::uint32_t native_export_count = 0;
     std::uint64_t native_relocation_count = 0;
     std::uint64_t native_fde_count = 0;
+    bool native_jni_evidence_limited = false;
+    std::string native_jni_evidence_error;
     bool jni_onload_export = false;
     std::uint32_t jni_onload_symbol_index = 0;
     std::uint64_t jni_onload_symbol_file_offset = 0;
@@ -126,6 +143,34 @@ struct ApkEntryInfo {
     bool nested_archive = false;
     std::uint8_t analysis_priority = 0;
     std::string abi;
+};
+
+struct ApkJniRelation {
+    std::uint32_t index = 0;
+    std::string state;
+    std::string evidence_level;
+    std::string dex_entry;
+    std::string native_entry;
+    std::string abi;
+    std::string library_name;
+    std::string class_descriptor;
+    std::string method_name;
+    std::string method_descriptor;
+    std::string jni_symbol;
+    bool packaged = false;
+    bool load_library_referenced = false;
+    bool native_declared = false;
+    bool exported = false;
+    bool registration_confirmed = false;
+    bool abi_consistent = false;
+    bool fde_boundary_confirmed = false;
+    std::uint32_t dex_method_index = 0;
+    std::uint64_t dex_load_instruction_offset = 0;
+    std::uint32_t elf_symbol_index = 0;
+    std::uint64_t function_va = 0;
+    std::uint64_t function_file_offset = 0;
+    std::uint64_t function_end_va = 0;
+    std::string detail;
 };
 
 struct ApkSigningBlockPair {
@@ -188,6 +233,16 @@ struct ApkInfo {
     std::uint32_t native_jni_onload_count = 0;
     std::uint32_t native_abi_mismatch_count = 0;
     std::uint32_t native_deep_skipped_budget_count = 0;
+    std::uint32_t dex_deep_resolved_count = 0;
+    std::uint32_t dex_deep_partial_count = 0;
+    std::uint32_t jni_packaged_count = 0;
+    std::uint32_t jni_referenced_count = 0;
+    std::uint32_t jni_declared_count = 0;
+    std::uint32_t jni_exported_count = 0;
+    std::uint32_t jni_registration_confirmed_count = 0;
+    bool jni_relations_limited = false;
+    std::string jni_relations_state = "NOT_PRESENT";
+    std::string jni_relations_error;
     std::uint32_t godot_legacy_engine_config_candidate_count = 0;
     std::uint32_t godot_legacy_engine_config_valid_count = 0;
     GodotLegacyEngineConfigInfo godot_legacy_config;
@@ -196,6 +251,15 @@ struct ApkInfo {
     std::uint32_t unity_il2cpp_metadata_parse_count = 0;
     bool unity_il2cpp_metadata_parse_budget_exhausted = false;
     std::uint64_t unity_il2cpp_metadata_parse_bytes = 0;
+    std::uint32_t hermes_probe_entry_count = 0;
+    std::uint32_t hermes_magic_count = 0;
+    std::uint32_t hermes_integrity_valid_count = 0;
+    std::uint32_t hermes_supported_epoch_count = 0;
+    std::uint32_t hermes_parse_complete_count = 0;
+    std::uint32_t hermes_integrity_failure_count = 0;
+    std::uint32_t hermes_probe_skipped_budget_count = 0;
+    bool hermes_probe_budget_exhausted = false;
+    std::uint64_t hermes_probe_validated_bytes = 0;
     std::uint64_t native_import_count = 0;
     std::uint64_t native_export_count = 0;
     std::uint64_t native_relocation_count = 0;
@@ -215,6 +279,7 @@ struct ApkInfo {
     std::vector<std::string> interesting_entries;
     std::vector<std::string> anomalies;
     std::vector<ApkEntryInfo> entries;
+    std::vector<ApkJniRelation> jni_relations;
     ApkManifestInfo manifest;
     ApkResourceTableInfo resource_table;
     ApkSigningBlockInfo signing_block;

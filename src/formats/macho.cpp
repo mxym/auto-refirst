@@ -11,7 +11,9 @@
 #include <tuple>
 #include <vector>
 
-namespace prts { namespace {
+namespace prts {
+void analyze_macho_swift(std::span<const std::uint8_t>,std::uint64_t,MachOSlice&);
+namespace {
 template<class T>T swapv(T v){T o=0;for(std::size_t i=0;i<sizeof(T);++i){o=static_cast<T>((o<<8)|(v&0xff));v=static_cast<T>(v>>8);}return o;}
 template<class T>bool rd(std::span<const std::uint8_t>d,std::size_t o,bool le,T&v){if(o>d.size()||sizeof(T)>d.size()-o)return false;std::memcpy(&v,d.data()+o,sizeof(T));
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -119,10 +121,32 @@ MachOSlice parse_thin(std::span<const std::uint8_t>d,std::uint64_t absolute_base
     out.little_endian=le;out.macho64=is64;const std::size_t hs=is64?32:28;
     if(d.size()<hs){out.error="Mach-O header truncated";return out;}
     std::uint32_t cpu=0,sub=0,ncmds=0,cmdbytes=0;if(!rd(d,4,le,cpu)||!rd(d,8,le,sub)||!rd(d,12,le,out.filetype)||!rd(d,16,le,ncmds)||!rd(d,20,le,cmdbytes)||!rd(d,24,le,out.flags)){out.error="Mach-O header read failed";return out;}out.cpu_type=static_cast<std::int32_t>(cpu);out.cpu_subtype=static_cast<std::int32_t>(sub);
+    out.cpu_subtype_base=sub&0x00ffffffu;
+    out.arm64e=cpu==0x0100000cu&&out.cpu_subtype_base==2u;
+    out.ptrauth_versioned=out.arm64e&&(sub&0x80000000u);
+    out.ptrauth_kernel=out.arm64e&&(sub&0x40000000u);
+    out.ptrauth_abi_version=out.arm64e?((sub&0x0f000000u)>>24):0u;
+    out.architecture=macho_architecture_name(out.cpu_type,out.cpu_subtype);
+    out.load_command_count=ncmds;
+    out.load_commands.reserve(std::min<std::uint32_t>(ncmds,4096));
     if(ncmds>65536){out.error="Mach-O load-command count unreasonable";return out;}if(cmdbytes>d.size()-hs){out.error="Mach-O load-command table exceeds slice";return out;}
     std::size_t p=hs,cmd_end=hs+cmdbytes;std::vector<Seg>segs;bool have_build=false;SymtabCmd symtab;LinkeditCmd function_starts;
     for(std::uint32_t ci=0;ci<ncmds;++ci){
         std::uint32_t cmd=0,sz=0;if(p+8>cmd_end||!rd(d,p,le,cmd)||!rd(d,p+4,le,sz)){out.error="Mach-O load command truncated";return out;}if(sz<8||sz>cmd_end-p){out.error="Mach-O load command size invalid";return out;}if(sz%(is64?8u:4u)){out.error="Mach-O load command alignment invalid";return out;}const auto basecmd=cmd&0x7fffffffU;
+        const auto command_name=macho_load_command_name(cmd);
+        MachOLoadCommand command_record{command_name.empty()?"UNKNOWN":command_name,cmd,sz,absolute_base+p,!command_name.empty()};
+        if(out.load_commands.size()<4096)out.load_commands.push_back(command_record);
+        else out.load_commands_truncated=true;
+        if(command_name.empty()){
+            ++out.unknown_load_command_count;
+            if(out.unknown_load_commands.size()<1024)out.unknown_load_commands.push_back(command_record);
+            else out.unknown_load_commands_truncated=true;
+            out.load_command_coverage_state="PARTIAL_UNKNOWN_COMMAND";
+            out.coverage_state="PARTIAL";
+            if(out.coverage_reasons.empty())out.coverage_reasons.push_back("unknown load command inventory is not semantically covered");
+        }
+        if(out.load_commands_truncated&&out.load_command_coverage_state=="COMPLETE")out.load_command_coverage_state="PARTIAL_RETENTION_BUDGET";
+        if(out.load_commands_truncated){out.coverage_state="PARTIAL";if(std::find(out.coverage_reasons.begin(),out.coverage_reasons.end(),"load-command retention budget exceeded")==out.coverage_reasons.end())out.coverage_reasons.push_back("load-command retention budget exceeded");}
         if(cmd==1&&!is64){
             if(sz<56){out.error="LC_SEGMENT too small";return out;}std::uint32_t vm=0,vms=0,fo=0,fs=0,ns=0;rd(d,p+24,le,vm);rd(d,p+28,le,vms);rd(d,p+32,le,fo);rd(d,p+36,le,fs);rd(d,p+48,le,ns);if(ns>65536||std::uint64_t(56)+std::uint64_t(ns)*68>sz){out.error="LC_SEGMENT section table invalid";return out;}if(fo>d.size()||fs>d.size()-fo){out.error="LC_SEGMENT file range exceeds slice";return out;}segs.push_back({name16(d,p+8),vm,vms,fo,fs});
             for(std::uint32_t j=0;j<ns;++j){auto q=p+56+std::size_t(j)*68;MachOSection s;s.name=name16(d,q);s.segment=name16(d,q+16);std::uint32_t a=0,z=0,off=0;rd(d,q+32,le,a);rd(d,q+36,le,z);rd(d,q+40,le,off);rd(d,q+56,le,s.flags);s.address=a;s.size=z;auto t=s.flags&0xff;s.offset=zerofill_type(t)?0:absolute_base+off;if(!zerofill_type(t)){if(off>d.size()||s.size>d.size()-off){out.error="Mach-O section file range exceeds slice";return out;}auto b=d.subspan(off,static_cast<std::size_t>(s.size));s.entropy=ent(b);auto used=b.size();while(used&&(b[used-1]==0||b[used-1]==0xcc))--used;s.used_size=used;if(t==9||t==10||t==0x15){for(std::size_t x=0;x+4<=b.size()&&x/4<4096;x+=4){std::uint32_t v=0;rd(b,x,le,v);if(t==9){unique_push(out.init_functions,v);out.initializer_slots.push_back({"S_MOD_INIT_FUNC_POINTERS",s.address+x,s.offset+x,v,0,false});}else if(t==10)unique_push(out.term_functions,v);else{unique_push(out.thread_init_functions,v);out.initializer_slots.push_back({"S_THREAD_LOCAL_INIT_FUNCTION_POINTERS",s.address+x,s.offset+x,v,0,false});}}}}out.sections.push_back(std::move(s));}
@@ -151,6 +175,13 @@ MachOSlice parse_thin(std::span<const std::uint8_t>d,std::uint64_t absolute_base
     std::string post_error;if(!parse_symtab(d,le,is64,symtab,out,post_error)){out.error=std::move(post_error);return out;}if(!parse_function_starts(d,segs,absolute_base,function_starts,out,post_error)){out.error=std::move(post_error);return out;}attach_function_names(out);
     {
         auto&im=out.implicit_exec;bool partial=false;std::string partial_error;constexpr std::size_t max_facts=65536;
+    out.code_signature_state=out.code_signature?"PRESENT_UNVERIFIED":"NOT_PRESENT";
+    analyze_macho_swift(d,absolute_base,out);
+    if(out.swift.coverage_state=="PARTIAL"){
+        out.coverage_state="PARTIAL";
+        out.coverage_reasons.push_back("Swift metadata coverage is partial: "+out.swift.error);
+    }
+    if(out.unknown_load_commands_truncated){out.coverage_state="PARTIAL";out.coverage_reasons.push_back("unknown load-command retention budget exceeded");}
         auto add=[&](ImplicitExecutionFact f){if(im.facts.size()>=max_facts){im.analysis_limited=true;partial=true;if(partial_error.empty())partial_error="Mach-O implicit execution fact budget exceeded";return;}f.index=static_cast<std::uint32_t>(im.facts.size());if(f.priority=="HIGH")++im.high_priority_count;else if(f.priority=="REVIEW")++im.review_count;else ++im.informational_count;if(!f.anomaly_class.empty()&&f.anomaly_class!="NONE")++im.anomaly_count;if(f.evidence_state=="UNRESOLVED_RUNTIME_SEMANTICS")++im.unresolved_runtime_semantics;im.facts.push_back(std::move(f));};
         auto target_name=[&](std::uint64_t va)->std::string{for(const auto&s:out.symbols)if(s.defined&&s.value==va&&!s.name.empty())return s.name;for(const auto&f:out.function_starts)if(f.address==va&&!f.symbol.empty())return f.symbol;return{};};
         if(out.routine_init_address){std::uint64_t fo=0;out.routine_target_file_backed=map_file_va(segs,out.routine_init_address,absolute_base,fo);if(out.routine_target_file_backed)out.routine_target_file_offset=fo;ImplicitExecutionFact f;f.format="Mach-O";f.ecosystem="dyld/native";f.phase="module_load";f.trigger=is64?"LC_ROUTINES_64":"LC_ROUTINES";f.relation="implicit_callback";f.source_kind=f.trigger;f.source_file_backed=true;f.source_file_offset=out.routine_command_file_offset;f.source_size=is64?8:4;f.target_kind="function_va";f.target_va=out.routine_init_address;f.target_file_backed=out.routine_target_file_backed;f.target_file_offset=out.routine_target_file_offset;f.target_name=target_name(out.routine_init_address);f.evidence_state=out.routine_target_file_backed?"EXACT":"UNRESOLVED_RUNTIME_SEMANTICS";f.mutability="IMMUTABLE_MACHO_LOAD_COMMAND";f.execution_condition="dyld/module loader may invoke the LC_ROUTINES initialization function as part of image initialization; the function is not executed by analysis";f.priority="INFORMATIONAL";f.priority_reason="legacy Mach-O loader initialization routine is an ordinary implicit module-load surface";if(!out.routine_target_file_backed){partial=true;if(partial_error.empty())partial_error="LC_ROUTINES initializer target is not directly file-backed; chained/bound target resolution is not implemented";}add(std::move(f));}
@@ -162,13 +193,48 @@ MachOSlice parse_thin(std::span<const std::uint8_t>d,std::uint64_t absolute_base
 }
 
 MachOInfo parse_macho(std::span<const std::uint8_t>d){
-    MachOInfo out;if(d.size()<4){out.error="not Mach-O";return out;}
+    MachOInfo out;
+    if(d.size()<4){out.error="not Mach-O";return out;}
     bool fat=false,fat64=false,le=false;
     if(d[0]==0xca&&d[1]==0xfe&&d[2]==0xba&&(d[3]==0xbe||d[3]==0xbf)){fat=true;fat64=d[3]==0xbf;le=false;}
     else if((d[0]==0xbe||d[0]==0xbf)&&d[1]==0xba&&d[2]==0xfe&&d[3]==0xca){fat=true;fat64=d[0]==0xbf;le=true;}
-    if(!fat){auto s=parse_thin(d,0);if(!s.valid){out.error=s.error;return out;}out.valid=true;out.slices.push_back(std::move(s));return out;}
-    out.fat=true;out.fat64=fat64;if(d.size()<8){out.error="Mach-O universal header truncated";return out;}std::uint32_t count=0;rd(d,4,le,count);if(!count||count>64){out.error="Mach-O universal architecture count invalid";return out;}const std::size_t es=fat64?32:20;if(std::uint64_t(8)+std::uint64_t(count)*es>d.size()){out.error="Mach-O universal architecture table truncated";return out;}const std::uint64_t table_end=8+std::uint64_t(count)*es;std::vector<std::pair<std::uint64_t,std::uint64_t>>ranges;
-    for(std::uint32_t i=0;i<count;++i){auto p=8+std::size_t(i)*es;std::uint32_t cpu=0,sub=0;std::uint64_t off=0,sz=0;rd(d,p,le,cpu);rd(d,p+4,le,sub);if(fat64){rd(d,p+8,le,off);rd(d,p+16,le,sz);}else{std::uint32_t a=0,b=0;rd(d,p+8,le,a);rd(d,p+12,le,b);off=a;sz=b;}if(!sz||off<table_end||off>d.size()||sz>d.size()-off){out.error="Mach-O universal slice range invalid";return out;}for(auto[a,b]:ranges)if(off<b&&a<off+sz){out.error="Mach-O universal slices overlap";return out;}ranges.push_back({off,off+sz});auto s=parse_thin(d.subspan(static_cast<std::size_t>(off),static_cast<std::size_t>(sz)),off);if(!s.valid){out.error="Mach-O universal slice "+std::to_string(i)+" invalid: "+s.error;return out;}if(static_cast<std::uint32_t>(s.cpu_type)!=cpu){out.error="Mach-O universal slice CPU type mismatch";return out;}out.slices.push_back(std::move(s));}
+    if(!fat){
+        auto slice=parse_thin(d,0);if(!slice.valid){out.error=slice.error;return out;}
+        out.valid=true;out.slices.push_back(std::move(slice));return out;
+    }
+    out.fat=true;out.fat64=fat64;
+    if(d.size()<8){out.error="Mach-O universal header truncated";return out;}
+    std::uint32_t count=0;rd(d,4,le,count);
+    if(!count||count>64){out.error="Mach-O universal architecture count invalid";return out;}
+    const std::size_t entry_size=fat64?32:20;
+    if(std::uint64_t(8)+std::uint64_t(count)*entry_size>d.size()){out.error="Mach-O universal architecture table truncated";return out;}
+    const std::uint64_t table_end=8+std::uint64_t(count)*entry_size;
+    std::vector<std::pair<std::uint64_t,std::uint64_t>> ranges;
+    std::set<std::pair<std::uint32_t,std::uint32_t>> architectures;
+    for(std::uint32_t i=0;i<count;++i){
+        const auto p=8+std::size_t(i)*entry_size;
+        std::uint32_t cpu=0,subtype=0,align=0,reserved=0;
+        std::uint64_t offset=0,size=0;
+        rd(d,p,le,cpu);rd(d,p+4,le,subtype);
+        if(fat64){
+            rd(d,p+8,le,offset);rd(d,p+16,le,size);rd(d,p+24,le,align);rd(d,p+28,le,reserved);
+            if(reserved){out.error="Mach-O universal64 reserved field is non-zero";return out;}
+        }else{
+            std::uint32_t offset32=0,size32=0;rd(d,p+8,le,offset32);rd(d,p+12,le,size32);rd(d,p+16,le,align);offset=offset32;size=size32;
+        }
+        if(align>31){out.error="Mach-O universal slice alignment exponent invalid";return out;}
+        const auto alignment=std::uint64_t(1)<<align;
+        if(offset%alignment){out.error="Mach-O universal slice offset violates declared alignment";return out;}
+        if(!size||offset<table_end||offset>d.size()||size>d.size()-offset){out.error="Mach-O universal slice range invalid";return out;}
+        for(const auto& range:ranges)if(offset<range.second&&range.first<offset+size){out.error="Mach-O universal slices overlap";return out;}
+        if(!architectures.emplace(cpu,subtype).second){out.error="Mach-O universal duplicate CPU/subtype slice";return out;}
+        ranges.push_back({offset,offset+size});
+        auto slice=parse_thin(d.subspan(static_cast<std::size_t>(offset),static_cast<std::size_t>(size)),offset);
+        if(!slice.valid){out.error="Mach-O universal slice "+std::to_string(i)+" invalid: "+slice.error;return out;}
+        if(static_cast<std::uint32_t>(slice.cpu_type)!=cpu){out.error="Mach-O universal slice CPU type mismatch";return out;}
+        if(static_cast<std::uint32_t>(slice.cpu_subtype)!=subtype){out.error="Mach-O universal slice CPU subtype mismatch";return out;}
+        out.slices.push_back(std::move(slice));
+    }
     out.valid=true;return out;
 }
 MachOInfo parse_macho(const std::filesystem::path&p){std::ifstream f(p,std::ios::binary);if(!f){MachOInfo o;o.error="open failed";return o;}std::vector<std::uint8_t>d((std::istreambuf_iterator<char>(f)),{});return parse_macho(d);}

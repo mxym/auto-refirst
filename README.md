@@ -46,9 +46,9 @@ cmake --build build --parallel
 
 ## 能力概览
 
-- **原生可执行格式**：PE、ELF、Mach-O/Universal Mach-O 的结构、入口、导入/导出、动态链接、异常/展开、签名与部分平台安全元数据。
-- **字节码与托管格式**：JVM Class/JAR、DEX/APK、WebAssembly、Lua bytecode、ECMA-335/.NET、CPython bytecode 与嵌入式运行时相关证据。
-- **封装与生态识别**：UPX/多类 PE packer/protector 证据、PyInstaller、Nuitka、ASAR/Electron、AutoIt、Ren'Py/RPA、wxapkg，以及 Go/Rust/Dart/Flutter 等运行时/编译产物特征。
+- **原生可执行格式**：PE、ELF、Mach-O/Universal Mach-O 的结构、入口、导入/导出、动态链接、异常/展开、签名、Mach-O Swift 元数据与部分平台安全元数据。
+- **字节码与托管格式**：JVM Class/JAR、DEX/APK、WebAssembly、Lua、Hermes HBC、ECMA-335/.NET single-file/NativeAOT、CPython bytecode 与嵌入式运行时相关证据。
+- **封装与生态识别**：UPX/多类 PE packer/protector 证据、PyInstaller、Nuitka、ASAR/Electron、AutoIt、Ren'Py/RPA、wxapkg、Unreal Pak/IoStore，以及 Go/Rust/Dart/Flutter 等运行时/编译产物特征。
 - **Unity / Godot**：Unity Mono、IL2CPP 元数据/本地映像关系、Godot PCK/GDScript/GDExtension 等结构与工件路线。
 - **语义证据**：反调试、加密调用/常量使用、隐式执行入口、解释器/字节码边界、异常驱动控制流、跨文件关系与分析优先级。
 - **递归工件图**：容器、嵌套可执行文件和高价值脚本/字节码的有界物化、SHA-256 去重、来源关系和静态子分析。
@@ -84,7 +84,7 @@ cmake --build build --parallel
 
 ## 已知限制
 
-当前 Alpha 仍存在明确的外部兼容性边界，例如：旧版 Godot 导出中的嵌入 PCK 识别、部分 GDExtension 精确关系、Godot APK 游戏脚本面、Go 新版本元数据、重命名后的 Unity IL2CPP 配对，以及 Dart 深层语义恢复。通用 VM 求解、全程序符号执行和通用反编译不在当前产品范围内。
+当前 RC 仍保留明确边界：Swift 源码/完整语义恢复、加密 Unreal 资产内容、任意 .NET 混淆器的通用还原、Dart 深层语义、通用 VM 求解、全程序符号执行和通用反编译都不在已声明能力内。结构关系、名字或单个常量不会单独提升为高置信语义结论。
 
 仅在结构/语义证据能够跨独立样本稳定复现时提升为正式能力。单一正例、容易被名称/字符串诱导的规则、依赖特定题目身份的规则会保留为未支持或研究项。
 

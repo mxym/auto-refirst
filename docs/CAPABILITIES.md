@@ -21,15 +21,19 @@
 
 - 32/64 位、大小端、Universal/FAT/FAT64 容器。
 - segments/sections、dylib、`LC_MAIN`、UUID/build/encryption/code-signature 元数据、symbols 与 function starts。
-- 当前公开运行时后端不执行 Mach-O 目标。
+- 解析 Swift metadata section 清单；只有 nominal type、parent/module、field descriptor 与有界字符串关系全部闭合时才报告 `SWIFT_STRUCTURED`，否则保留 `SWIFT_PRESENCE`/`PARTIAL`。
+- Swift 输出是直接元数据记录与字节事实，不声明源码、完整类型系统或程序语义恢复；当前公开运行时后端不执行 Mach-O 目标。
 
 ## 2. 字节码与托管生态
 
 - JVM ClassFile 与 JAR 路由、方法/调用与隐式执行相关结构。
 - Android DEX 035/037/038/039/040 及 container-v041 的关键几何、ids/classes/code/debug/invoke-custom 和完整性字段；APK 负责容器/AXML/签名块/本地库与高价值子工件路由。
+- APK JNI 可组合 Java native declaration、`Java_...` export 与 `RegisterNatives` 表的结构关系，并严格处理 JNI modified UTF-8。J2/J3/J4 关系等级不被夸大为已执行注册或完整 native 语义证明。
 - WebAssembly 模块结构和静态入口/导入导出相关证据。
 - Lua 5.x bytecode 结构、proto/指令/常量和受限 introspection 证据。
 - ECMA-335/.NET 元数据、方法、P/Invoke 与运行时/应用程序集路由。
+- .NET single-file bundle v2/v6 manifest/member geometry与 Linux NativeAOT section/table evidence；识别结果不等同于 IL 反混淆或源码恢复。
+- Hermes HBC v89/v96/v98 的 header/table/function/string/opcode/debug/footer 完整性与有界提取，并可由 APK content entry 进入静态子分析；不声明 JavaScript 源码恢复或 runtime loading。
 - CPython `.pyc`、marshal、opcode、扩展模块、Cython/frozen/static/runtime 参考比较；PyInstaller/Nuitka 负责打包层与高价值 Python 子工件。
 
 ## 3. 游戏与应用运行时
@@ -56,6 +60,7 @@
 - UPX 和多类 PE packer/protector 的有界结构/入口/语义路由。
 - PyInstaller CArchive/PYZ，优先物化用户入口/高价值 Python bytecode 并进行子分析。
 - Nuitka、AutoIt、Electron ASAR、Ren'Py/RPA、wxapkg 等格式/封装路线。
+- Unreal Pak v1-v12 footer/index/hash profile 与 IoStore UTOC/UCAS pair/chunk geometry；加密内容、未知版本或未验证签名保持 `PARTIAL`，不声明 asset semantics 枚举。
 - ZIP 派生容器、ASAR、APK 和嵌套 executable 进入统一工件图。
 
 ## 5. 语义证据面

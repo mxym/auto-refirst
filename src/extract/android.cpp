@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -26,6 +27,21 @@ constexpr std::uint32_t kReverseEndianConstant = 0x78563412u;
 constexpr std::uint32_t kAccStatic = 0x0008u;
 constexpr std::uint32_t kAccNative = 0x0100u;
 constexpr std::uint32_t kAccAbstract = 0x0400u;
+
+std::uint32_t dex_opcode_width(std::uint8_t op) {
+    if(op==0x01||op==0x04||op==0x07||(op>=0x0a&&op<=0x12)||op==0x1d||op==0x1e||
+       op==0x21||op==0x27||op==0x28||(op>=0x7b&&op<=0x8f)||(op>=0xb0&&op<=0xcf)) return 1;
+    if(op==0x02||op==0x05||op==0x08||op==0x13||op==0x15||op==0x16||op==0x19||
+       op==0x1a||op==0x1c||op==0x1f||op==0x20||op==0x22||op==0x23||op==0x29||
+       (op>=0x2d&&op<=0x3d)||(op>=0x44&&op<=0x6d)||(op>=0x90&&op<=0xaf)||
+       (op>=0xd0&&op<=0xe2)||op==0xfe||op==0xff) return 2;
+    if(op==0x03||op==0x06||op==0x09||op==0x14||op==0x17||op==0x1b||op==0x24||
+       op==0x25||op==0x26||op==0x2a||op==0x2b||op==0x2c||(op>=0x6e&&op<=0x72)||
+       (op>=0x74&&op<=0x78)||op==0xfc||op==0xfd) return 3;
+    if(op==0xfa||op==0xfb) return 4;
+    if(op==0x18) return 5;
+    return 0;
+}
 
 constexpr std::uint16_t kTypeHeaderItem = 0x0000;
 constexpr std::uint16_t kTypeStringIdItem = 0x0001;
@@ -296,6 +312,7 @@ public:
             parse_call_sites();
             parse_classes();
             validate_map_dynamic_counts();
+            build_jni_surfaces();
             build_implicit();
             validate_integrity();
             info.valid = true;
@@ -722,6 +739,9 @@ private:
             }
             sig << ") -> " << p.return_type;
             p.signature = sig.str();
+            p.descriptor = "(";
+            for (const auto idx : indices) p.descriptor += type_descriptors_[idx];
+            p.descriptor += ")" + type_descriptors_[return_idx];
             if (p.shorty != expected_shorty) bad(off, "DEX proto shorty descriptor mismatch");
             if (!signatures.insert(p.signature).second) bad(off, "duplicate DEX method prototype signature");
             out_->protos.push_back(std::move(p));
@@ -785,6 +805,8 @@ private:
             m.owner = out_->types[class_idx];
             m.name = out_->strings[name_idx];
             m.signature = m.owner + "::" + m.name + out_->protos[proto_idx].signature;
+            m.owner_descriptor = type_descriptors_[class_idx];
+            m.descriptor = out_->protos[proto_idx].descriptor;
             out_->methods.push_back(std::move(m));
         }
     }
@@ -1323,6 +1345,176 @@ private:
         }
     }
 
+    void build_jni_surfaces() {
+        struct Instruction {
+            std::uint32_t pc = 0;
+            std::uint32_t width = 0;
+            std::uint16_t first = 0;
+            std::uint8_t op = 0;
+            bool payload = false;
+        };
+        auto limit = [&](std::string message) {
+            out_->jni_surface_scan_complete = false;
+            if (out_->jni_surface_scan_error.empty()) out_->jni_surface_scan_error = std::move(message);
+        };
+        constexpr std::uint64_t kMaxMethodCodeUnits = 262144;
+        constexpr std::uint64_t kMaxAggregateCodeUnits = 1048576;
+        constexpr std::size_t kMaxLibraryLoads = 4096;
+        std::uint64_t aggregate_code_units = 0;
+        for (const auto& code : out_->code_items) {
+            if (code.insns_size > kMaxMethodCodeUnits || aggregate_code_units > kMaxAggregateCodeUnits - code.insns_size) {
+                limit("bounded DEX JNI surface code-unit budget exhausted");
+                continue;
+            }
+            aggregate_code_units += code.insns_size;
+            const auto base = std::uint64_t(code.code_off) + 16;
+            std::vector<Instruction> ins;
+            std::unordered_map<std::uint32_t, std::size_t> by_pc;
+            std::uint64_t pc = 0;
+            bool supported = true;
+            while (pc < code.insns_size) {
+                const auto first = u16(base + pc * 2);
+                const auto op = static_cast<std::uint8_t>(first & 0xffu);
+                std::uint64_t width = 0;
+                bool payload = false;
+                if (op == 0) {
+                    payload = first != 0;
+                    if (first == 0) width = 1;
+                    else if (first == 0x0100) {
+                        if (pc + 2 > code.insns_size) { supported = false; break; }
+                        width = 4 + std::uint64_t(u16(base + (pc + 1) * 2)) * 2;
+                    } else if (first == 0x0200) {
+                        if (pc + 2 > code.insns_size) { supported = false; break; }
+                        width = 2 + std::uint64_t(u16(base + (pc + 1) * 2)) * 4;
+                    } else if (first == 0x0300) {
+                        if (pc + 4 > code.insns_size) { supported = false; break; }
+                        const auto element_width = u16(base + (pc + 1) * 2);
+                        const auto count = u32(base + (pc + 2) * 2);
+                        if (!element_width || count > address_limit_) { supported = false; break; }
+                        width = 4 + (std::uint64_t(element_width) * count + 1) / 2;
+                    } else { supported = false; break; }
+                } else {
+                    width = dex_opcode_width(op);
+                }
+                if (!width || width > code.insns_size - pc || pc > std::numeric_limits<std::uint32_t>::max()) {
+                    supported = false;
+                    break;
+                }
+                by_pc.emplace(static_cast<std::uint32_t>(pc), ins.size());
+                ins.push_back({static_cast<std::uint32_t>(pc), static_cast<std::uint32_t>(width), first, op, payload});
+                pc += width;
+            }
+            if (!supported || pc != code.insns_size) {
+                limit("bounded DEX JNI surface decoder refused an unsupported or truncated instruction stream");
+                continue;
+            }
+            std::vector<std::vector<std::size_t>> edges(ins.size()), predecessors(ins.size());
+            auto add_target = [&](std::size_t from, std::int64_t target) -> bool {
+                if (target < 0 || target > std::numeric_limits<std::uint32_t>::max()) return false;
+                const auto it = by_pc.find(static_cast<std::uint32_t>(target));
+                if (it == by_pc.end() || ins[it->second].payload) return false;
+                edges[from].push_back(it->second);
+                return true;
+            };
+            for (std::size_t i = 0; i < ins.size() && supported; ++i) {
+                const auto& x = ins[i];
+                if (x.payload) continue;
+                const auto next = std::uint64_t(x.pc) + x.width;
+                if ((x.op >= 0x0e && x.op <= 0x11) || x.op == 0x27) continue;
+                if (x.op == 0x2b || x.op == 0x2c) {
+                    supported = false;
+                    break;
+                }
+                if (x.op == 0x28) {
+                    const auto delta = static_cast<std::int8_t>(x.first >> 8);
+                    supported = delta != 0 && add_target(i, std::int64_t(x.pc) + delta);
+                    continue;
+                }
+                if (x.op == 0x29) {
+                    const auto delta = static_cast<std::int16_t>(u16(base + (x.pc + 1) * 2));
+                    supported = delta != 0 && add_target(i, std::int64_t(x.pc) + delta);
+                    continue;
+                }
+                if (x.op == 0x2a) {
+                    const auto delta = static_cast<std::int32_t>(u32(base + (x.pc + 1) * 2));
+                    supported = delta != 0 && add_target(i, std::int64_t(x.pc) + delta);
+                    continue;
+                }
+                if (next < code.insns_size && !add_target(i, static_cast<std::int64_t>(next))) {
+                    supported = false;
+                    break;
+                }
+                if (x.op >= 0x32 && x.op <= 0x3d) {
+                    const auto delta = static_cast<std::int16_t>(u16(base + (x.pc + 1) * 2));
+                    if (delta == 0 || !add_target(i, std::int64_t(x.pc) + delta)) supported = false;
+                }
+            }
+            if (!supported) {
+                limit("bounded DEX JNI surface decoder refused unsupported control flow");
+                continue;
+            }
+            for (std::size_t i = 0; i < edges.size(); ++i) {
+                std::sort(edges[i].begin(), edges[i].end());
+                edges[i].erase(std::unique(edges[i].begin(), edges[i].end()), edges[i].end());
+                for (const auto to : edges[i]) predecessors[to].push_back(i);
+            }
+            std::vector<bool> reachable(ins.size(), false);
+            std::deque<std::size_t> pending;
+            if (const auto it = by_pc.find(0); it != by_pc.end()) {
+                reachable[it->second] = true;
+                pending.push_back(it->second);
+            }
+            while (!pending.empty()) {
+                const auto at = pending.front();
+                pending.pop_front();
+                for (const auto to : edges[at]) if (!reachable[to]) {
+                    reachable[to] = true;
+                    pending.push_back(to);
+                }
+            }
+            for (std::size_t i = 0; i < ins.size(); ++i) {
+                const auto& call = ins[i];
+                if (!reachable[i] || (call.op != 0x71 && call.op != 0x77)) continue;
+                const auto target_idx = u16(base + (call.pc + 1) * 2);
+                if (target_idx >= out_->methods.size()) continue;
+                const auto& target = out_->methods[target_idx];
+                if (target.owner_descriptor != "Ljava/lang/System;" || target.name != "loadLibrary" ||
+                    target.descriptor != "(Ljava/lang/String;)V") continue;
+                std::uint32_t argument = 0;
+                if (call.op == 0x71) {
+                    const auto count = static_cast<std::uint8_t>(call.first >> 12);
+                    if (count != 1) continue;
+                    argument = u16(base + (call.pc + 2) * 2) & 0x0fu;
+                } else {
+                    const auto count = static_cast<std::uint8_t>(call.first >> 8);
+                    if (count != 1) continue;
+                    argument = u16(base + (call.pc + 2) * 2);
+                }
+                if (predecessors[i].size() != 1) continue;
+                const auto previous_idx = predecessors[i][0];
+                const auto& previous = ins[previous_idx];
+                if (!reachable[previous_idx] || previous.pc + previous.width != call.pc ||
+                    (previous.op != 0x1a && previous.op != 0x1b) ||
+                    static_cast<std::uint8_t>(previous.first >> 8) != argument) continue;
+                const auto string_idx = previous.op == 0x1a ? u16(base + (previous.pc + 1) * 2)
+                                                            : u32(base + (previous.pc + 1) * 2);
+                if (string_idx >= out_->strings.size()) continue;
+                DexLibraryLoadInfo load;
+                load.caller_method_idx = code.method_idx;
+                load.target_method_idx = target_idx;
+                load.string_idx = string_idx;
+                load.pc_code_units = call.pc;
+                load.instruction_file_offset = base + std::uint64_t(call.pc) * 2;
+                load.library_name = out_->strings[string_idx];
+                if (out_->library_loads.size() >= kMaxLibraryLoads) {
+                    limit("bounded DEX JNI loadLibrary evidence budget exhausted");
+                    continue;
+                }
+                out_->library_loads.push_back(std::move(load));
+            }
+        }
+    }
+
 
     void build_implicit() {
         auto& im = out_->implicit_exec;
@@ -1361,20 +1553,12 @@ private:
         }
         struct Use {std::uint32_t method_idx=0,call_site_idx=0;std::uint64_t file=0,pc=0;};
         std::vector<Use> uses;
-        auto width = [](std::uint8_t op)->std::uint32_t {
-            if(op==0x01||op==0x04||op==0x07||(op>=0x0a&&op<=0x12)||op==0x1d||op==0x1e||op==0x21||op==0x27||op==0x28||(op>=0x7b&&op<=0x8f)||(op>=0xb0&&op<=0xcf))return 1;
-            if(op==0x02||op==0x05||op==0x08||op==0x13||op==0x15||op==0x16||op==0x19||op==0x1a||op==0x1c||op==0x1f||op==0x20||op==0x22||op==0x23||op==0x29||(op>=0x2d&&op<=0x3d)||(op>=0x44&&op<=0x6d)||(op>=0x90&&op<=0xaf)||(op>=0xd0&&op<=0xe2)||op==0xfe||op==0xff)return 2;
-            if(op==0x03||op==0x06||op==0x09||op==0x14||op==0x17||op==0x1b||op==0x24||op==0x25||op==0x26||op==0x2a||op==0x2b||op==0x2c||(op>=0x6e&&op<=0x72)||(op>=0x74&&op<=0x78)||op==0xfc||op==0xfd)return 3;
-            if(op==0xfa||op==0xfb)return 4;
-            if(op==0x18)return 5;
-            return 0;
-        };
         for (const auto& c : out_->code_items) {
             const auto base=std::uint64_t(c.code_off)+16; std::uint64_t pc=0;
             while (pc < c.insns_size) {
                 const auto unit=u16(base+pc*2); const auto op=static_cast<std::uint8_t>(unit&0xffu); std::uint64_t w=0;
                 if(op==0){const auto ident=unit;if(ident==0)w=1;else if(ident==0x0100){if(pc+2>c.insns_size){partial=true;partial_error="truncated DEX packed-switch payload";break;}const auto n=u16(base+(pc+1)*2);w=4+std::uint64_t(n)*2;}else if(ident==0x0200){if(pc+2>c.insns_size){partial=true;partial_error="truncated DEX sparse-switch payload";break;}const auto n=u16(base+(pc+1)*2);w=2+std::uint64_t(n)*4;}else if(ident==0x0300){if(pc+4>c.insns_size){partial=true;partial_error="truncated DEX fill-array-data payload";break;}const auto ew=u16(base+(pc+1)*2);const auto n=u32(base+(pc+2)*2);if(ew==0||n>address_limit_){partial=true;partial_error="invalid DEX fill-array-data payload";break;}w=4+(std::uint64_t(ew)*n+1)/2;}else{partial=true;if(partial_error.empty())partial_error="unknown DEX payload pseudo-opcode in implicit decoder";break;}}
-                else w=width(op);
+                else w=dex_opcode_width(op);
                 if(w==0){partial=true;if(partial_error.empty())partial_error="unsupported/unused DEX opcode in implicit decoder";break;}
                 if(w>c.insns_size-pc){partial=true;if(partial_error.empty())partial_error="truncated DEX instruction in implicit decoder";break;}
                 if(op==0xfc||op==0xfd){const auto ci=u16(base+(pc+1)*2);if(ci>=out_->call_sites.size()){partial=true;if(partial_error.empty())partial_error="DEX invoke-custom call_site index out of range";}else uses.push_back({c.method_idx,ci,base+pc*2,pc});}
@@ -1468,6 +1652,7 @@ Finding dex_finding(const DexInfo& info) {
     f.evidence.push_back("string/type/proto/member/class indexes and ordering validated");
     f.evidence.push_back("class_data/code/debug references and bounds validated");
     if (!info.call_sites.empty()) f.evidence.push_back("invoke-custom call sites and bootstrap method handles structurally resolved");
+    if (!info.library_loads.empty()) f.evidence.push_back("reachable exact-constant java.lang.System.loadLibrary call sites recovered as static references; loading was not observed");
     f.fields["version"] = info.version;
     f.fields["strings"] = std::to_string(info.strings.size());
     f.fields["types"] = std::to_string(info.types.size());
@@ -1479,6 +1664,9 @@ Finding dex_finding(const DexInfo& info) {
     f.fields["code_items"] = std::to_string(info.code_item_count);
     f.fields["method_handles"] = std::to_string(info.method_handles.size());
     f.fields["call_sites"] = std::to_string(info.call_sites.size());
+    f.fields["jni_surface_scan_complete"] = info.jni_surface_scan_complete ? "true" : "false";
+    f.fields["load_library_references"] = std::to_string(info.library_loads.size());
+    if (!info.jni_surface_scan_error.empty()) f.negative_evidence.push_back(info.jni_surface_scan_error);
     f.fields["offset_space"] = "current_input_file";
     if (info.checksum_checked) f.fields["adler32_match"] = info.checksum_matches ? "true" : "false";
     if (info.signature_checked) f.fields["sha1_signature_match"] = info.signature_matches ? "true" : "false";

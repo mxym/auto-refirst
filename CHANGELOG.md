@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add bounded static recognition for Hermes HBC v89/v96/v98, including exact APK content-child routing; JavaScript source recovery and runtime loading are not claimed.
+- Add Unreal Pak/IoStore container framing, integrity metadata and UTOC/UCAS pair relationships without claiming decrypted asset semantics or signature verification.
+- Add .NET single-file bundle and Linux NativeAOT structural metadata, plus bounded Mach-O Swift metadata inventories and validated direct record closures.
+- Add APK JNI exported-name and `RegisterNatives` relationship evidence with strict JNI modified UTF-8 handling.
+
+### Changed
+
+- Extend source-generated public P0/P1 gates for Hermes/APK, Mach-O/Swift, .NET bundle/NativeAOT, Unreal containers and the CLI exit-code contract.
+- Keep semantic confidence fail-closed: encrypted/unsupported layouts remain `PARTIAL`, structural relations do not become native-registration or source-recovery claims, and analyzed fixtures are never executed.
+
+### Fixed
+
+- Preserve Unicode JNI matching on MSVC and keep J4 `RegisterNatives` matching reachable for non-ASCII class and member names.
+- Make input-open failures follow the documented input-error exit contract while retaining empty files as valid inputs.
+
 ## [0.1.0-rc.1] - 2026-08-22
 
 First release candidate for exact-commit public validation. This entry describes candidate source changes; publication remains subject to the hosted CI and release-asset gates in `docs/RELEASE_CHECKLIST.md`.

@@ -5,8 +5,10 @@
 #include "prts/elf.hpp"
 #include "prts/macho.hpp"
 #include "prts/dotnet.hpp"
+#include "prts/dotnet_native.hpp"
 #include "prts/file_snapshot.hpp"
 #include "prts/godot.hpp"
+#include "prts/hermes.hpp"
 #include "prts/gdextension.hpp"
 #include "prts/semantic_producers.hpp"
 #include "prts/repair.hpp"
@@ -18,6 +20,8 @@
 #include "prts/jvm.hpp"
 #include "prts/android.hpp"
 #include "prts/apk.hpp"
+#include "prts/container_ingress.hpp"
+#include "prts/unreal.hpp"
 #include "prts/dart.hpp"
 #include "prts/flutter.hpp"
 #include "prts/nuitka.hpp"
@@ -583,6 +587,7 @@ void register_analysis_sidecars(prts::AnalysisReport&report,const std::filesyste
     if(report.dex_extract.success){add(report.dex_extract.methods_csv,"method_map","DEX");add(report.dex_extract.classes_csv,"class_map","DEX");add(report.dex_extract.fields_csv,"field_map","DEX");add(report.dex_extract.callsites_csv,"callsite_map","DEX");}
     if(report.jvm_extract.success){add(report.jvm_extract.methods_csv,"method_map","JVM");add(report.jvm_extract.fields_csv,"field_map","JVM");add(report.jvm_extract.references_csv,"reference_map","JVM");}
     if(report.wasm_extract.success){add(report.wasm_extract.functions_csv,"function_map","WebAssembly");add(report.wasm_extract.strings_txt,"strings_map","WebAssembly");}
+    if(report.hermes_extract.success){add(report.hermes_extract.functions_csv,"function_map","Hermes bytecode");add(report.hermes_extract.strings_csv,"string_map","Hermes bytecode");add(report.hermes_extract.opcodes_csv,"opcode_map","Hermes bytecode");}
     if(report.lua_extract.success)add(report.lua_extract.disasm_path,"bytecode_disassembly","Lua");
     if(report.python_bytecode_extract.success){add(report.python_bytecode_extract.code_objects_csv,"python_code_object_map","CPython bytecode");add(report.python_bytecode_extract.root_symbols_csv,"python_root_symbol_map","CPython bytecode");add(report.python_bytecode_extract.opcode_inventory_csv,"python_opcode_inventory","CPython bytecode");}
     if(report.implicit_exec_extract.success)add(report.implicit_exec_extract.csv,"implicit_execution_map","Implicit execution");
@@ -626,6 +631,10 @@ void materialize_structured_sidecars(prts::AnalysisReport&report,const Options&o
     if(report.wasm.valid){
         auto rows=sat_add(report.wasm.functions.size(),report.wasm.string_hints.size());auto dir=analysis_map_dir(report,"wasm"),functions=dir/"functions.csv",strings=dir/"functions.strings.txt";
         if(ready("WebAssembly",rows,{functions,strings},224))report.wasm_extract=prts::extract_wasm(report.wasm,functions);
+    }
+    if(report.hermes.valid&&report.hermes.parse_complete){
+        auto rows=sat_add(report.hermes.functions.size(),sat_add(report.hermes.strings.size(),report.hermes.opcodes.size()));auto dir=analysis_map_dir(report,"hermes"),functions=dir/"functions.csv",strings=dir/"strings.csv",opcodes=dir/"opcodes.csv";
+        if(ready("Hermes bytecode",rows,{functions,strings,opcodes},224))report.hermes_extract=prts::extract_hermes_maps(report.hermes,functions);
     }
     if(report.lua.valid){
         std::uint64_t rows=0;for(const auto&p:report.lua.protos)rows=sat_add(rows,p.instructions.size());auto out=analysis_map_dir(report,"lua")/"disassembly.txt";
@@ -837,12 +846,67 @@ void register_container_artifacts(prts::AnalysisReport&report,const std::filesys
     for(const auto&p:report.wxapkg_extract.files){auto r=reltext(p,report.wxapkg_extract.output_dir);const bool code=r.ends_with(".js")||r.ends_with(".wxs")||r.ends_with(".wxml")||r.ends_with(".wxss")||r.ends_with(".json");add(p,"wxapkg_member",code?"app_code":"container_member","wxapkg",code?"HIGH":"BULK");}
     for(const auto&p:report.asar_extract.files){auto r=prts::path_utf8(p.lexically_normal().lexically_relative(report.asar_extract.output_dir.lexically_normal()));const bool interesting=std::find(report.asar.interesting_paths.begin(),report.asar.interesting_paths.end(),r)!=report.asar.interesting_paths.end();add(p,"asar_member",interesting?"app_code":"container_member","Electron ASAR",interesting?"HIGH":"BULK");}
     for(const auto&p:report.autoit_extract.files){auto r=reltext(p,report.autoit_extract.output_dir);const bool code=r=="script.au3"||r=="script.tok";add(p,"autoit_member",code?"user_script":"container_member","AutoIt",code?"HIGH":"BULK");}
-    std::set<std::string>apk_unity_metadata;for(const auto&e:report.apk.entries)if(e.unity_il2cpp_metadata_valid&&!e.normalized_name.empty())apk_unity_metadata.insert(lower(e.normalized_name));
-    for(const auto&p:report.apk_extract.files){auto r=reltext(p,report.apk_extract.output_dir);const bool unity_metadata=apk_unity_metadata.count(r)!=0;const bool code=r.ends_with(".dex")||r.ends_with(".so")||r.ends_with(".wasm")||r.ends_with(".jar")||r.ends_with(".zip")||unity_metadata;const bool manifest=r=="androidmanifest.xml";add(p,unity_metadata?"unity_il2cpp_metadata":"apk_member",unity_metadata?"il2cpp_metadata":(code?"analysis_child":(manifest?"manifest":"container_member")),"Android APK",code?"HIGH":(manifest?"ANALYSIS":"BULK"));}
+    std::set<std::string>apk_unity_metadata,apk_hermes;
+    for(const auto&e:report.apk.entries){
+        if(e.unity_il2cpp_metadata_valid&&!e.normalized_name.empty())apk_unity_metadata.insert(lower(e.normalized_name));
+        if(e.hermes_integrity_valid&&!e.duplicate_path&&!e.normalized_name.empty())apk_hermes.insert(lower(e.normalized_name));
+    }
+    for(const auto&p:report.apk_extract.files){
+        auto r=reltext(p,report.apk_extract.output_dir);const bool hermes=apk_hermes.count(r)!=0;const bool unity_metadata=apk_unity_metadata.count(r)!=0;
+        const bool code=hermes||r.ends_with(".dex")||r.ends_with(".so")||r.ends_with(".wasm")||r.ends_with(".jar")||r.ends_with(".zip")||unity_metadata;const bool manifest=r=="androidmanifest.xml";
+        if(hermes)register_artifact_file(report,p,"hermes_bytecode","bytecode_child","APK/ZIP Hermes",input,"apk_hermes_bytecode_child","HIGH");
+        else add(p,unity_metadata?"unity_il2cpp_metadata":"apk_member",unity_metadata?"il2cpp_metadata":(code?"analysis_child":(manifest?"manifest":"container_member")),"Android APK",code?"HIGH":(manifest?"ANALYSIS":"BULK"));
+    }
     for(const auto&p:report.jar_extract.files){auto r=reltext(p,report.jar_extract.output_dir);const bool code=r.ends_with(".class")||r.ends_with(".jar")||r.ends_with(".zip");const bool manifest=r=="meta-inf/manifest.mf";add(p,"jar_member",code?"analysis_child":(manifest?"manifest":"container_member"),"Java/JVM archive",code?"HIGH":(manifest?"ANALYSIS":"BULK"));}
     for(const auto&p:report.nuitka_extract.files){auto r=reltext(p,report.nuitka_extract.output_dir);const bool main=r=="main.bin"||r=="__main__.bin"||r.ends_with(".exe");const bool map=r.ends_with(".nuitka-const.txt");add(p,"nuitka_member",main?"main_payload":(map?"analysis_map":"container_member"),"Nuitka",main?"HIGH":(map?"ANALYSIS":"BULK"));}
     std::set<std::string>godot_validated_native;for(const auto&b:report.godot.gdextensions)for(const auto&l:b.libraries)if(l.child_validated&&!l.matched_child_path.empty()){auto q=lower(l.matched_child_path);if(q.rfind("res://",0)==0)q.erase(0,6);godot_validated_native.insert(q);}
     for(const auto&p:report.godot_extract.files){auto r=reltext(p,report.godot_extract.output_dir);const bool code=r.ends_with(".gdc")||r.ends_with(".gd")||r.ends_with(".gdextension")||r=="project.binary"||r=="project.godot";const bool native=godot_validated_native.count(r)!=0;add(p,"godot_member",native?"native_extension":(code?"script_or_project":"container_member"),"Godot PCK",(code||native)?"HIGH":"BULK");if(r.ends_with(".gdc"))for(const auto*suf:{".godot-script-info.json",".godot-identifiers.csv",".godot-constants.csv",".godot-lines.csv",".godot-tokens.csv"}){auto q=prts::path_with_ascii_suffix(p,suf);register_artifact_file(report,q,"gdscript_analysis","analysis_map","Godot GDScript",p,"analysis_of","ANALYSIS");}}
+}
+
+void integrate_apk_hermes_children(prts::AnalysisReport&report,const std::filesystem::path&input){
+    if(!report.apk.zip_valid||report.apk.hermes_magic_count==0)return;
+    prts::Finding f;f.kind="artifact_relationship";f.family="Hermes APK/ZIP child routing";f.variant=report.apk.valid?"Android APK":"ZIP";
+    f.fields["magic_candidates"]=std::to_string(report.apk.hermes_magic_count);
+    f.fields["integrity_valid_children"]=std::to_string(report.apk.hermes_integrity_valid_count);
+    f.fields["supported_epoch_children"]=std::to_string(report.apk.hermes_supported_epoch_count);
+    f.fields["parse_complete_children"]=std::to_string(report.apk.hermes_parse_complete_count);
+    f.fields["integrity_failures"]=std::to_string(report.apk.hermes_integrity_failure_count);
+    f.fields["probe_entries"]=std::to_string(report.apk.hermes_probe_entry_count);
+    f.fields["probe_validated_bytes"]=std::to_string(report.apk.hermes_probe_validated_bytes);
+    f.fields["probe_entry_limit"]="512";f.fields["probe_byte_limit"]="67108864";
+    f.fields["probe_budget_exhausted"]=report.apk.hermes_probe_budget_exhausted?"true":"false";
+    f.fields["javascript_source_recovery_claimed"]="false";f.fields["runtime_load_claimed"]="false";f.fields["automatic_runtime_execution"]="false";
+    auto artifact_for=[&](const std::filesystem::path&p)->const prts::AnalysisArtifact*{for(const auto&a:report.artifacts)if(same_regular_file(a.path,p))return &a;return nullptr;};
+    std::size_t related=0,missing=0,mismatch=0;
+    for(const auto&e:report.apk.entries){
+        if(!e.hermes_magic||!e.hermes_integrity_valid||e.duplicate_path||!e.safe_path||e.symlink||e.encrypted||!e.supported)continue;
+        const auto child=report.apk_extract.output_dir/prts::path_from_utf8(e.normalized_name);const auto*a=artifact_for(child);
+        if(!a){++missing;continue;}
+        if(a->size!=e.uncompressed_size||a->sha256.empty()||a->sha256!=e.hermes_sha256){++mismatch;continue;}
+        prts::ArtifactRelationship x;x.first=input;x.second=child;x.directed=true;x.kind="apk_hermes_bytecode_child";x.state="CONFIRMED";
+        x.first_role=report.apk.valid?"apk_container":"zip_container";x.second_role="hermes_bytecode";
+        x.first_relation_role="validated_container_member_source";x.second_relation_role="static_bytecode_child";
+        x.evidence_basis="exact Hermes magic at member offset zero plus complete ZIP decompression, CRC, declared uncompressed size and SHA-256 identity bind this member to the materialized child";
+        x.evidence_source="ZIP central/local header geometry + bounded full-entry CRC validation + Hermes HBC magic + post-materialization size/SHA-256";
+        x.source_coordinate="zip_entry="+std::to_string(e.index)+";name="+e.normalized_name+";central_directory_offset="+std::to_string(e.central_directory_offset)+";local_header_offset="+std::to_string(e.local_header_offset)+";data_offset="+std::to_string(e.data_offset)+";compressed_size="+std::to_string(e.compressed_size)+";uncompressed_size="+std::to_string(e.uncompressed_size)+";crc32="+std::to_string(e.crc32);
+        x.target_coordinate="child_file:size="+std::to_string(a->size)+";sha256="+a->sha256;
+        x.provenance_scope="one exact non-duplicate APK/ZIP member and its immutable materialized bytes; independent Hermes static parsing only; no JavaScript source recovery, runtime loading, or execution is claimed";
+        x.evidence_level="R2_STRUCTURAL_RELATION";x.ambiguity="NONE";x.semantic_relevance="STRUCTURAL";x.priority_eligible=true;x.second_priority_delta=1;
+        x.reason="CRC/size/SHA-bound HBC member is admitted HIGH to the existing bounded automatic static child graph";
+        report.artifact_relationships.push_back(std::move(x));++related;
+    }
+    f.fields["exact_relations"]=std::to_string(related);f.fields["unmaterialized_valid_children"]=std::to_string(missing);f.fields["post_materialization_mismatches"]=std::to_string(mismatch);
+    const bool complete=related>0&&related==report.apk.hermes_integrity_valid_count&&
+        report.apk.hermes_integrity_valid_count==report.apk.hermes_magic_count&&!report.apk.hermes_probe_budget_exhausted&&!report.apk.hermes_integrity_failure_count&&!missing&&!mismatch;
+    f.state=complete?"CONFIRMED":"PARTIAL";
+    if(related)f.evidence.push_back("Hermes child relations bind member index/name and parent offsets/sizes/CRC to the exact materialized child size and SHA-256");
+    f.evidence.push_back("HBC routing is content-based and independent of member/root filename extensions");
+    f.evidence.push_back("children are admitted only to bounded static analysis; packaging is not treated as proof of runtime loading");
+    if(report.apk.hermes_probe_budget_exhausted)f.negative_evidence.push_back("the fixed 512-entry/64 MiB Hermes member-probe budget was exhausted; unprobed or oversized members were not guessed");
+    if(report.apk.hermes_integrity_failure_count)f.negative_evidence.push_back("one or more magic-matching entries failed complete decompression/CRC integrity validation and were not materialized");
+    if(missing)f.negative_evidence.push_back("one or more integrity-valid HBC members were omitted by the existing artifact materialization budget");
+    if(mismatch)f.negative_evidence.push_back("one or more materialized outputs did not retain the validated child size/SHA-256 identity and received no relationship");
+    report.findings.push_back(std::move(f));
 }
 
 void integrate_apk_godot2_direct_assets(prts::AnalysisReport&report){
@@ -1095,6 +1159,7 @@ std::string report_format_label(const prts::AnalysisReport&r){
     if(r.dex.valid)return "DEX";
     if(r.jvm_class.valid)return "JVM";
     if(r.dotnet.valid)return ".NET";
+    if(r.hermes.valid)return "Hermes bytecode";
     if(r.wasm.valid)return "Wasm";
     if(r.lua.valid)return "Lua";
     return "unknown";
@@ -1243,6 +1308,27 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
         if(report.pe.valid){report.authenticode=prts::analyze_authenticode(mapped.bytes(),report.pe);if(report.authenticode.present||report.authenticode.state=="FAILED")report.findings.push_back(prts::authenticode_finding(report.authenticode));}
         if(!report.pe.valid){report.elf=prts::parse_elf(mapped.bytes());if(!report.elf.valid)report.macho=prts::parse_macho(mapped.bytes());}
         report.static_scan=prts::scan_static(mapped.bytes());
+        report.unreal=prts::detect_unreal_container(mapped.bytes(),input);
+        if(report.unreal.candidate){
+            report.findings.push_back(prts::unreal_container_finding(report.unreal));
+            if(report.unreal.iostore.toc_valid){
+                for(const auto&part:report.unreal.iostore.partitions){
+                    if(part.state!="CONFIRMED")continue;
+                    prts::ArtifactRelationship x;x.first=input;x.second=part.path;x.directed=true;x.kind="unreal_iostore_partition";
+                    x.state=(report.unreal.iostore.pair_valid&&!report.unreal.iostore.encrypted)?"CONFIRMED":"BOUNDED";
+                    x.first_role="iostore_toc";x.second_role="iostore_partition";
+                    x.first_relation_role="partition_geometry_source";x.second_relation_role="partition_data_target";
+                    x.evidence_basis="validated fixed UTOC section layout and compressed-block geometry close to this exact regular UCAS partition";
+                    x.evidence_source="static Unreal IoStore v1-v8 parser";
+                    x.source_coordinate="UTOC:compressed_block_entries";
+                    x.target_coordinate="UCAS[partition="+std::to_string(part.index)+"]:required_bytes="+std::to_string(part.required_bytes);
+                    x.provenance_scope="same-directory exact basename/split partition set; structural container relation only";
+                    x.evidence_level="R2_STRUCTURAL_RELATION";x.ambiguity="NONE";x.semantic_relevance="STRUCTURAL";
+                    x.priority_eligible=false;x.reason="the TOC declares physical block extents that fit this exact partition file";
+                    report.artifact_relationships.push_back(std::move(x));
+                }
+            }
+        }
         report.python_bytecode=prts::detect_python_bytecode(mapped.bytes(),ext_is(input,".pyc"));
         if(report.python_bytecode.candidate)report.findings.push_back(prts::python_bytecode_finding(report.python_bytecode));
         report.cpython_marshal_loader=prts::inspect_cpython_marshal_loader_source(mapped.bytes());
@@ -1335,6 +1421,11 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
         if(report.autoit.valid){report.findings.erase(std::remove_if(report.findings.begin(),report.findings.end(),[](const prts::Finding&f){return f.family=="AutoIt";}),report.findings.end());report.findings.push_back(prts::autoit_finding(report.autoit));auto out=container_output_dir(report,"autoit");if(prepare_container_output(report,out,"AutoIt")){if(opt.extract){auto bytes=sum_bytes(report.autoit.records,[](const auto&e){return e.output_size;});bytes=sat_add(bytes,report.autoit.script_tokenized?report.autoit.script_source.size():0);auto files=cap_count(report.autoit.records.size()+1);if(permit_extract("AutoIt",bytes,files))report.autoit_extract=prts::extract_autoit(mapped.bytes(),report.autoit,out,false);}else{auto [bytes,files]=auto_core_budget(opt);auto script_bytes=sat_add(report.autoit.script_source.size(),report.autoit.script_tokenized?report.autoit.token_bytes:0);auto script_files=report.autoit.script_tokenized?2u:1u;if(script_files<=files&&script_bytes<=bytes)report.autoit_extract=prts::extract_autoit(mapped.bytes(),report.autoit,out,true);else note_auto_core_partial(report,"AutoIt",script_files,script_bytes);}}}
         else if(autoit_routed)add_validation_failure(report.findings,"AutoIt",ext_is(input,".a3x")?".a3x filename extension":"AutoIt/EA06 static evidence",report.autoit.error);
 
+        report.dotnet_bundle=prts::detect_dotnet_bundle(mapped.bytes(),report.pe,report.elf);
+        if(report.dotnet_bundle.candidate)report.findings.push_back(prts::dotnet_bundle_finding(report.dotnet_bundle));
+        report.native_aot=prts::detect_native_aot(mapped.bytes(),report.pe,report.elf);
+        if(report.native_aot.candidate)report.findings.push_back(prts::native_aot_finding(report.native_aot));
+
         report.dotnet=prts::detect_dotnet(mapped.bytes(),report.pe,input);
         if(report.dotnet.valid){report.findings.push_back(prts::dotnet_finding(report.dotnet));}
         else if(report.pe.valid&&report.pe.clr.present)add_validation_failure(report.findings,".NET metadata","PE CLR data directory",report.dotnet.error);
@@ -1362,6 +1453,9 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
         report.wasm=prts::parse_wasm(mapped.bytes());
         if(report.wasm.candidate){report.findings.push_back(prts::wasm_finding(report.wasm));}
 
+        report.hermes=prts::parse_hermes_bytecode(mapped.bytes());
+        if(report.hermes.candidate){report.findings.push_back(prts::hermes_finding(report.hermes));}
+
         report.dart=prts::detect_dart(mapped.bytes(),report.elf);
         const bool dart_routed=report.dart.candidate||ext_is(input,".dill");
         if(report.dart.valid)report.findings.push_back(dart_finding(report.dart));
@@ -1378,7 +1472,8 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
         else if(dex_routed){std::ostringstream detail;if(report.dex.error.empty())detail<<"DEX magic dex\nNNN\0 is missing or unsupported";else detail<<report.dex.error;if(report.dex.candidate)detail<<" at current-file offset 0x"<<std::hex<<report.dex.error_offset;add_validation_failure(report.findings,"Android DEX",report.dex.candidate?"DEX magic/version header":".dex filename extension",detail.str());}
 
         const bool apk_ext=ext_is(input,".apk");
-        const bool apk_routed=apk_ext||contains_ascii(mapped.bytes(),"AndroidManifest.xml");
+        const bool apk_signal=apk_ext||contains_ascii(mapped.bytes(),"AndroidManifest.xml");
+        const bool apk_routed=apk_signal||prts::has_strict_zip_eocd(mapped.bytes());
         if(apk_routed)report.apk=prts::detect_apk(mapped.bytes());
         if(report.apk.valid){
             report.findings.push_back(prts::apk_finding(report.apk));
@@ -1394,7 +1489,19 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
                     auto [bytes,files]=auto_core_budget(opt);report.apk_extract=prts::extract_apk(mapped.bytes(),report.apk,out,bytes,files,true);if(report.apk_extract.budget_exhausted)note_auto_core_partial(report,"Android APK",report.apk.analysis_candidate_files>report.apk_extract.file_count?report.apk.analysis_candidate_files-report.apk_extract.file_count:0,report.apk.analysis_candidate_bytes>report.apk_extract.output_bytes?report.apk.analysis_candidate_bytes-report.apk_extract.output_bytes:0);
                 }
             }
-        }else if(apk_routed){
+        }else if(report.apk.zip_valid&&report.apk.hermes_integrity_valid_count){
+            auto out=container_output_dir(report,"apk");
+            if(prepare_container_output(report,out,"Hermes ZIP child")){
+                if(opt.artifact_graph_node){
+                    report.apk_extract=prts::extract_apk(mapped.bytes(),report.apk,out,extract_bytes_left,extract_files_left,true);
+                    extract_bytes_left=report.apk_extract.output_bytes>extract_bytes_left?0:extract_bytes_left-report.apk_extract.output_bytes;
+                    auto used=std::min<std::uint64_t>(report.apk_extract.file_count,extract_files_left);extract_files_left-=static_cast<std::uint32_t>(used);
+                }else{
+                    auto [bytes,files]=auto_core_budget(opt);report.apk_extract=prts::extract_apk(mapped.bytes(),report.apk,out,bytes,files,true);
+                    if(report.apk_extract.budget_exhausted)note_auto_core_partial(report,"Hermes ZIP child",report.apk.hermes_integrity_valid_count>report.apk_extract.file_count?report.apk.hermes_integrity_valid_count-report.apk_extract.file_count:0,report.apk.hermes_probe_validated_bytes>report.apk_extract.output_bytes?report.apk.hermes_probe_validated_bytes-report.apk_extract.output_bytes:0);
+                }
+            }
+        }else if(apk_signal){
             auto detail=report.apk.error.empty()?std::string("no deeply validated AndroidManifest.xml plus DEX/resource-table/native-ELF payload was found in the ZIP structure"):report.apk.error;
             add_validation_failure(report.findings,"Android APK",report.apk.candidate?"ZIP central directory with Android payload paths":".apk filename extension",detail);
         }
@@ -1525,6 +1632,7 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
     register_analysis_sidecars(report,input);
     register_container_artifacts(report,input);
     register_pyinstaller_artifacts(report,input);
+    integrate_apk_hermes_children(report,input);
     integrate_apk_unity_il2cpp_delivery(report);
     integrate_apk_flutter_aot_delivery(report);
     integrate_apk_godot2_direct_assets(report);

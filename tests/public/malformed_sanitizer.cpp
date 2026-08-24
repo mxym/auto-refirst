@@ -1,5 +1,6 @@
 #include "prts/android.hpp"
 #include "prts/elf.hpp"
+#include "prts/hermes.hpp"
 #include "prts/jvm.hpp"
 #include "prts/lua.hpp"
 #include "prts/pe.hpp"
@@ -18,11 +19,13 @@ int main(int argc, char** argv) {
     const auto pe = prts::parse_pe(bytes);
     const auto elf = prts::parse_elf(bytes);
     const auto wasm = prts::parse_wasm(bytes);
+    const auto hermes = prts::parse_hermes_bytecode(bytes);
     const auto jvm = prts::parse_jvm_class(bytes);
     const auto dex = prts::parse_dex(bytes);
     const auto lua = prts::parse_luac(bytes);
     // Consume results so an optimizing sanitizer build cannot discard parser calls.
     const unsigned observed = unsigned(pe.valid) + unsigned(elf.valid) + unsigned(wasm.valid) +
-                              unsigned(jvm.valid) + unsigned(dex.valid) + unsigned(lua.valid);
-    return observed > 6 ? 3 : 0;
+                              unsigned(hermes.valid) + unsigned(jvm.valid) + unsigned(dex.valid) +
+                              unsigned(lua.valid);
+    return observed > 7 ? 3 : 0;
 }

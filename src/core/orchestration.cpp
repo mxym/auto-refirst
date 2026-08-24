@@ -243,12 +243,13 @@ DirectoryCandidate preflight_directory_candidate(const std::filesystem::path& pa
     }else if(starts({0x00,'a','s','m'})){c.type_hint="WebAssembly";c.structural_confidence="high";c.role="bytecode_module";add_reason(c,55,"WebAssembly magic is structurally recognized");}
     else if(b.size()>=8&&b[0]=='d'&&b[1]=='e'&&b[2]=='x'&&b[3]=='\n'){c.type_hint="DEX";c.structural_confidence="high";c.role="bytecode_module";add_reason(c,55,"DEX header magic/version prefix is recognized for full validation");}
     else if(starts({'P','K',0x03,0x04})||starts({'P','K',0x05,0x06})||starts({'P','K',0x07,0x08})){c.type_hint="ZIP/container";c.structural_confidence="medium";c.role="container";add_reason(c,50,"ZIP container signature routes later APK/JAR/container validation");}
+    else if(starts({'-','=','=', '-', '-', '=', '=', '-', '-', '=', '=', '-', '-', '=', '=', '-'})){c.type_hint="Unreal IoStore TOC";c.structural_confidence="high";c.role="iostore_toc";add_reason(c,55,"fixed IoStore UTOC magic routes full bounded section and partition validation");}
     else if(starts({'G','D','P','C'})){c.type_hint="Godot PCK";c.structural_confidence="medium";c.role="container";add_reason(c,50,"Godot PCK magic routes full structural validation");}
     else if(starts({'#','!'})){c.type_hint="script";c.structural_confidence="medium";c.role="script";add_reason(c,30,"shebang identifies a script; it remains static-only by default");}
     else{
         std::size_t printable=0;for(unsigned char x:b)if(x==9||x==10||x==13||(x>=32&&x<127))++printable;if(!b.empty()&&printable*100/b.size()>90){c.type_hint="text";c.role="text";add_reason(c,5,"bounded prefix is predominantly text");}else{c.type_hint="unknown binary";c.role="data";add_reason(c,10,"unknown binary is retained for full static analysis");}
     }
-    auto ext=lower_ext(path);if(!ext.empty()&&(ext==".exe"||ext==".dll"||ext==".so"||ext==".pck"||ext==".apk"||ext==".jar"||ext==".dex"||ext==".wasm"))add_reason(c,2,"filename extension is weak ordering evidence only");
+    auto ext=lower_ext(path);if(!ext.empty()&&(ext==".exe"||ext==".dll"||ext==".so"||ext==".pck"||ext==".apk"||ext==".jar"||ext==".dex"||ext==".wasm"||ext==".pak"||ext==".utoc"||ext==".ucas"))add_reason(c,2,"filename extension is weak ordering evidence only");
     set_tier(c);return c;
 }
 
@@ -281,6 +282,8 @@ void refine_directory_candidate(DirectoryCandidate& c,const AnalysisReport& r){
     if(r.godot.valid)add_reason(c,30,"validated Godot PCK structure");
     if(r.gdextension_descriptor.valid){add_reason(c,45,"validated standalone Godot GDExtension descriptor with exact entry symbol and safe res:// library declarations");c.role="gdextension_descriptor";}
     if(r.apk.valid)add_reason(c,25,"validated APK structure");
+    if(r.unreal.pak.valid){add_reason(c,25,"validated Unreal Pak exact footer, index range, SHA-1, and minimum index structure");c.type_hint="Unreal Pak";c.structural_confidence="validated";c.role="container";}
+    if(r.unreal.iostore.toc_valid){add_reason(c,r.unreal.iostore.valid?30:12,r.unreal.iostore.valid?"validated Unreal IoStore TOC and exact UCAS partition set":"structurally valid Unreal IoStore TOC with partial partition/encryption closure");c.type_hint="Unreal IoStore TOC";c.structural_confidence=r.unreal.iostore.valid?"validated":"high";c.role="iostore_toc";}
     if(r.jar.valid)add_reason(c,20,"validated JAR/JVM container structure");
     if(r.dex.valid)add_reason(c,20,"validated DEX structure");
     if(r.wasm.valid)add_reason(c,20,"validated WebAssembly structure");
@@ -301,6 +304,8 @@ DirectoryReportIndex make_directory_report_index(const AnalysisReport& r){
     x.elf_valid=r.elf.valid;x.elf_type=r.elf.type;x.elf_entry=r.elf.entry;x.elf_interpreter=r.elf.interpreter;x.elf_soname=r.elf.abi.soname;x.elf_soname_file_offset=r.elf.abi.soname_file_offset;x.elf_needed=r.elf.needed;
     x.mono_runtime_export_surface=exact_mono_runtime_exports(r);
     x.pyinstaller_valid=r.pyinstaller.valid;x.godot_valid=r.godot.valid;x.apk_valid=r.apk.valid;x.jar_valid=r.jar.valid;x.nuitka_valid=r.nuitka.valid;x.cpython_runtime_present=!r.cpython_runtimes.empty();x.implicit_high_priority_count=r.implicit_exec.high_priority_count;
+    x.unreal_iostore_toc_valid=r.unreal.iostore.toc_valid;x.unreal_iostore_pair_valid=r.unreal.iostore.pair_valid;x.unreal_iostore_encrypted=r.unreal.iostore.encrypted;
+    for(const auto&p:r.unreal.iostore.partitions)x.unreal_iostore_partitions.push_back({p.path,p.index,p.required_bytes,p.state});
     x.interpreter_boundary_confirmed=r.interpreter_boundary.state=="CONFIRMED";x.interpreter_external_program_argument=r.interpreter_boundary.external_program_argument_required;x.interpreter_program_buffer_chain=r.interpreter_boundary.program_buffer_chain_confirmed;x.interpreter_exact_program_target_bound=r.interpreter_boundary.exact_program_target_bound;x.interpreter_boundary_kind=r.interpreter_boundary.boundary_kind;x.interpreter_host_role=r.interpreter_boundary.host_role;x.interpreter_target_role=r.interpreter_boundary.target_role;x.interpreter_semantic_requirement=r.interpreter_boundary.semantic_requirement;x.interpreter_runtime_family=r.interpreter_boundary.runtime_family;x.interpreter_exact_program_target_state=r.interpreter_boundary.exact_program_target_state;
     for(const auto&f:r.findings){if(f.state=="FAILED")++x.failure_count;else if(f.state=="PARTIAL")++x.partial_count;}
     x.unity_valid=r.unity.valid;x.unity_player_import=r.unity.unity_player_import;x.unity_metadata_valid=r.unity.metadata_valid;x.unity_il2cpp=r.unity.il2cpp;x.unity_il2cpp_export_evidence=r.unity.il2cpp_export_evidence;x.unity_registration_resolved=r.unity.registration_resolved;x.unity_game_assembly_validated=r.unity.game_assembly_validated;x.unity_mono=r.unity.mono;x.unity_mono_runtime_validated=r.unity.mono_runtime_validated;x.unity_metadata_path=r.unity.metadata_path;x.unity_game_assembly_path=r.unity.game_assembly_path;x.unity_managed_path=r.unity.managed_path;x.unity_mono_runtime_path=r.unity.mono_runtime_path;x.unity_backend_state=r.unity.backend_state;
@@ -412,6 +417,27 @@ void build_directory_relationships(DirectoryPlan& plan,std::vector<DirectoryRepo
         x.evidence_basis=std::move(basis);x.evidence_source=std::move(source);x.source_coordinate=std::move(scoord);x.target_coordinate=std::move(tcoord);x.provenance_scope=std::move(scope);x.priority_eligible=priority;x.reason=std::move(reason);return x;
     };
     auto hx=[](std::uint64_t v){std::ostringstream o;o<<"0x"<<std::hex<<v;return o.str();};
+
+    for(const auto&r:reports){
+        if(!r.unreal_iostore_toc_valid)continue;
+        const auto source=index.find(path_key(r.input));++plan.relationship_candidate_lookups;
+        if(source==index.end())continue;
+        for(const auto&p:r.unreal_iostore_partitions){
+            if(p.state!="CONFIRMED")continue;
+            const auto target=index.find(path_key(p.path));++plan.relationship_candidate_lookups;
+            if(target==index.end())continue;
+            const auto state=(r.unreal_iostore_pair_valid&&!r.unreal_iostore_encrypted)?"CONFIRMED":"BOUNDED";
+            auto x=make_relation(r.input,p.path,true,"unreal_iostore_partition",state,"iostore_toc","iostore_partition",
+                "validated fixed UTOC section layout and compressed-block geometry close to this exact regular UCAS partition",
+                "static Unreal IoStore v1-v8 parser","UTOC:compressed_block_entries",
+                "UCAS[partition="+std::to_string(p.index)+"]:required_bytes="+std::to_string(p.required_bytes),
+                "same-directory exact basename/split partition set; structural container relation only",false,
+                "the TOC declares physical block extents that fit this exact partition file");
+            x.first_relation_role="partition_geometry_source";x.second_relation_role="partition_data_target";
+            x.evidence_level="R2_STRUCTURAL_RELATION";x.semantic_relevance="STRUCTURAL";x.ambiguity="NONE";
+            emit(std::move(x));
+        }
+    }
 
     auto declared_leaf=[](std::string_view v){auto p=v.find_last_of("/\\");return std::string(p==std::string_view::npos?v:v.substr(p+1));};
     auto validated_image=[&](std::size_t i){const auto&c=plan.candidates[i];return c.analysis_state=="ANALYZED"&&c.structural_confidence=="validated"&&(c.role=="executable_root"||c.role=="interpreter_host"||c.role=="shared_library"||c.role=="object");};

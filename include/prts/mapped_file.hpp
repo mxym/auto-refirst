@@ -13,7 +13,7 @@ public:
     MappedFile& operator=(const MappedFile&) = delete;
     MappedFile(MappedFile&& other) noexcept;
     MappedFile& operator=(MappedFile&& other) noexcept;
-    bool valid() const noexcept { return data_ != nullptr || size_ == 0; }
+    bool valid() const noexcept { return error_.empty(); }
     std::span<const std::uint8_t> bytes() const noexcept { return {data_, size_}; }
     std::size_t size() const noexcept { return size_; }
     const std::string& error() const noexcept { return error_; }

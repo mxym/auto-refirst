@@ -6,13 +6,14 @@
 
 P0 校验：
 
-- 9 个公开 fixture 的 provenance 与 SHA-256；
-- PE/ELF/JVM/DEX/Wasm/Lua 静态格式边界；
+- 12 个公开 fixture 的 provenance 与 SHA-256；
+- PE/ELF/JVM/DEX/Wasm/Lua/Hermes 静态格式边界；
 - 跨文件关系与目录 guidance；
 - interpreter/runtime-modality 静态授权边界；
 - nested executable 与 recursive artifact graph；
 - model trust 与 CPython bytecode ingress；
-- JSON/text/version 基础合同；
+- JSON/text/version 与 `0/1/2/3/4` process contract；
+- APK/Hermes child、Mach-O/Swift、.NET bundle/NativeAOT 与 Unreal container 的有界静态 gate；
 - Windows junction/reparse 输出安全（Windows runner）。
 
 ## P1 — source-generated integration
@@ -29,7 +30,7 @@ P0/P1 不下载 challenge corpus，不执行分析目标，不需要任何私有
 
 ## Sanitizer surface
 
-`auto_refirst_public_malformed_sanitizer` 只链接 PE/ELF/JVM/DEX/Wasm/Lua parser 相关路径，用 malformed synthetic inputs 执行 ASan+UBSan smoke。
+`auto_refirst_public_malformed_sanitizer` 只链接 PE/ELF/JVM/DEX/Wasm/Hermes/Lua parser 相关路径，用 malformed synthetic inputs 执行 ASan+UBSan smoke。
 
 ## Fixture provenance
 

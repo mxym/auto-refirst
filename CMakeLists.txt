@@ -82,8 +82,8 @@ endfunction()
 
 # Keep product warning policy strict while treating vendored implementation
 # noise as third-party debt. Do not edit imported sources solely to satisfy
-# our warning baseline; suppress only the warning classes they generate when
-# those C translation units are compiled directly.
+# our warning baseline; scope compatibility options to only the translation
+# units that require them.
 if(MSVC)
   set_source_files_properties(
       third_party/rustc_demangle/demangle.c
@@ -153,6 +153,7 @@ add_executable(auto_refirst
     src/formats/pe.cpp
     src/formats/elf.cpp
     src/formats/macho.cpp
+    src/formats/macho_swift.cpp
     src/formats/python_marshal.cpp
     src/formats/python_bytecode.cpp
     src/unpack/replacement.cpp
@@ -163,13 +164,16 @@ add_executable(auto_refirst
     src/extract/nuitka.cpp
     src/extract/lua.cpp
     src/extract/wasm.cpp
+    src/extract/hermes.cpp
     src/extract/jvm.cpp
     src/extract/android.cpp
     src/extract/apk.cpp
+    src/extract/unreal.cpp
     src/extract/dart.cpp
     src/extract/flutter.cpp
     src/extract/unity.cpp
     src/extract/dotnet.cpp
+    src/extract/dotnet_native.cpp
     src/extract/wxapkg.cpp
     src/extract/asar.cpp
     src/extract/autoit.cpp
@@ -316,12 +320,13 @@ foreach(_public_target
 endforeach()
 
 # Parser-only sanitizer surface. It deliberately excludes runtime execution paths and
-# links the same PE/ELF/JVM/DEX/Wasm/Lua parser implementations used by the product.
+# links the same PE/ELF/JVM/DEX/Wasm/Hermes/Lua parser implementations used by the product.
 add_executable(auto_refirst_public_malformed_sanitizer EXCLUDE_FROM_ALL
     tests/public/malformed_sanitizer.cpp
     src/formats/pe.cpp
     src/formats/elf.cpp
     src/extract/wasm.cpp
+    src/extract/hermes.cpp
     src/extract/jvm.cpp
     src/extract/android.cpp
     src/extract/lua.cpp
