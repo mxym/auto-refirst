@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "auto-refirst 0.1.0-rc.1 source SBOM",
-  "documentNamespace": "https://github.com/mxym/auto-refirst/spdx/0.1.0-rc.1/99464105-a666-436e-99ed-3777bbce8e4c",
+  "name": "auto-refirst 0.1.0-rc.2 source SBOM",
+  "documentNamespace": "https://github.com/mxym/auto-refirst/spdx/0.1.0-rc.2/99464105-a666-436e-99ed-3777bbce8e4c",
   "creationInfo": {
-    "created": "2026-08-22T15:22:37Z",
+    "created": "2026-08-24T01:50:59Z",
     "creators": [
       "Tool: auto-refirst release provenance"
     ]
@@ -17,7 +17,7 @@
     {
       "SPDXID": "SPDXRef-Package-auto-refirst",
       "name": "auto-refirst",
-      "versionInfo": "0.1.0-rc.1",
+      "versionInfo": "0.1.0-rc.2",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",

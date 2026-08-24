@@ -73,7 +73,7 @@ def validate_version_output(
 def self_test() -> int:
     commit = "a" * 40
     valid = (
-        "auto-refirst 0.1.0-rc.1\n"
+        "auto-refirst 0.1.0-rc.2\n"
         f"git_commit={commit}\n"
         "build_platform=Linux/x86_64\n"
         "report_schema_version=1.0\n"
@@ -94,7 +94,7 @@ def self_test() -> int:
         valid.replace("build_platform=Linux/x86_64\n", ""),
         valid + "extra=value\n",
         valid.replace("report_schema_version=1.0", "git_commit=" + commit),
-        valid.replace("auto-refirst 0.1.0-rc.1", "auto-refirst invalid version"),
+        valid.replace("auto-refirst 0.1.0-rc.2", "auto-refirst invalid version"),
     )
     for index, candidate in enumerate(mutations, start=1):
         try:

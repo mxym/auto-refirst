@@ -1,6 +1,6 @@
 # 外部验证与已知缺口
 
-本页固定保留 `0.1.0-alpha.1` 的历史外部验证记录。以下数字、资源观测和缺口均按当时冻结的 Alpha 产品与评估口径描述，不构成 `0.1.0-rc.1` 的新验证结果，也不应被解释为 RC 当前缺口清单。RC 的实现边界见 [CAPABILITIES.md](CAPABILITIES.md)；发布门状态以冻结提交上的 hosted CI 和 `RELEASE_CHECKLIST.md` 要求为准。
+本页固定保留 `0.1.0-alpha.1` 的历史外部验证记录。以下数字、资源观测和缺口均按当时冻结的 Alpha 产品与评估口径描述，不构成 `0.1.0-rc.2` 的新验证结果，也不应被解释为 RC 当前缺口清单。RC 的实现边界见 [CAPABILITIES.md](CAPABILITIES.md)；发布门状态以冻结提交上的 hosted CI 和 `RELEASE_CHECKLIST.md` 要求为准。
 
 ## 方法
 

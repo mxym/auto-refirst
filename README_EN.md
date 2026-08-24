@@ -4,7 +4,7 @@ Evidence-driven binary preprocessing for reverse engineering and CTF workflows.
 
 `auto-refirst` runs before the main decompiler/debugger stage: it identifies formats and ecosystems, expands bounded nested artifacts, extracts high-value evidence, ranks directory inputs, and can optionally perform runtime materialization and reconstruction. Static analysis is the default. Target execution requires explicit `--run`; validated installation requires the additional `--apply` authorization.
 
-Current public version: **0.1.0-rc.1**.
+Current public version: **0.1.0-rc.2**.
 
 中文: [README.md](README.md)
 

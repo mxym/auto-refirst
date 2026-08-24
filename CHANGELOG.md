@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.1.0-rc.2] - 2026-08-24
+
+Second release candidate, adding bounded ecosystem coverage and strengthening exact-commit CI, portability, and release-asset verification. Publication remains subject to the hosted CI and release-asset gates in `docs/RELEASE_CHECKLIST.md`.
+
 ### Added
 
 - Add bounded static recognition for Hermes HBC v89/v96/v98, including exact APK content-child routing; JavaScript source recovery and runtime loading are not claimed.
@@ -13,6 +17,7 @@
 ### Changed
 
 - Extend source-generated public P0/P1 gates for Hermes/APK, Mach-O/Swift, .NET bundle/NativeAOT, Unreal containers and the CLI exit-code contract.
+- Strengthen native Windows path/Unicode portability coverage, exact-commit workflow checks, install staging, and fail-closed source/archive/release-asset provenance verification.
 - Add a project-owned source-backed APK/JNI J0-J4 structural-relation fixture to the static-only public P0 gate.
 - Keep semantic confidence fail-closed: encrypted/unsupported layouts remain `PARTIAL`, structural relations do not become native-registration or source-recovery claims, and analyzed fixtures are never executed.
 
