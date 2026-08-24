@@ -16,13 +16,17 @@ import os
 from pathlib import Path
 import platform
 import re
-import resource
 import signal
 import stat
 import subprocess
 import sys
 import time
 from typing import Any
+
+try:
+    import resource
+except ImportError:  # Not available on native Windows.
+    resource = None
 
 
 SCHEMA_VERSION = 1
@@ -374,6 +378,12 @@ def enumerate_artifacts(root: Path, max_files: int, max_bytes: int) -> list[dict
 
 
 def make_preexec(address_space_bytes: int, output_bytes: int, timeout_ms: int, max_processes: int):
+    if resource is None:
+        raise AdapterError(
+            "PLATFORM_MISMATCH",
+            "POSIX resource limits are unavailable on this host",
+        )
+
     def apply_limits() -> None:
         os.setsid()
         cpu_seconds = max(1, math.ceil(timeout_ms / 1000) + 1)
@@ -428,6 +438,14 @@ def run(argv: list[str]) -> dict[str, Any]:
         "attempted": False,
     }
 
+    actual_platform = f"{platform.system()}/{platform.machine()}"
+    if actual_platform != "Linux/x86_64":
+        return partial(
+            "PLATFORM_MISMATCH",
+            f"de4dotEx sidecar adapter supports Linux/x86_64 only; host is {actual_platform}",
+            base,
+        )
+
     manifest_path = Path(args.manifest)
     auth_path = Path(args.authorization)
     input_path = Path(args.input)
@@ -463,7 +481,6 @@ def run(argv: list[str]) -> dict[str, Any]:
             raise AdapterError("MANIFEST_INVALID", "required manifest fields are missing")
 
         expected_platform = manifest.get("platform", {}).get("contract")
-        actual_platform = f"{platform.system()}/{platform.machine()}"
         if expected_platform != actual_platform:
             raise AdapterError("PLATFORM_MISMATCH", f"manifest requires {expected_platform}, host is {actual_platform}")
 
