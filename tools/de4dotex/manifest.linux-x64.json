@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "provider": "de4dotex",
+  "enabled_by_default": false,
+  "entrypoint": "de4dot",
+  "platform": {
+    "contract": "Linux/x86_64",
+    "direct_bundling_status": "PARTIAL_PENDING_RELEASE_GATES",
+    "bring_your_own_status": "PARTIAL_REQUIRES_TRUSTED_IMMUTABLE_INSTALL",
+    "windows_status": "NO_GO_PENDING_VERIFIED_NATIVE_SANDBOX"
+  },
+  "release": {
+    "version": "3.8.0",
+    "reported_version": "3.8.0.0",
+    "commit": "2b03ac6e85ca26556da694dedb01e72aad222902",
+    "repository": "https://github.com/GDATAAdvancedAnalytics/de4dotEx",
+    "tag": "3.8.0",
+    "asset": {
+      "name": "de4dotEx-3.8.0-net8.0-linux-x64.zip",
+      "url": "https://github.com/GDATAAdvancedAnalytics/de4dotEx/releases/download/3.8.0/de4dotEx-3.8.0-net8.0-linux-x64.zip",
+      "bytes": 34908537,
+      "sha256": "5a7e2ae0ffba74620f481c3485a90e143912f133adecd9eb9793bf84f28c397b"
+    },
+    "corresponding_source": {
+      "repository": "https://github.com/GDATAAdvancedAnalytics/de4dotEx",
+      "tag": "3.8.0",
+      "commit": "2b03ac6e85ca26556da694dedb01e72aad222902",
+      "url": "https://github.com/GDATAAdvancedAnalytics/de4dotEx/archive/refs/tags/3.8.0.tar.gz",
+      "bytes": 642227,
+      "sha256": "3c7c7eb0019938a1062817d0961a44e80da6e73817392c8f6bda72d3ee32d7e5",
+      "license": "GPL-3.0-or-later"
+    },
+    "beaengine_corresponding_source": {
+      "repository": "https://github.com/BeaEngine/beaengine",
+      "tag": "v5.3.0",
+      "commit": "39bde3501021aef66831f9dade77d26deefb8027",
+      "url": "https://github.com/BeaEngine/beaengine/archive/refs/tags/v5.3.0.tar.gz",
+      "bytes": 481377,
+      "sha256": "a46712cb9ef6430ea7ba879bd9c70537680ef025f5382c541c62311686bc325d",
+      "license": "LGPL-3.0-or-later",
+      "release_binary_correspondence": "UNPROVEN_WORKFLOW_USED_MUTABLE_TAG"
+    },
+    "github_release_attestation": {
+      "predicate_type": "https://in-toto.io/attestation/release/v0.2",
+      "subject_commit_sha1": "2b03ac6e85ca26556da694dedb01e72aad222902",
+      "asset_sha256_bound": true,
+      "build_materials_provenance": false
+    }
+  },
+  "installed_tree": {
+    "algorithm": "sha256(sorted(sha256 + space + byte_count + space + relative_path + newline))",
+    "sha256": "ac201fa973a68a13a21006c6e71d95aaae2f0d520c80d434412973ea977308c0",
+    "files": 206,
+    "bytes": 78040543,
+    "filesystem_bytes_observed": 78056927,
+    "entrypoint_sha256": "01b9d7dffac64e978f330c1a164989fe02d4063f1b7288ec10632ecbb8de5827"
+  },
+  "runtime": {
+    "target": ".NETCoreApp,Version=v8.0/linux-x64",
+    "self_contained_runtime_version": "8.0.29",
+    "managed_dependencies": {
+      "dnlib": "4.5.0",
+      "de4dot": "3.8.0"
+    },
+    "native_dependency": "BeaEngine 5.3.0",
+    "host_elf_libraries": [
+      "libc",
+      "libpthread",
+      "libdl",
+      "libstdc++",
+      "libm",
+      "libgcc_s"
+    ]
+  },
+  "authorization": {
+    "schema": "auto-refirst.target-execution-authorization.v1",
+    "required_source": "explicit --run",
+    "target_sha256_required": true,
+    "static_evidence_allowed": false,
+    "p0_p1_allowed": false,
+    "all_modes_are_execution_capable": true
+  },
+  "sandbox": {
+    "launcher": "bubblewrap",
+    "minimum_version": "0.6.1",
+    "minimum_version_note": "research host proof only; publication must pin and audit a supported upstream bubblewrap or declare an audited system dependency",
+    "launcher_trust": {
+      "model": "root-owned-system-dependency",
+      "sha256": null,
+      "publication_status": "PARTIAL_PENDING_SUPPORTED_VERSION_SELECTION"
+    },
+    "system_abi_ro_binds": [
+      "/lib",
+      "/lib64",
+      "/usr/lib"
+    ],
+    "unshare_all_including_network": true,
+    "die_with_parent": true,
+    "new_session": true,
+    "private_tmp": true,
+    "empty_home": true,
+    "read_only_input_copy": true,
+    "private_output": true,
+    "require_cgroup_v2_hard_limits": true,
+    "rlimits": [
+      "CPU",
+      "AS",
+      "FSIZE",
+      "NOFILE",
+      "NPROC",
+      "CORE=0"
+    ]
+  },
+  "limits": {
+    "timeout_ms": 15000,
+    "physical_memory_bytes": 1073741824,
+    "swap_bytes": 0,
+    "address_space_bytes": 549755813888,
+    "gc_heap_hard_limit_bytes": 536870912,
+    "input_bytes": 536870912,
+    "output_bytes": 134217728,
+    "log_bytes": 1048576,
+    "output_files": 64,
+    "processes": 256
+  },
+  "capabilities": {
+    "scope_note": "Upstream families are capabilities, not a guarantee for every obfuscator version.",
+    "families": {
+      "Confuser": ["recognition", "method-unpacking", "proxy-calls", "control-flow", "strings-and-constants", "resources"],
+      "ConfuserEx": ["recognition", "metadata-and-method-repair", "proxy-calls", "control-flow", "strings-constants-and-arrays", "resources"],
+      "SmartAssembly": ["recognition", "metadata-fixes", "proxy-calls", "control-flow", "strings", "resources-and-embedded-assemblies"],
+      "Eazfuscator.NET": ["recognition", "metadata-and-method-repair", "proxy-calls", "control-flow", "strings", "resources-and-embedded-assemblies"],
+      "Babel.NET": ["recognition", "metadata-and-method-repair", "proxy-calls", "control-flow", "strings-and-constants", "resources-and-embedded-assemblies"],
+      "Agile.NET": ["recognition", "metadata-and-method-repair", "proxy-calls", "control-flow", "strings", "resources", "csvm-restoration"],
+      "Dotfuscator": ["recognition", "metadata-cleanup", "control-flow", "strings", "short-method-inlining"]
+    }
+  },
+  "distribution": {
+    "publishability_status": "PARTIAL",
+    "license": "GPL-3.0-or-later",
+    "model": "independent GPL tools pack or bring-your-own-tool; never license-blended into the core",
+    "trusted_install_requirement": "adapter and exact manifest are shipped together; tool and launcher path chains are root-owned, ACL-free, and non-writable by the adapter identity/group/world",
+    "required_materials": [
+      "pinned de4dotEx corresponding source",
+      "exact BeaEngine corresponding source plus the release build patch/script or an independent rebuild from the pinned commit",
+      "GPL license and source offer",
+      "all bundled dependency licenses",
+      "SBOM",
+      ".NET 8.0.29 LICENSE.TXT",
+      ".NET 8.0.29 THIRD-PARTY-NOTICES.TXT",
+      "bubblewrap license when bundled",
+      "verified build provenance or a documented independent rebuild"
+    ]
+  }
+}

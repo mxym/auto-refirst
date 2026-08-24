@@ -8,6 +8,7 @@
 - Add Unreal Pak/IoStore container framing, integrity metadata and UTOC/UCAS pair relationships without claiming decrypted asset semantics or signature verification.
 - Add .NET single-file bundle and Linux NativeAOT structural metadata, plus bounded Mach-O Swift metadata inventories and validated direct record closures.
 - Add APK JNI exported-name and `RegisterNatives` relationship evidence with strict JNI modified UTF-8 handling.
+- Add a disabled-by-default experimental Linux de4dotEx sidecar adapter source/manifest; no third-party binary is bundled and its status remains `PARTIAL`.
 
 ### Changed
 

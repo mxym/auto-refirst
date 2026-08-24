@@ -140,3 +140,6 @@ JSON 与人类可读报告共享同一事实模型。常见状态包括 `CONFIRM
 - 由名称、字符串、单一 magic 或单个外部样本直接推广出的高置信检测。
 
 这些边界用于控制状态爆炸、误报和样本过拟合。后续能力只有在独立正例、扰动和负例能够共同关闭证据链时进入默认产品路径。
+## 11. 实验性 sidecar 工具
+
+`tools/de4dotex/` 提供 Linux/x86_64、默认关闭的 de4dotEx 适配器源码与精确 manifest，但不捆绑 de4dotEx/.NET/bubblewrap 二进制，也不进入主产品或 P0/P1。任何调用都视为可能执行目标代码，必须绑定显式 `--run` 授权、精确输入哈希、可信不可变工具树、namespace/cgroup/rlimit 与无网络沙箱。当前发布状态保持 `PARTIAL`；Windows/Wine 路线为 `NO-GO`，输出 DLL 必须由主产品重新解析后才能使用。
