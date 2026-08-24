@@ -465,6 +465,24 @@ def safe_source_path(value: str, label: str) -> str:
     return value
 
 
+def fixture_source_paths(value: str, label: str) -> tuple[str, ...]:
+    """Return tracked local sources without changing opaque repo/text semantics."""
+    parts = tuple(part.strip() for part in value.split("|"))
+    if any(not part for part in parts):
+        fail(f"{label} contains an empty source segment")
+    if len(parts) != len(set(parts)):
+        fail(f"{label} contains a duplicate source segment")
+
+    local = tuple(part.startswith("tests/") for part in parts)
+    if len(parts) > 1 and not all(local):
+        if any(local):
+            fail(f"{label} mixes local source paths with repository/text sources")
+        fail(f"{label} repository/text source contains the local-path delimiter")
+    if not any(local):
+        return ()
+    return tuple(safe_source_path(part, label) for part in parts)
+
+
 def verify_fixture_provenance(
     tree: dict[str, tuple[str, str]],
     blobs: dict[str, bytes],
@@ -520,9 +538,10 @@ def verify_fixture_provenance(
             )
             if license_path not in tree:
                 fail(f"public fixture license file is not tracked: {license_path}")
-        source = row["source_path_or_repo"]
-        if source.startswith("tests/"):
-            source = safe_source_path(source, f"public fixture row {number} source")
+        for source in fixture_source_paths(
+            row["source_path_or_repo"],
+            f"public fixture row {number} source",
+        ):
             if source not in tree:
                 fail(f"public fixture source path is not tracked: {source}")
             source_paths.add(source)

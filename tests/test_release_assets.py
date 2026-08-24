@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import csv
 import hashlib
 import io
 import json
@@ -653,6 +654,50 @@ def exercise_fixture_provenance_contract(
     provenance_oid = tree[contract.FIXTURE_PROVENANCE_PATH][1]
     sample_path = "tests/corpus/sample.bin"
     sample_digest = hashlib.sha256(blobs[tree[sample_path][1]]).hexdigest()
+
+    def with_source(value: str) -> bytes:
+        reader = csv.DictReader(
+            io.StringIO(blobs[provenance_oid].decode("utf-8"), newline="")
+        )
+        rows = list(reader)
+        if len(rows) != 1:
+            raise AssertionError("fixture provenance source mutation needs one row")
+        rows[0]["source_path_or_repo"] = value
+        output = io.StringIO(newline="")
+        writer = csv.DictWriter(
+            output,
+            fieldnames=contract.FIXTURE_PROVENANCE_FIELDS,
+            lineterminator="\n",
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+        return output.getvalue().encode("utf-8")
+
+    source_tree = dict(tree)
+    source_blobs = dict(blobs)
+    first_source = "tests/fixture-source/first.c"
+    second_source = "tests/fixture-source/second.c"
+    first_oid = "d" * 40
+    second_oid = "e" * 40
+    source_tree[first_source] = ("100644", first_oid)
+    source_tree[second_source] = ("100644", second_oid)
+    source_blobs[first_oid] = b"first fixture source\n"
+    source_blobs[second_oid] = b"second fixture source\n"
+    source_blobs[provenance_oid] = with_source(f"{first_source}|{second_source}")
+    if contract.verify_fixture_provenance(source_tree, source_blobs) != 1:
+        failures.append("fixture provenance two-source baseline count drifted")
+    else:
+        print("[PASS MUTATION] two tracked fixture sources accepted")
+
+    opaque_blobs = dict(blobs)
+    opaque_blobs[provenance_oid] = with_source(
+        "https://example.invalid/project/source-repository"
+    )
+    if contract.verify_fixture_provenance(tree, opaque_blobs) != 1:
+        failures.append("fixture provenance single repository URL baseline drifted")
+    else:
+        print("[PASS MUTATION] single repository URL source accepted")
+
     digest_blobs = dict(blobs)
     digest_blobs[provenance_oid] = digest_blobs[provenance_oid].replace(
         sample_digest.encode("ascii"),
@@ -682,6 +727,42 @@ def exercise_fixture_provenance_contract(
             "provenance inventory mismatch",
         )
     )
+    source_mutations = (
+        (
+            "fixture-provenance-second-source-untracked",
+            f"{first_source}|tests/fixture-source/untracked.c",
+            "source path is not tracked",
+        ),
+        (
+            "fixture-provenance-first-source-missing",
+            f"tests/fixture-source/missing.c|{second_source}",
+            "source path is not tracked",
+        ),
+        (
+            "fixture-provenance-empty-source-segment",
+            f"{first_source}||{second_source}",
+            "empty source segment",
+        ),
+        (
+            "fixture-provenance-duplicate-source-segment",
+            f"{first_source}| {first_source}",
+            "duplicate source segment",
+        ),
+        (
+            "fixture-provenance-mixed-source-kinds",
+            f"{first_source}|https://example.invalid/project/repo",
+            "mixes local source paths with repository/text sources",
+        ),
+        (
+            "fixture-provenance-url-pipe",
+            "https://example.invalid/project|source",
+            "repository/text source contains the local-path delimiter",
+        ),
+    )
+    for name, value, expected in source_mutations:
+        mutated_blobs = dict(source_blobs)
+        mutated_blobs[provenance_oid] = with_source(value)
+        mutation_cases.append((name, source_tree, mutated_blobs, expected))
     for name, mutated_tree, mutated_blobs, expected in mutation_cases:
         try:
             contract.verify_fixture_provenance(mutated_tree, mutated_blobs)
