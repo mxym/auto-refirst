@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -39,6 +40,25 @@ inline std::string path_utf8(const std::filesystem::path& path) {
     return out;
 #else
     return path.string();
+#endif
+}
+
+// Convert an already UTF-8 native path spelling to the separator convention
+// used by archive/container member names. The separator is explicit so this
+// can be regression-tested on any host without rewriting a literal backslash
+// that is a valid POSIX filename character.
+inline std::string normalize_native_path_separators(std::string text, char native_separator) {
+    if (native_separator == '\\') {
+        std::replace(text.begin(), text.end(), '\\', '/');
+    }
+    return text;
+}
+
+inline std::string generic_path_utf8(const std::filesystem::path& path) {
+#ifdef _WIN32
+    return normalize_native_path_separators(path_utf8(path), '\\');
+#else
+    return path_utf8(path);
 #endif
 }
 

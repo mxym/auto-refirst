@@ -839,12 +839,12 @@ void register_pyinstaller_artifacts(prts::AnalysisReport&report,const std::files
 }
 void register_container_artifacts(prts::AnalysisReport&report,const std::filesystem::path&input){
     auto lower=[](std::string x){std::transform(x.begin(),x.end(),x.begin(),[](unsigned char c){return char(std::tolower(c));});return x;};
-    auto reltext=[&](const std::filesystem::path&p,const std::filesystem::path&root){auto r=p.lexically_normal().lexically_relative(root.lexically_normal());return lower(prts::path_utf8(r));};
+    auto reltext=[&](const std::filesystem::path&p,const std::filesystem::path&root){auto r=p.lexically_normal().lexically_relative(root.lexically_normal());return lower(prts::generic_path_utf8(r));};
     auto add=[&](const std::filesystem::path&p,std::string kind,std::string role,std::string source,std::string priority){register_artifact_file(report,p,std::move(kind),std::move(role),std::move(source),input,"materialized_from_container",std::move(priority));};
     for(const auto&p:report.renpy_rpa_extract.files){auto r=reltext(p,report.renpy_rpa_extract.output_dir);const bool code=r.ends_with(".rpyc")||r.ends_with(".rpymc")||r.ends_with(".rpy");add(p,"renpy_rpa_member",code?"user_script":"container_member","Ren'Py RPA",code?"HIGH":"BULK");}
     if(report.renpy_extract.success)add(report.renpy_extract.pickle_path,"renpy_rpyc_pickle","decoded_script_data","Ren'Py RPYC","HIGH");
     for(const auto&p:report.wxapkg_extract.files){auto r=reltext(p,report.wxapkg_extract.output_dir);const bool code=r.ends_with(".js")||r.ends_with(".wxs")||r.ends_with(".wxml")||r.ends_with(".wxss")||r.ends_with(".json");add(p,"wxapkg_member",code?"app_code":"container_member","wxapkg",code?"HIGH":"BULK");}
-    for(const auto&p:report.asar_extract.files){auto r=prts::path_utf8(p.lexically_normal().lexically_relative(report.asar_extract.output_dir.lexically_normal()));const bool interesting=std::find(report.asar.interesting_paths.begin(),report.asar.interesting_paths.end(),r)!=report.asar.interesting_paths.end();add(p,"asar_member",interesting?"app_code":"container_member","Electron ASAR",interesting?"HIGH":"BULK");}
+    for(const auto&p:report.asar_extract.files){auto r=prts::generic_path_utf8(p.lexically_normal().lexically_relative(report.asar_extract.output_dir.lexically_normal()));const bool interesting=std::find(report.asar.interesting_paths.begin(),report.asar.interesting_paths.end(),r)!=report.asar.interesting_paths.end();add(p,"asar_member",interesting?"app_code":"container_member","Electron ASAR",interesting?"HIGH":"BULK");}
     for(const auto&p:report.autoit_extract.files){auto r=reltext(p,report.autoit_extract.output_dir);const bool code=r=="script.au3"||r=="script.tok";add(p,"autoit_member",code?"user_script":"container_member","AutoIt",code?"HIGH":"BULK");}
     std::set<std::string>apk_unity_metadata,apk_hermes;
     for(const auto&e:report.apk.entries){

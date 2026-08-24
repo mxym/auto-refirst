@@ -418,7 +418,8 @@ def main():
         case_dir.mkdir()
         ctoc = case_dir / "case.utoc"
         ctoc.write_bytes(build_utoc())
-        (case_dir / "case.ucas").write_bytes(bytes(16))
+        # One noncanonical companion name exercises the same fail-closed case
+        # matching contract on both case-sensitive and case-insensitive hosts.
         (case_dir / "CASE.UCAS").write_bytes(bytes(16))
         assert_state(ctoc, "iostore-utoc", "PARTIAL")
 

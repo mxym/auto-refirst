@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import hashlib,json,pathlib,struct,subprocess,sys,tempfile
+import hashlib,json,os,pathlib,struct,subprocess,sys,tempfile
 AR=pathlib.Path(sys.argv[1])
 LC_SYMTAB=0x2;LC_MAIN=0x80000028;LC_SEGMENT_64=0x19;LC_LOAD_DYLIB=0xc;LC_UUID=0x1b;LC_CODE_SIGNATURE=0x1d;LC_ENCRYPTION_INFO_64=0x2c;LC_BUILD_VERSION=0x32;LC_ROUTINES_64=0x1a;LC_FUNCTION_STARTS=0x26
 
@@ -188,8 +188,15 @@ def check_thin64(j):
     names={(x['segment'],x['name']) for x in j['sections']};assert ('__TEXT','__text') in names and ('__DATA','__mod_init_func') in names
     pe=j['pre_entry']['slices'][0];assert pe['init_functions']==[0x100000450];assert pe['term_functions']==[0x100000460];assert pe['thread_init_functions']==[0x100000480];assert pe['routine_init_address']==0x100000470
 
+def temporary_directory(prefix):
+    configured=os.environ.get('AUTO_REFIRST_TMP')
+    if configured:
+        root=pathlib.Path(configured);root.mkdir(parents=True,exist_ok=True)
+        return tempfile.TemporaryDirectory(prefix=prefix,dir=root)
+    return tempfile.TemporaryDirectory(prefix=prefix)
+
 def main():
-  with tempfile.TemporaryDirectory(prefix='auto-refirst-macho-') as td:
+  with temporary_directory(prefix='auto-refirst-macho-') as td:
     td=pathlib.Path(td);x86=thin64();arm=thin64(0x0100000c,0)
     p=td/'thin64';p.write_bytes(x86);j=analyze(p);check_thin64(j)
     # Text rendering should expose the same factual entry/pre-entry metadata.
