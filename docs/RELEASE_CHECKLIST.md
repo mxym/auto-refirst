@@ -84,7 +84,8 @@ For an RC/final candidate, not every routine patch:
 - [ ] Unpack the custom source archive in a fresh directory and re-run public/private-path and inventory hygiene checks. Without adding a `.git` directory, configure/build it with the exact full source commit supplied through `AUTO_REFIRST_SOURCE_COMMIT`, then verify the archive binary's `--version` identity.
 - [ ] Verify the release tag's peeled commit (`refs/tags/<tag>^{}`), not only its name or `targetCommitish`, equals the frozen public commit and that prerelease/stable status is intentional.
 - [ ] Download every published asset into a fresh directory and verify `SHA256SUMS` against those downloaded bytes.
-- [ ] Re-run `tests/check_release_assets.py` once per platform against that fresh download with local/remote tag checking enabled; staged-directory results do not substitute for download-back verification.
+- [ ] Fetch a fresh GitHub REST release response by exact tag after publication. Confirm it is published/non-draft, its prerelease state is intentional, and its uploaded asset inventory, sizes, SHA-256 digests, API URLs, and download URLs are an exact closure over the fresh download. Do not use `targetCommitish` as commit evidence.
+- [ ] Re-run `tests/check_release_assets.py` once per platform against that fresh download with local/remote tag checking plus `--github-release-json`/`--github-repository` enabled; staged-directory results do not substitute for download-back verification.
 - [ ] From the downloaded assets, re-run both platform binaries' `--version` checks (natively or through the documented compatibility runner), unpack each binary package and check its expected executable/legal-file inventory, and unpack the source archive to repeat the source hygiene and archive build/fallback checks.
 
 ## 10. Post-publication check

@@ -11,6 +11,9 @@ file in that directory and does not cover itself.
 The verifier binds the asset set to one clean public Git commit. It checks:
 
 - the current `HEAD`, clean worktree, and public source-hygiene gate;
+- every tracked public corpus payload against the exact
+  `tests/corpus/PROVENANCE.csv` inventory, redistribution flags, source/license
+  paths, and committed SHA-256 bytes;
 - exact `BUILD_INFO.txt` fields, hosted run IDs/head SHAs/results, and the
   `SEMANTICALLY_REPRODUCIBLE` contract without a bit-reproducibility claim;
 - product version and report schema against the frozen source declarations;
@@ -20,6 +23,9 @@ The verifier binds the asset set to one clean public Git commit. It checks:
   untracked, missing, or misplaced members;
 - root legal/notices/SBOM assets against their exact committed blobs;
 - optionally, the local tag peel and its remote tag object/peeled commit; and
+- optionally, a fresh GitHub REST release response against the published
+  non-draft/prerelease state and the exact downloaded asset names, sizes,
+  SHA-256 digests, API URLs, and download URLs; and
 - one downloaded platform binary's exact `--version` metadata, using either
   native execution or one explicit runner executable.
 
@@ -134,6 +140,40 @@ python3 tests/check_release_assets.py \
 Omit `--check-tag` only before a tag exists. If tag checking is enabled, any
 missing, stale, malformed, or local/remote mismatch is fatal. The final
 pre-publication and download-back gates must enable it.
+
+For the final download-back gate, fetch the release REST response after the
+release is published and keep it outside both the source worktree and downloaded
+asset directory. For example:
+
+```sh
+gh api \
+  -H 'Accept: application/vnd.github+json' \
+  repos/mxym/auto-refirst/releases/tags/<release-tag> \
+  > /outside/source/tree/github-release.json
+```
+
+Then add the response and repository identity to each platform invocation:
+
+```sh
+python3 tests/check_release_assets.py \
+  --source-root . \
+  --asset-dir /path/to/fresh-download \
+  --expected-commit <full-frozen-commit> \
+  --platform linux \
+  --native-binary \
+  --check-tag \
+  --remote origin \
+  --github-release-json /outside/source/tree/github-release.json \
+  --github-repository mxym/auto-refirst
+```
+
+GitHub release verification requires remote tag verification in the same run.
+The release response must describe a published, non-draft release whose
+prerelease flag agrees with the SemVer product version. Its uploaded asset list
+must be an exact closure over the fresh download, including `SHA256SUMS`; every
+asset must carry the GitHub `sha256:` digest matching the downloaded bytes.
+Because the remote tag peel supplies the commit binding, `target_commitish` is
+not treated as evidence of the release commit.
 
 Run the isolated negative suite when this contract changes:
 

@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
+import io
+import json
 import os
 import pathlib
 import re
@@ -65,6 +68,34 @@ MAX_ASSETS = 64
 MAX_SINGLE_ASSET_BYTES = 2 * 1024 * 1024 * 1024
 MAX_TOTAL_ASSET_BYTES = 4 * 1024 * 1024 * 1024
 MAX_CONTROL_BYTES = 64 * 1024
+MAX_RELEASE_METADATA_BYTES = 2 * 1024 * 1024
+GITHUB_REPOSITORY = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9][A-Za-z0-9._-]{0,99}"
+)
+FIXTURE_PROVENANCE_PATH = "tests/corpus/PROVENANCE.csv"
+FIXTURE_PROVENANCE_FIELDS = (
+    "path",
+    "kind",
+    "source_type",
+    "source_path_or_repo",
+    "license",
+    "license_file",
+    "toolchain_version",
+    "rebuild_command",
+    "target_platform_arch",
+    "reproducibility",
+    "redistribution_rights",
+    "redistributable",
+    "public_ci_allowed",
+    "sha256",
+    "public_action",
+    "notes",
+)
+MAX_PUBLIC_FIXTURES = 512
+
+
+class DuplicateJsonKey(ValueError):
+    """Raised when untrusted JSON repeats an object key."""
 
 
 def fail(message: str) -> None:
@@ -139,6 +170,47 @@ def read_small_utf8(path: pathlib.Path, label: str) -> str:
         return raw.decode("utf-8", errors="strict")
     except UnicodeDecodeError as exc:
         fail(f"{label} is not UTF-8: {exc}")
+
+
+def read_release_metadata(path: pathlib.Path) -> dict[str, object]:
+    label = "GitHub release metadata"
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        fail(f"{label} is unavailable: {exc}")
+    if is_link_or_reparse(resolved) or not resolved.is_file():
+        fail(f"{label} must be a regular non-linked file")
+    try:
+        raw = resolved.read_bytes()
+    except OSError as exc:
+        fail(f"cannot read {label}: {exc}")
+    if len(raw) > MAX_RELEASE_METADATA_BYTES:
+        fail(f"{label} exceeds {MAX_RELEASE_METADATA_BYTES} bytes")
+    if raw.startswith(b"\xef\xbb\xbf") or b"\0" in raw:
+        fail(f"{label} must be BOM-free and NUL-free UTF-8 JSON")
+
+    def strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise DuplicateJsonKey(key)
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> object:
+        raise ValueError(f"non-finite JSON number: {value}")
+
+    try:
+        document = json.loads(
+            raw.decode("utf-8", errors="strict"),
+            object_pairs_hook=strict_object,
+            parse_constant=reject_constant,
+        )
+    except (DuplicateJsonKey, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        fail(f"{label} is not strict JSON: {exc}")
+    if not isinstance(document, dict):
+        fail(f"{label} top level must be an object")
+    return document
 
 
 def hash_file(path: pathlib.Path) -> str:
@@ -380,6 +452,98 @@ def source_contract(
     return versions[0], schemas[0]
 
 
+def safe_source_path(value: str, label: str) -> str:
+    path = pathlib.PurePosixPath(value)
+    if (
+        not value
+        or "\\" in value
+        or path.is_absolute()
+        or ".." in path.parts
+        or path.as_posix() != value
+    ):
+        fail(f"{label} is not a safe repository-relative path: {value!r}")
+    return value
+
+
+def verify_fixture_provenance(
+    tree: dict[str, tuple[str, str]],
+    blobs: dict[str, bytes],
+) -> int:
+    if FIXTURE_PROVENANCE_PATH not in tree:
+        fail(f"release source omits {FIXTURE_PROVENANCE_PATH}")
+    provenance_oid = tree[FIXTURE_PROVENANCE_PATH][1]
+    try:
+        text = blobs[provenance_oid].decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        fail(f"public fixture provenance is not UTF-8: {exc}")
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    if tuple(reader.fieldnames or ()) != FIXTURE_PROVENANCE_FIELDS:
+        fail(
+            "public fixture provenance fields/order are not exact: "
+            f"expected={FIXTURE_PROVENANCE_FIELDS} actual={tuple(reader.fieldnames or ())}"
+        )
+    rows = list(reader)
+    if not rows or len(rows) > MAX_PUBLIC_FIXTURES:
+        fail("public fixture provenance rows must be non-empty and bounded")
+
+    row_paths: set[str] = set()
+    source_paths: set[str] = set()
+    for number, row in enumerate(rows, 2):
+        if set(row) != set(FIXTURE_PROVENANCE_FIELDS):
+            fail(f"public fixture provenance row {number} has malformed columns")
+        if any(row[field] is None or not row[field].strip() for field in FIXTURE_PROVENANCE_FIELDS):
+            fail(f"public fixture provenance row {number} has an empty field")
+        fixture_path = safe_source_path(row["path"], f"public fixture row {number} path")
+        if not fixture_path.startswith("tests/corpus/") or fixture_path == FIXTURE_PROVENANCE_PATH:
+            fail(f"public fixture row {number} path is outside the corpus inventory")
+        if fixture_path in row_paths:
+            fail(f"public fixture provenance contains duplicate path: {fixture_path}")
+        row_paths.add(fixture_path)
+        if fixture_path not in tree:
+            fail(f"public fixture provenance path is not tracked: {fixture_path}")
+        declared_hash = row["sha256"]
+        if not SHA256.fullmatch(declared_hash):
+            fail(f"public fixture provenance SHA-256 is invalid: {fixture_path}")
+        actual_hash = hashlib.sha256(blobs[tree[fixture_path][1]]).hexdigest()
+        if actual_hash != declared_hash:
+            fail(f"public fixture provenance SHA-256 mismatch: {fixture_path}")
+        if row["redistributable"] != "true":
+            fail(f"public fixture is not declared redistributable: {fixture_path}")
+        if row["public_ci_allowed"] not in ("true", "false"):
+            fail(f"public fixture public_ci_allowed is not canonical: {fixture_path}")
+        if row["public_action"] != "KEEP":
+            fail(f"public fixture action is not KEEP: {fixture_path}")
+        for license_path in row["license_file"].split("|"):
+            license_path = safe_source_path(
+                license_path,
+                f"public fixture row {number} license_file",
+            )
+            if license_path not in tree:
+                fail(f"public fixture license file is not tracked: {license_path}")
+        source = row["source_path_or_repo"]
+        if source.startswith("tests/"):
+            source = safe_source_path(source, f"public fixture row {number} source")
+            if source not in tree:
+                fail(f"public fixture source path is not tracked: {source}")
+            source_paths.add(source)
+
+    corpus_files = {
+        path
+        for path in tree
+        if path.startswith("tests/corpus/") and path != FIXTURE_PROVENANCE_PATH
+    }
+    required_rows = {
+        path for path in corpus_files if path not in source_paths or path in row_paths
+    }
+    if row_paths != required_rows:
+        fail(
+            "public fixture provenance inventory mismatch: "
+            f"missing={sorted(required_rows - row_paths)} "
+            f"extra={sorted(row_paths - required_rows)}"
+        )
+    return len(rows)
+
+
 def expected_archive_directories(prefix: str, paths: Iterable[str]) -> set[str]:
     result = {prefix}
     for relative in paths:
@@ -498,6 +662,92 @@ def verify_tag(root: pathlib.Path, tag: str, expected_commit: str, remote: str |
     return "local+remote"
 
 
+def verify_github_release(
+    document: dict[str, object],
+    repository: str,
+    info: dict[str, str],
+    assets: dict[str, pathlib.Path],
+    sums: dict[str, str],
+) -> str:
+    if not GITHUB_REPOSITORY.fullmatch(repository):
+        fail("--github-repository must be an OWNER/REPO name")
+    release_id = document.get("id")
+    if isinstance(release_id, bool) or not isinstance(release_id, int) or release_id <= 0:
+        fail("GitHub release metadata id must be a positive integer")
+    tag = info["release_tag"]
+    api_root = f"https://api.github.com/repos/{repository}"
+    web_root = f"https://github.com/{repository}"
+    expected_top = {
+        "url": f"{api_root}/releases/{release_id}",
+        "assets_url": f"{api_root}/releases/{release_id}/assets",
+        "html_url": f"{web_root}/releases/tag/{tag}",
+        "tag_name": tag,
+    }
+    for field, expected in expected_top.items():
+        if document.get(field) != expected:
+            fail(f"GitHub release metadata {field} does not match {expected!r}")
+    if document.get("draft") is not False:
+        fail("GitHub release metadata must describe a published non-draft release")
+    product_core = info["product_version"].split("+", 1)[0]
+    expected_prerelease = "-" in product_core
+    if document.get("prerelease") is not expected_prerelease:
+        fail(
+            "GitHub release prerelease state disagrees with the product version: "
+            f"expected={str(expected_prerelease).lower()}"
+        )
+    if not isinstance(document.get("published_at"), str) or not document["published_at"]:
+        fail("GitHub release metadata published_at must be non-empty")
+
+    release_assets = document.get("assets")
+    if not isinstance(release_assets, list) or len(release_assets) > MAX_ASSETS:
+        fail("GitHub release metadata assets must be a bounded list")
+    seen_names: set[str] = set()
+    seen_ids: set[int] = set()
+    for index, entry in enumerate(release_assets):
+        if not isinstance(entry, dict):
+            fail(f"GitHub release asset {index} must be an object")
+        name = entry.get("name")
+        if not isinstance(name, str):
+            fail(f"GitHub release asset {index} name must be a string")
+        safe_asset_name(name, f"GitHub release asset {index} name")
+        if name in seen_names:
+            fail(f"GitHub release metadata contains duplicate asset name: {name}")
+        seen_names.add(name)
+        asset_id = entry.get("id")
+        if isinstance(asset_id, bool) or not isinstance(asset_id, int) or asset_id <= 0:
+            fail(f"GitHub release asset {name} id must be a positive integer")
+        if asset_id in seen_ids:
+            fail(f"GitHub release metadata contains duplicate asset id: {asset_id}")
+        seen_ids.add(asset_id)
+        if entry.get("state") != "uploaded":
+            fail(f"GitHub release asset is not uploaded: {name}")
+        size = entry.get("size")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            fail(f"GitHub release asset size is invalid: {name}")
+        if name not in assets:
+            fail(f"GitHub release contains an asset absent from the download: {name}")
+        if size != assets[name].stat().st_size:
+            fail(f"GitHub release asset size disagrees with the download: {name}")
+        expected_digest = sums.get(name)
+        if expected_digest is None:
+            expected_digest = hash_file(assets[name])
+        if entry.get("digest") != f"sha256:{expected_digest}":
+            fail(f"GitHub release asset digest disagrees with the download: {name}")
+        expected_asset_url = f"{api_root}/releases/assets/{asset_id}"
+        expected_download_url = f"{web_root}/releases/download/{tag}/{name}"
+        if entry.get("url") != expected_asset_url:
+            fail(f"GitHub release asset API URL is not canonical: {name}")
+        if entry.get("browser_download_url") != expected_download_url:
+            fail(f"GitHub release asset download URL is not canonical: {name}")
+    if seen_names != set(assets):
+        fail(
+            "GitHub release/download asset inventory mismatch: "
+            f"missing={sorted(set(assets) - seen_names)} "
+            f"extra={sorted(seen_names - set(assets))}"
+        )
+    return "prerelease" if expected_prerelease else "stable"
+
+
 def parse_version_output(raw: bytes, stream: str) -> str:
     try:
         return raw.decode("utf-8", errors="strict")
@@ -562,12 +812,25 @@ def main() -> int:
     launch.add_argument("--binary-runner", type=pathlib.Path)
     parser.add_argument("--check-tag", action="store_true")
     parser.add_argument("--remote", help="remote name/path to verify; requires --check-tag")
+    parser.add_argument(
+        "--github-release-json",
+        type=pathlib.Path,
+        help="fresh GitHub REST release response to bind to the downloaded asset set",
+    )
+    parser.add_argument(
+        "--github-repository",
+        help="OWNER/REPO identity; required with --github-release-json",
+    )
     args = parser.parse_args()
 
     if not FULL_GIT_ID.fullmatch(args.expected_commit):
         fail("--expected-commit must be a full lowercase Git object id")
     if args.remote is not None and not args.check_tag:
         fail("--remote requires --check-tag")
+    if (args.github_release_json is None) != (args.github_repository is None):
+        fail("--github-release-json and --github-repository must be used together")
+    if args.github_release_json is not None and (not args.check_tag or args.remote is None):
+        fail("GitHub release verification requires --check-tag and --remote")
     root = repository_root(args.source_root)
     head = run_git(root, ["rev-parse", "HEAD"]).decode("ascii", errors="strict").strip()
     if head != args.expected_commit:
@@ -623,6 +886,7 @@ def main() -> int:
         fail("BUILD_INFO product_version disagrees with the frozen source contract")
     if info["report_schema_version"] != source_schema:
         fail("BUILD_INFO report_schema_version disagrees with the frozen source contract")
+    fixture_count = verify_fixture_provenance(tree, blobs)
     for name in LEGAL_ASSETS:
         if name not in tree:
             fail(f"required legal asset is not tracked at source root: {name}")
@@ -634,6 +898,16 @@ def main() -> int:
     tag_state = "skipped"
     if args.check_tag:
         tag_state = verify_tag(root, info["release_tag"], args.expected_commit, args.remote)
+
+    github_release_state = "skipped"
+    if args.github_release_json is not None:
+        github_release_state = verify_github_release(
+            read_release_metadata(args.github_release_json),
+            args.github_repository,
+            info,
+            assets,
+            sums,
+        )
 
     selected_name = info[f"{args.platform}_artifact"]
     verify_binary(
@@ -647,7 +921,8 @@ def main() -> int:
     print(
         f"[PASS] release assets: commit={args.expected_commit} assets={len(assets)} "
         f"hashed={len(sums)} archive_files={len(tree)} platform={args.platform} "
-        f"binary_metadata=exact tag_check={tag_state} closure=exact"
+        f"fixtures={fixture_count} binary_metadata=exact tag_check={tag_state} "
+        f"github_release={github_release_state} closure=exact"
     )
     return 0
 

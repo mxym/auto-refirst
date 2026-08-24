@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import io
+import json
 import os
 import pathlib
 import shutil
@@ -26,6 +27,8 @@ ARCHIVE = "auto-refirst-1.2.3-rc.1-source.tar.gz"
 ARCHIVE_ROOT = "auto-refirst-1.2.3-rc.1"
 LINUX_BINARY = "auto-refirst-linux-x64.py"
 WINDOWS_BINARY = "auto-refirst-windows-x64.py"
+REPOSITORY = "fixture-owner/fixture-repo"
+RELEASE_ID = 4242
 
 
 @dataclass
@@ -33,6 +36,7 @@ class Fixture:
     source: pathlib.Path
     assets: pathlib.Path
     remote: pathlib.Path
+    release_json: pathlib.Path
     head: str
 
 
@@ -106,6 +110,59 @@ def refresh_sums(fixture: Fixture) -> None:
     )
 
 
+def load_release(fixture: Fixture) -> dict[str, object]:
+    document = json.loads(fixture.release_json.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise AssertionError("fixture release metadata is not an object")
+    return document
+
+
+def write_release(fixture: Fixture, document: dict[str, object]) -> None:
+    write_text(
+        fixture.release_json,
+        json.dumps(document, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n",
+    )
+
+
+def refresh_release(fixture: Fixture) -> None:
+    api_root = f"https://api.github.com/repos/{REPOSITORY}"
+    web_root = f"https://github.com/{REPOSITORY}"
+    release_assets: list[dict[str, object]] = []
+    paths = sorted(
+        [path for path in fixture.assets.iterdir() if path.is_file()],
+        key=lambda path: path.name,
+    )
+    for offset, path in enumerate(paths, 1):
+        asset_id = 7000 + offset
+        release_assets.append(
+            {
+                "id": asset_id,
+                "name": path.name,
+                "state": "uploaded",
+                "size": path.stat().st_size,
+                "digest": f"sha256:{sha256(path)}",
+                "url": f"{api_root}/releases/assets/{asset_id}",
+                "browser_download_url": (
+                    f"{web_root}/releases/download/{TAG}/{path.name}"
+                ),
+            }
+        )
+    write_release(
+        fixture,
+        {
+            "id": RELEASE_ID,
+            "url": f"{api_root}/releases/{RELEASE_ID}",
+            "assets_url": f"{api_root}/releases/{RELEASE_ID}/assets",
+            "html_url": f"{web_root}/releases/tag/{TAG}",
+            "tag_name": TAG,
+            "draft": False,
+            "prerelease": True,
+            "published_at": "2026-08-24T00:00:00Z",
+            "assets": release_assets,
+        },
+    )
+
+
 def refresh_archive_binding(fixture: Fixture) -> None:
     info = load_info(fixture)
     info["source_archive_sha256"] = sha256(fixture.assets / ARCHIVE)
@@ -138,6 +195,7 @@ def initialize_fixture(parent: pathlib.Path, name: str) -> Fixture:
     source = root / "source"
     assets = root / "assets"
     remote = root / "remote.git"
+    release_json = root / "github-release.json"
     source.mkdir(parents=True)
     assets.mkdir()
     git(source, "init", "-q")
@@ -148,6 +206,35 @@ def initialize_fixture(parent: pathlib.Path, name: str) -> Fixture:
     write_text(source / "THIRD_PARTY_NOTICES.md", "# Fixture third-party notices\n")
     write_text(source / "SBOM.spdx.json", '{"spdxVersion":"SPDX-2.3","name":"fixture"}\n')
     write_text(source / "docs" / "PUBLIC.md", "public fixture documentation\n")
+    fixture_payload = b"project-owned fixture payload\n"
+    fixture_path = source / "tests" / "corpus" / "sample.bin"
+    fixture_path.parent.mkdir(parents=True)
+    fixture_path.write_bytes(fixture_payload)
+    fixture_row = {
+        "path": "tests/corpus/sample.bin",
+        "kind": "project data",
+        "source_type": "PROJECT_GENERATED",
+        "source_path_or_repo": "README.md",
+        "license": "Apache-2.0 for project-owned fixture data",
+        "license_file": "LICENSE",
+        "toolchain_version": "fixture generator 1",
+        "rebuild_command": "copy project-owned fixture payload",
+        "target_platform_arch": "platform-neutral",
+        "reproducibility": "SOURCE_REBUILD_DOCUMENTED",
+        "redistribution_rights": "OWNER_RIGHTS_ATTESTED",
+        "redistributable": "true",
+        "public_ci_allowed": "true",
+        "sha256": hashlib.sha256(fixture_payload).hexdigest(),
+        "public_action": "KEEP",
+        "notes": "Project-owned isolated verifier fixture.",
+    }
+    write_text(
+        source / contract.FIXTURE_PROVENANCE_PATH,
+        ",".join(contract.FIXTURE_PROVENANCE_FIELDS)
+        + "\n"
+        + ",".join(fixture_row[field] for field in contract.FIXTURE_PROVENANCE_FIELDS)
+        + "\n",
+    )
     write_text(
         source / "CMakeLists.txt",
         'set(AUTO_REFIRST_PRODUCT_VERSION "1.2.3-rc.1" CACHE STRING '
@@ -214,7 +301,13 @@ def initialize_fixture(parent: pathlib.Path, name: str) -> Fixture:
         "sanitizer_hosted_head_sha": head,
         "sanitizer_hosted_result": "PASS",
     }
-    fixture = Fixture(source=source, assets=assets, remote=remote, head=head)
+    fixture = Fixture(
+        source=source,
+        assets=assets,
+        remote=remote,
+        release_json=release_json,
+        head=head,
+    )
     write_info(fixture, info)
     archive_entries = load_archive_entries(fixture)
     for member, _ in archive_entries:
@@ -224,22 +317,35 @@ def initialize_fixture(parent: pathlib.Path, name: str) -> Fixture:
             member.mode = 0o644
     write_archive_entries(fixture, archive_entries)
     refresh_sums(fixture)
+    refresh_release(fixture)
     return fixture
 
 
-def invoke(fixture: Fixture) -> subprocess.CompletedProcess[str]:
+def invoke(
+    fixture: Fixture,
+    *,
+    github_release: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    command = [
+        sys.executable,
+        str(CHECKER),
+        "--source-root", str(fixture.source),
+        "--asset-dir", str(fixture.assets),
+        "--expected-commit", fixture.head,
+        "--platform", "linux",
+        "--binary-runner", sys.executable,
+        "--check-tag",
+        "--remote", str(fixture.remote),
+    ]
+    if github_release:
+        command.extend(
+            [
+                "--github-release-json", str(fixture.release_json),
+                "--github-repository", REPOSITORY,
+            ]
+        )
     return subprocess.run(
-        [
-            sys.executable,
-            str(CHECKER),
-            "--source-root", str(fixture.source),
-            "--asset-dir", str(fixture.assets),
-            "--expected-commit", fixture.head,
-            "--platform", "linux",
-            "--binary-runner", sys.executable,
-            "--check-tag",
-            "--remote", str(fixture.remote),
-        ],
+        command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -450,6 +556,147 @@ def mutate_legal_asset(fixture: Fixture) -> None:
     refresh_sums(fixture)
 
 
+def mutate_release_tag(fixture: Fixture) -> None:
+    document = load_release(fixture)
+    document["tag_name"] = "v9.9.9"
+    write_release(fixture, document)
+
+
+def mutate_release_draft(fixture: Fixture) -> None:
+    document = load_release(fixture)
+    document["draft"] = True
+    write_release(fixture, document)
+
+
+def mutate_release_prerelease(fixture: Fixture) -> None:
+    document = load_release(fixture)
+    document["prerelease"] = False
+    write_release(fixture, document)
+
+
+def mutate_release_missing_asset(fixture: Fixture) -> None:
+    document = load_release(fixture)
+    assets = document["assets"]
+    if not isinstance(assets, list) or not assets:
+        raise AssertionError("fixture release assets are unavailable")
+    assets.pop()
+    write_release(fixture, document)
+
+
+def mutate_release_duplicate_asset(fixture: Fixture) -> None:
+    document = load_release(fixture)
+    assets = document["assets"]
+    if not isinstance(assets, list) or not assets:
+        raise AssertionError("fixture release assets are unavailable")
+    assets.append(copy.deepcopy(assets[0]))
+    write_release(fixture, document)
+
+
+def release_asset(fixture: Fixture) -> dict[str, object]:
+    document = load_release(fixture)
+    assets = document["assets"]
+    if not isinstance(assets, list) or not assets or not isinstance(assets[0], dict):
+        raise AssertionError("fixture release asset is unavailable")
+    return document
+
+
+def mutate_release_digest(fixture: Fixture) -> None:
+    document = release_asset(fixture)
+    assets = document["assets"]
+    assert isinstance(assets, list) and isinstance(assets[0], dict)
+    assets[0]["digest"] = "sha256:" + "0" * 64
+    write_release(fixture, document)
+
+
+def mutate_release_size(fixture: Fixture) -> None:
+    document = release_asset(fixture)
+    assets = document["assets"]
+    assert isinstance(assets, list) and isinstance(assets[0], dict)
+    size = assets[0]["size"]
+    assert isinstance(size, int)
+    assets[0]["size"] = size + 1
+    write_release(fixture, document)
+
+
+def mutate_release_download_url(fixture: Fixture) -> None:
+    document = release_asset(fixture)
+    assets = document["assets"]
+    assert isinstance(assets, list) and isinstance(assets[0], dict)
+    assets[0]["browser_download_url"] = "https://example.invalid/wrong"
+    write_release(fixture, document)
+
+
+def mutate_release_duplicate_key(fixture: Fixture) -> None:
+    text = fixture.release_json.read_text(encoding="utf-8").rstrip("\n")
+    if not text.endswith("}"):
+        raise AssertionError("fixture release JSON is malformed")
+    write_text(fixture.release_json, text[:-1] + f',"tag_name":"{TAG}"}}\n')
+
+
+def exercise_fixture_provenance_contract(
+    fixture: Fixture,
+    failures: list[str],
+) -> int:
+    tree = contract.git_tree(fixture.source)
+    blobs = contract.batch_blob_contents(
+        fixture.source,
+        (oid for _, oid in tree.values()),
+    )
+    baseline_count = contract.verify_fixture_provenance(tree, blobs)
+    if baseline_count != 1:
+        failures.append(
+            f"fixture provenance baseline count drifted: expected=1 actual={baseline_count}"
+        )
+    else:
+        print("[PASS MUTATION] clean fixture provenance baseline accepted")
+
+    provenance_oid = tree[contract.FIXTURE_PROVENANCE_PATH][1]
+    sample_path = "tests/corpus/sample.bin"
+    sample_digest = hashlib.sha256(blobs[tree[sample_path][1]]).hexdigest()
+    digest_blobs = dict(blobs)
+    digest_blobs[provenance_oid] = digest_blobs[provenance_oid].replace(
+        sample_digest.encode("ascii"),
+        b"0" * 64,
+        1,
+    )
+    mutation_cases: list[
+        tuple[str, dict[str, tuple[str, str]], dict[str, bytes], str]
+    ] = [
+        (
+            "fixture-provenance-digest",
+            tree,
+            digest_blobs,
+            "provenance SHA-256 mismatch",
+        )
+    ]
+    orphan_tree = dict(tree)
+    orphan_blobs = dict(blobs)
+    orphan_oid = "f" * 40
+    orphan_tree["tests/corpus/orphan.bin"] = ("100644", orphan_oid)
+    orphan_blobs[orphan_oid] = b"unprovenanced fixture\n"
+    mutation_cases.append(
+        (
+            "fixture-provenance-inventory",
+            orphan_tree,
+            orphan_blobs,
+            "provenance inventory mismatch",
+        )
+    )
+    for name, mutated_tree, mutated_blobs, expected in mutation_cases:
+        try:
+            contract.verify_fixture_provenance(mutated_tree, mutated_blobs)
+        except SystemExit as exc:
+            if expected not in str(exc):
+                failures.append(
+                    f"{name} rejected for wrong reason: expected={expected!r} actual={exc}"
+                )
+            else:
+                print(f"[PASS MUTATION] {name} rejected")
+        else:
+            failures.append(f"{name} was not rejected")
+    return len(mutation_cases)
+
+
 def main() -> int:
     cases: tuple[tuple[str, Callable[[Fixture], None], str], ...] = (
         ("dirty-source", mutate_dirty_source, "source worktree is not clean"),
@@ -486,6 +733,17 @@ def main() -> int:
         ("binary-metadata", mutate_binary_metadata, "binary metadata mismatch"),
         ("legal-asset", mutate_legal_asset, "release legal asset differs"),
     )
+    release_cases: tuple[tuple[str, Callable[[Fixture], None], str], ...] = (
+        ("github-release-tag", mutate_release_tag, "tag_name does not match"),
+        ("github-release-draft", mutate_release_draft, "published non-draft"),
+        ("github-release-prerelease", mutate_release_prerelease, "prerelease state disagrees"),
+        ("github-release-missing-asset", mutate_release_missing_asset, "inventory mismatch"),
+        ("github-release-duplicate-asset", mutate_release_duplicate_asset, "duplicate asset name"),
+        ("github-release-digest", mutate_release_digest, "digest disagrees"),
+        ("github-release-size", mutate_release_size, "size disagrees"),
+        ("github-release-download-url", mutate_release_download_url, "download URL is not canonical"),
+        ("github-release-duplicate-key", mutate_release_duplicate_key, "not strict JSON"),
+    )
     failures: list[str] = []
     with tempfile.TemporaryDirectory(prefix="auto-refirst-release-assets-") as raw:
         parent = pathlib.Path(raw)
@@ -495,10 +753,35 @@ def main() -> int:
             failures.append(f"clean baseline rejected:\n{accepted.stdout}{accepted.stderr}")
         else:
             print("[PASS MUTATION] clean staged/download asset baseline accepted")
+        release_baseline = initialize_fixture(parent, "github-release-baseline")
+        accepted_release = invoke(release_baseline, github_release=True)
+        if accepted_release.returncode != 0:
+            failures.append(
+                "clean GitHub release baseline rejected:\n"
+                f"{accepted_release.stdout}{accepted_release.stderr}"
+            )
+        else:
+            print("[PASS MUTATION] clean GitHub release/download baseline accepted")
+        provenance_negatives = exercise_fixture_provenance_contract(
+            release_baseline,
+            failures,
+        )
         for name, mutate, expected in cases:
             fixture = initialize_fixture(parent, name)
             mutate(fixture)
             completed = invoke(fixture)
+            output = completed.stdout + completed.stderr
+            if completed.returncode == 0 or expected not in output:
+                failures.append(
+                    f"{name} was not rejected as expected: rc={completed.returncode} "
+                    f"expected={expected!r}\n{output}"
+                )
+            else:
+                print(f"[PASS MUTATION] {name} rejected")
+        for name, mutate, expected in release_cases:
+            fixture = initialize_fixture(parent, name)
+            mutate(fixture)
+            completed = invoke(fixture, github_release=True)
             output = completed.stdout + completed.stderr
             if completed.returncode == 0 or expected not in output:
                 failures.append(
@@ -512,7 +795,10 @@ def main() -> int:
         for failure in failures:
             print(f"  - {failure}")
         return 1
-    print(f"[PASS MUTATION] release asset self-test: negatives={len(cases)}")
+    print(
+        "[PASS MUTATION] release asset self-test: "
+        f"negatives={len(cases) + len(release_cases) + provenance_negatives}"
+    )
     return 0
 
 
