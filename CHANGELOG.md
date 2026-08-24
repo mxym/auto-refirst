@@ -2,9 +2,15 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- Separate historical Alpha evaluation figures, the earlier maintainer-candidate regression totals, and the exact `v0.1.0-rc.2` validation evidence.
+- Document the bounded algorithm paths that shipped in RC.2, the experimental de4dotEx adapter, and the dynamic-observer work that remains research-only.
+- Correct the public P0/P1 gate description and require capability/limitation/research/evidence reconciliation during release freeze.
+
 ## [0.1.0-rc.2] - 2026-08-24
 
-Second release candidate, adding bounded ecosystem coverage and strengthening exact-commit CI, portability, and release-asset verification. Publication remains subject to the hosted CI and release-asset gates in `docs/RELEASE_CHECKLIST.md`.
+Second release candidate, adding bounded ecosystem coverage and strengthening exact-commit CI, portability, and release-asset verification. The published candidate passed the hosted CI and release-asset gates recorded in its release metadata.
 
 ### Added
 
@@ -12,6 +18,7 @@ Second release candidate, adding bounded ecosystem coverage and strengthening ex
 - Add Unreal Pak/IoStore container framing, integrity metadata and UTOC/UCAS pair relationships without claiming decrypted asset semantics or signature verification.
 - Add .NET single-file bundle and Linux NativeAOT structural metadata, plus bounded Mach-O Swift metadata inventories and validated direct record closures.
 - Add APK JNI exported-name and `RegisterNatives` relationship evidence with strict JNI modified UTF-8 handling.
+- Add bounded PE64/x64 TEA/XTEA, RC4 KSA and AES-NI recognition, plus context-closed CryptoAPI/BCrypt/OpenSSL EVP parameter and key/IV-use evidence.
 - Add a disabled-by-default experimental Linux de4dotEx sidecar adapter source/manifest; no third-party binary is bundled and its status remains `PARTIAL`.
 
 ### Changed

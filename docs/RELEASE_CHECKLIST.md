@@ -7,6 +7,7 @@ This checklist is the maintainer gate for public auto-refirst prereleases and re
 - [ ] Record the exact candidate commit and confirm the worktree is clean.
 - [ ] Allow only release-blocker fixes after the freeze begins.
 - [ ] Run `git diff --check` and verify the release version/changelog are intentional.
+- [ ] Before the freeze, reconcile both READMEs across four explicit dimensions: current capabilities, current limitations, research/in-progress boundaries, and test/evidence scope. Updating only the version, changelog, or release body is insufficient.
 - [ ] Confirm the public tree contains no private development history, internal audit/collaboration material, credentials, private paths, or non-redistributable fixtures.
 
 ## 2. Provenance and supply chain
@@ -55,6 +56,7 @@ For changes touching an ecosystem/parser, run its focused positive, mutation/cor
 For an RC/final candidate, not every routine patch:
 
 - [ ] Run the retained maintainer-only regression corpus without copying private/non-redistributable bytes into the public tree or release assets.
+- [ ] Bind every maintainer-only count claimed as release evidence to the exact frozen commit. Results from an earlier candidate do not transfer; when retained only as historical context, label them non-gating and state explicitly whether they were rerun on the frozen commit.
 - [ ] Re-run the current frozen external holdout/maturity checks when a change can affect ranking, evidence promotion, resource behavior, or broad parser/orchestration behavior.
 - [ ] Compare resource ceilings and externally validated capability claims with `docs/VALIDATION.md`; investigate regressions before release.
 
@@ -69,6 +71,7 @@ For an RC/final candidate, not every routine patch:
 ## 8. Documentation and public contract
 
 - [ ] `README.md` and `README_EN.md` agree on version, safety, supported targets, capabilities, and limitations.
+- [ ] Diff the frozen candidate against the previous release and account for every user-visible capability/status change in both READMEs: completed, experimental, research-only, deferred/NO-GO, and no-longer-applicable limitation text.
 - [ ] `docs/CAPABILITIES.md`, `docs/VALIDATION.md`, `docs/CLI.md`, and `docs/BUILD.md` match implemented behavior.
 - [ ] `CHANGELOG.md` records user-visible fixes, compatibility changes, and known release limitations.
 - [ ] New claims are backed by reproducible evidence and do not generalize beyond the tested mechanism/version/layout boundary.

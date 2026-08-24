@@ -13,13 +13,14 @@ P0 校验：
 - nested executable 与 recursive artifact graph；
 - model trust 与 CPython bytecode ingress；
 - JSON/text/version 与 `0/1/2/3/4` process contract；
-- APK/Hermes child、APK/JNI J0-J4 结构关系、Mach-O/Swift、.NET bundle/NativeAOT 与
-  Unreal container 的有界静态 gate；
+- APK/Hermes child 与 APK/JNI J0-J4 结构关系的有界静态 gate；
 - Windows junction/reparse 输出安全（Windows runner）。
 
 ## P1 — source-generated integration
 
 P1 从仓库源码构建普通 native、crypto、runtime-child/runtime-parent fixtures，并验证分析仍保持 static-only。Python bytecode fixture 由测试脚本按固定字节格式生成。
+
+P1 还运行 .NET bundle/NativeAOT、Mach-O/Swift、Unreal Pak/IoStore 与完整 Hermes HBC 的 source/project-generated focused gates；这些 gate 不属于 P0。
 
 运行：
 
@@ -28,6 +29,14 @@ python3 tests/run_public_regression.py --binary build/auto-refirst --tier all
 ```
 
 P0/P1 不下载 challenge corpus，不执行分析目标，不需要任何私有 fixture root。
+
+## RC.2 exact-commit 证据边界
+
+`v0.1.0-rc.2` 的公开冻结提交为 `8cb0416d6b273c1807948ae89bd4ff8043fb1d4e`。该提交自身的发布证据包括本地 Linux Release/ASan、原生 Windows、三项 hosted exact-commit CI（runs `32693325705`、`32693325671`、`32693325702`），以及发布后九件资产的 fresh download-back 双平台复核。
+
+上一阶段维护候选的 maintainer-only 完整回归统计（125 PASS、25 个 Windows-labelled PASS、0 SKIP）没有在 `8cb0416` 上重跑。它不是 RC.2 exact-commit 证据，不能用于扩大 RC.2 的能力或兼容性声明。
+
+完整 hosted run、资产哈希和验证边界见 [v0.1.0-rc.2 发布页](https://github.com/mxym/auto-refirst/releases/tag/v0.1.0-rc.2)。
 
 ## Sanitizer surface
 

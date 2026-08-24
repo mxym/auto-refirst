@@ -69,9 +69,16 @@
 
 组合 IAT/调用参数/PEB/Native API/异常/时序等证据，区分明确调用语义、弱线索和 bait。详细规则见 [ANTI_DEBUG.md](ANTI_DEBUG.md)。
 
-### 加密
+### 有界算法与加密使用识别
 
-覆盖常见 AES/RC4/TEA/XTEA、Windows CryptoAPI/BCrypt、OpenSSL EVP 等调用或常量使用模式。只有调用链、参数/数据流或多信号结构闭合时才提升置信度。
+在带可验证 `RUNTIME_FUNCTION` 边界的 PE64/x64 布局中，当前产品提供以下有界路径：
+
+- TEA/XTEA-family 的 delta、shift、XOR/add/sub loop 与 key-argument 组合；
+- RC4 KSA 的 256-byte identity S-box 初始化、indexed state/key access、swap 与 key-length modulo data flow；
+- AES-NI key schedule、round-key layout 和 encrypt/decrypt consumer 关系；
+- Windows CryptoAPI/BCrypt 与 OpenSSL EVP 的 import-call、selector/mode、参数和有界 key/IV object 关系。
+
+只有函数边界、调用链、参数/数据流或多信号结构闭合时才提升状态。单独出现 S 盒、delta、API 名、字符串或常量只产生候选信号。上述能力不构成任意架构/编译布局上的通用算法分类、任意密钥恢复、明文验证或加密正确性证明。
 
 ### 隐式执行与解释器边界
 
@@ -140,6 +147,11 @@ JSON 与人类可读报告共享同一事实模型。常见状态包括 `CONFIRM
 - 由名称、字符串、单一 magic 或单个外部样本直接推广出的高置信检测。
 
 这些边界用于控制状态爆炸、误报和样本过拟合。后续能力只有在独立正例、扰动和负例能够共同关闭证据链时进入默认产品路径。
+
 ## 11. 实验性 sidecar 工具
 
-`tools/de4dotex/` 提供 Linux/x86_64、默认关闭的 de4dotEx 适配器源码与精确 manifest，但不捆绑 de4dotEx/.NET/bubblewrap 二进制，也不进入主产品或 P0/P1。任何调用都视为可能执行目标代码，必须绑定显式 `--run` 授权、精确输入哈希、可信不可变工具树、namespace/cgroup/rlimit 与无网络沙箱。当前发布状态保持 `PARTIAL`；Windows/Wine 路线为 `NO-GO`，输出 DLL 必须由主产品重新解析后才能使用。
+`tools/de4dotex/` 提供 Linux/x86_64、默认关闭的实验性 de4dotEx 适配器源码与精确 manifest，但不捆绑 de4dotEx/.NET/bubblewrap 二进制，也不进入主产品或 P0/P1。它是辅助检测/受控去混淆路径，不构成任意 .NET 混淆器的通用还原支持。任何调用都视为可能执行目标代码，必须绑定显式 `--run` 授权、精确输入哈希、可信不可变工具树、namespace/cgroup/rlimit 与无网络沙箱。当前发布状态保持 `PARTIAL`；Windows/Wine 路线为 `NO-GO`，输出 DLL 必须由主产品重新解析后才能使用。
+
+## 12. 研究副产品边界
+
+超出上述已验证模式、ABI 与布局的更多算法泛化，以及内核/虚拟化动态观察器，仍处于独立研究与评估中。它们不属于 `0.1.0-rc.2` 的公开能力合同、默认执行路径、P0/P1 或发布资产，也不构成支持、兼容性或隐蔽性承诺。
