@@ -81,45 +81,14 @@ jobs:
           cmake --build build --parallel 2 --target
           auto_refirst_public_provenance_check
           auto_refirst_public_install_stage_check
-      - name: Assert source remains clean
-        run: |
-          source_status="$(git status --porcelain=v1 --untracked-files=all)"
-          test -z "$source_status"
-
-  authorized-runtime:
-    name: Authorized runtime tests (not static-only)
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    env:
-      CC: gcc-13
-      CXX: g++-13
-    steps:
-      - name: Checkout exact event commit
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-      - name: Assert exact clean checkout
-        env:
-          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: |
-          test -e .git
-          actual_sha="$(git rev-parse --verify HEAD)"
-          test "$actual_sha" = "$EXPECTED_SHA"
-          source_status="$(git status --porcelain=v1 --untracked-files=all)"
-          test -z "$source_status"
-      - name: Public source hygiene
-        run: python3 tests/check_public_source_hygiene.py --require-clean
-      - name: Configure strict Release
-        run: >-
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          -DAUTO_REFIRST_WARNINGS_AS_ERRORS=ON
-      - name: Build
-        run: cmake --build build --parallel 2
+      # The gcc-13 static job already owns the exact strict Release build that
+      # the authorized runtime tests need. Reuse it on non-PR events instead
+      # of checking out/configuring/building the same tree in a second job.
       - name: Directory orchestration with authorized runtime
+        if: github.event_name != 'pull_request' && matrix.compiler == 'gcc-13'
         run: python3 tests/test_directory_orchestration.py build/auto-refirst
       - name: Runtime authorization boundary
+        if: github.event_name != 'pull_request' && matrix.compiler == 'gcc-13'
         run: python3 tests/test_runtime_authorization.py build/auto-refirst
       - name: Assert source remains clean
         run: |
