@@ -4,7 +4,8 @@
 No upstream payload bytes are emitted. Raw references contain only label, declared
 Python minor, module name, payload size, and SHA-256. Semantic hashes are computed
 by the project's own public marshal helper so generation uses exactly the product's
-semantic normalization implementation.
+semantic normalization implementation. Repeating the same LABEL for independently
+built samples intentionally emits multiple rows for verified compiler-output variants.
 """
 from __future__ import annotations
 
