@@ -33,6 +33,10 @@ int main(){
         need(a.bootstrap_reference_status=="REFERENCE_DIFF","Windows optional difference must reject");
     }
     {
+        auto a=modern(true);a.bootstrap_modules.back()=match("pyimod04_pywin32","EXTRACT_FAILED","",true);prts::finalize_pyinstaller_bootstrap_reference(a);
+        need(a.bootstrap_reference_status=="REFERENCE_DIFF","Windows optional extraction failure with a known reference must reject");
+    }
+    {
         auto a=modern();a.bootstrap_modules[1]=match("pyimod02_importers","SEMANTIC_MATCH","R",true);prts::finalize_pyinstaller_bootstrap_reference(a);
         need(a.bootstrap_reference_status=="REFERENCE_MATCH"&&a.bootstrap_match_mode=="MIXED","mixed modern match");
     }
