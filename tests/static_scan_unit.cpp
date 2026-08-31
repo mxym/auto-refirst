@@ -56,6 +56,18 @@ int main() {
     bool saw_pyz=false;for(const auto&f:pyz_findings)if(f.family=="PyInstaller"){saw_pyz=true;if(f.state!="SUSPECTED"||f.kind!="container_hint")fail("raw PYZ marker was promoted above route-only SUSPECTED");}
     if(!saw_pyz)fail("raw PYZ marker route-only finding lost");
 
+    const std::string pyinstaller_text="PyInstaller pyimod bootstrap bait";
+    auto pyinstaller_scan=scan(pyinstaller_text);
+    if(!pyinstaller_scan.hints.pyinstaller)fail("PyInstaller string route lost");
+    auto pyinstaller_findings=prts::detect_common(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(pyinstaller_text.data()),pyinstaller_text.size()),pe,elf,pyinstaller_scan);
+    bool saw_pyinstaller_string=false;for(const auto&f:pyinstaller_findings)if(f.family=="PyInstaller"){saw_pyinstaller_string=true;if(f.state!="SUSPECTED")fail("string-only PyInstaller evidence was promoted above SUSPECTED");}
+    if(!saw_pyinstaller_string)fail("PyInstaller string route-only finding lost");
+
+    if(pyz_scan.embedded.size()!=1||pyz_scan.embedded[0].kind!="PYZ"||pyz_scan.embedded[0].state!="SUSPECTED")fail("raw PYZ embedded marker retained high-confidence state");
+    const std::string gdpc_text="xxxxGDPCjunk";
+    auto gdpc_scan=scan(gdpc_text);
+    if(!gdpc_scan.hints.godot||gdpc_scan.embedded.size()!=1||gdpc_scan.embedded[0].kind!="GodotPCK"||gdpc_scan.embedded[0].state!="SUSPECTED")fail("raw GDPC embedded marker retained high-confidence state");
+
     std::cout << "PASS\n";
     return 0;
 }

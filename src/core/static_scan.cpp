@@ -114,8 +114,8 @@ EmbeddedScanPart scan_embedded_part(std::span<const std::uint8_t>d){EmbeddedScan
         switch(c){case 'M':case 0x7f:case 'P':case 'G':case 'K':case 0x6b:case 0xb9:case 0x20:case 0x81:case 0x3d:case 0x0f:case 0xff:case 0xfb:case 0xfa:case 0xf0:case 0xf1:break;default:continue;}
         if(o&&c=='M'&&d[o+1]=='Z'){std::uint64_t sz=0;if(valid_pe_at(d,o,sz))r.embedded.push_back({"PE",o,sz,true,"CONFIRMED",std::nullopt,"validated MZ/PE headers and sections"});}
         else if(o&&c==0x7f&&d[o+1]=='E'&&d[o+2]=='L'&&d[o+3]=='F'&&valid_elf_at(d,o))r.embedded.push_back({"ELF",o,0,true,"CONFIRMED",std::nullopt,"validated ELF ident"});
-        else if(c=='P'&&d[o+1]=='Y'&&d[o+2]=='Z'&&d[o+3]==0){r.hints.pyinstaller=true;r.embedded.push_back({"PYZ",o,0,false,"LIKELY",0.90,"PYZ magic candidate; container parser must validate"});}
-        else if(c=='G'&&d[o+1]=='D'&&d[o+2]=='P'&&d[o+3]=='C'){r.hints.godot=true;r.embedded.push_back({"GodotPCK",o,0,false,"LIKELY",0.90,"Godot PCK magic candidate; PCK parser must validate"});}
+        else if(c=='P'&&d[o+1]=='Y'&&d[o+2]=='Z'&&d[o+3]==0){r.hints.pyinstaller=true;r.embedded.push_back({"PYZ",o,0,false,"SUSPECTED",0.55,"PYZ magic candidate; container parser must validate"});}
+        else if(c=='G'&&d[o+1]=='D'&&d[o+2]=='P'&&d[o+3]=='C'){r.hints.godot=true;r.embedded.push_back({"GodotPCK",o,0,false,"SUSPECTED",0.55,"Godot PCK magic candidate; PCK parser must validate"});}
         else if(c=='K'&&d[o+1]=='A'&&(d[o+2]=='X'||d[o+2]=='Y'))r.hints.nuitka=true;
         else if(c==0x6b&&d[o+1]==0x43&&d[o+2]==0xca&&d[o+3]==0x52)r.hints.autoit=true;
         else if((c==0xb9&&d[o+1]==0x79&&d[o+2]==0x37&&d[o+3]==0x9e)||(c==0x47&&d[o+1]==0x86&&d[o+2]==0xc8&&d[o+3]==0x61)||(c==0x20&&d[o+1]==0x37&&d[o+2]==0xef&&d[o+3]==0xc6)){r.hints.crypto=true;if(r.crypto_delta_offsets.size()<512)r.crypto_delta_offsets.push_back(o);}
@@ -141,7 +141,7 @@ std::vector<Finding> detect_common(std::span<const std::uint8_t>d,const PeInfo&p
     // Ecosystem/runtime anchors. Strong parsers will refine confidence later.
     for(auto&s:scan.interesting_strings){std::string low=s.value;std::transform(low.begin(),low.end(),low.begin(),[](unsigned char c){return char(std::tolower(c));});
         auto add=[&](std::string fam,std::string ev,double c){for(auto&x:out)if(x.family==fam)return;Finding f;f.kind="ecosystem";f.family=std::move(fam);f.state=c>=0.75?"LIKELY":"SUSPECTED";f.confidence=c;f.evidence.push_back(std::move(ev));f.ranges.push_back({s.offset,s.value.size(),"string"});out.push_back(std::move(f));};
-        if(low.find("pyinstaller")!=std::string::npos||low.find("pyimod")!=std::string::npos)add("PyInstaller","PyInstaller bootstrap/string anchor",0.75);
+        if(low.find("pyinstaller")!=std::string::npos||low.find("pyimod")!=std::string::npos)add("PyInstaller","PyInstaller bootstrap/string anchor (route-only)",0.70);
         if(low.find("nuitka")!=std::string::npos)add("Nuitka","Nuitka string anchor",0.72);
         if(contains_delimited_phrase(low,"godot")||contains_delimited_phrase(low,"encrypted pack"))add("Godot","Godot identifier/pack string anchor (route-only)",0.70);
         if(low.find("python")!=std::string::npos)add("CPython-derived","Python runtime string anchor",0.55);
