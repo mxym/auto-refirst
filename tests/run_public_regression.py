@@ -327,6 +327,12 @@ def p0_report_json(binary:pathlib.Path,td:pathlib.Path) -> None:
     assert text_cp.returncode==0 and json_cp.returncode==0,(text_cp.returncode,json_cp.returncode)
     en=text_cp.stdout; obj=json.loads(json_cp.stdout)
     assert "auto-refirst Analysis" in en and obj["format"]["kind"]=="ELF" and obj["report_schema_version"]=="1.0"
+    zh=run([binary,p,"--report-lang=zh"]).stdout
+    assert "auto-refirst 分析报告" in zh and "分析指引:" in zh and "可见假设: 声明入口仍是默认分析假设" in zh,zh
+    assert "No evidence-gated runtime observation modality was established" not in zh and "absence of alternate evidence is not proof" not in zh,zh
+    zh_pyc=td/"report-zh.pyc";zh_pyc.write_bytes(pyc310());zh_pyc_text=run([binary,zh_pyc,"--report-lang=zh"]).stdout
+    assert "与官方 CPython 发布系列的 magic 值精确匹配" in zh_pyc_text,zh_pyc_text
+    assert "将反编译源码视为派生辅助信息" in zh_pyc_text and "official CPython release-family magic matched exactly" not in zh_pyc_text,zh_pyc_text
     bad=run([binary,p,"--report-lang=xx"],check=False); assert bad.returncode==2
     version_contract(binary)
     d=td/"report-dir";d.mkdir();(d/"sample.bin").write_bytes(minimal_elf())
