@@ -36,18 +36,19 @@ std::optional<Finding> build_pyinstaller_cpython_path(const AnalysisReport& r){
     Finding f;f.kind="analysis_path";f.family="PyInstaller -> CPython";f.state="CONFIRMED";f.variant=r.pyinstaller.bootstrap_reference_label;
     f.fields["bootstrap_reference"]=r.pyinstaller.bootstrap_reference_label;
     f.fields["bootstrap_match_mode"]=r.pyinstaller.bootstrap_match_mode;
+    f.fields["bootstrap_profile"]=r.pyinstaller.bootstrap_profile;
     f.fields["bootstrap_hypothesis"]="ELIMINATED";
     f.fields["cpython_runtime_count"]=std::to_string(r.cpython_runtimes.size());
-    int owned=0,all=0;bool struct_match=false;
+    const auto required=pyinstaller_bootstrap_required_modules(r.pyinstaller);int owned=0;bool struct_match=false,struct_present=false;
     for(const auto&m:r.pyinstaller.bootstrap_modules){
         const bool matched=m.state=="EXACT_MATCH"||m.state=="SEMANTIC_MATCH"||m.state=="OPCODE_NORMALIZED_SEMANTIC_MATCH";
-        if(matched)++all;
-        if(m.name=="struct")struct_match=matched;
-        else if(m.name=="pyimod01_archive"||m.name=="pyimod02_importers"||m.name=="pyimod03_ctypes"||m.name=="pyimod04_pywin32")owned+=matched?1:0;
+        if(m.name=="struct"){struct_present=true;struct_match=matched;continue;}
+        if(matched&&std::find(required.begin(),required.end(),m.name)!=required.end())++owned;
     }
-    f.fields["pyinstaller_loader_modules_matched"]=std::to_string(owned)+"/4";
-    f.fields["preload_modules_matched"]=std::to_string(all)+"/5";
-    f.evidence.push_back("all four PyInstaller-owned preload modules match one official loader generation");
+    const int preload_matched=owned+(struct_match?1:0);const auto preload_total=required.size()+(struct_present?1u:0u);
+    f.fields["pyinstaller_loader_modules_matched"]=std::to_string(owned)+"/"+std::to_string(required.size());
+    f.fields["preload_modules_matched"]=std::to_string(preload_matched)+"/"+std::to_string(preload_total);
+    f.evidence.push_back("all required PyInstaller-owned preload modules for "+r.pyinstaller.bootstrap_profile+" match one official loader generation");
     if(struct_match)f.evidence.push_back("stdlib bootstrap module struct also matches the known reference payload");
     f.evidence.push_back("bootstrap-loader modification hypothesis is eliminated by reference validation");
 

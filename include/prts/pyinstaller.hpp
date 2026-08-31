@@ -20,6 +20,7 @@ struct PyInstEntry {
 struct PyInstBootstrapModuleMatch {
     std::string name,state,sha256,semantic_sha256,normalized_semantic_sha256,reference_label,semantic_error,normalize_error,normalization_source;
     std::uint64_t size=0,semantic_error_offset=0,normalized_code_units=0;
+    bool reference_available=false;
 };
 struct PyInstArchiveInfo {
     bool valid=false;
@@ -34,6 +35,7 @@ struct PyInstArchiveInfo {
     std::string bootstrap_reference_status;
     std::string bootstrap_reference_label;
     std::string bootstrap_match_mode;
+    std::string bootstrap_profile;
     std::vector<PyInstBootstrapModuleMatch> bootstrap_modules;
 
 };
@@ -85,5 +87,7 @@ std::string pyinstaller_entry_role(const PyInstArchiveInfo& info,const PyInstEnt
 Finding pyinstaller_finding(const PyInstArchiveInfo& info);
 
 void analyze_pyinstaller_bootstrap(std::span<const std::uint8_t> data,PyInstArchiveInfo& info,const CPythonInfo* cpython=nullptr);
+void finalize_pyinstaller_bootstrap_reference(PyInstArchiveInfo& info);
+std::vector<std::string> pyinstaller_bootstrap_required_modules(const PyInstArchiveInfo& info);
 Finding pyinstaller_bootstrap_finding(const PyInstArchiveInfo& info);
 }
