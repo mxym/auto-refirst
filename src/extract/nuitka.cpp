@@ -117,15 +117,18 @@ NuitkaInfo detect_nuitka(std::span<const std::uint8_t>d,const PeInfo&pe,const El
         x.variant=std::string("onefile-")+(comp?"KAY-zstd":"KAX-raw")+(a.win?"-win":"-posix")+(a.crc?"-crc":"");
         if(best.decompression_limited||!best.valid||x.entries.size()>best.entries.size())best=std::move(x);
     }
-    auto has=[&](std::string_view q){return std::search(d.begin(),d.end(),q.begin(),q.end())!=d.end();};
     if(auto cb=find_constant_blob(d)){
         if(!best.valid){best.valid=true;best.variant="standalone-constant-blob";}
         best.constant_blob_offset=cb->second.front().header_offset;best.constant_blob_size=cb->first;best.constant_blocks=std::move(cb->second);decode_constant_blocks(d,best);
     }
-    if(!best.valid){
-        bool anchor=has("PyByteArray_FromStringAndSize")||has("Nuitka")||has("__nuitka__")||has("constant_bin_data");
-        if(anchor){best.valid=true;best.variant="standalone-nuitka-candidate";best.error="Nuitka runtime detected; onefile/constant blob not structurally recovered";}
-    }
+    // String/API anchors are routing evidence only. In particular,
+    // PyByteArray_FromStringAndSize is a normal CPython API and appears in
+    // stock interpreters. Likewise, a literal "Nuitka", "__nuitka__", or
+    // "constant_bin_data" can be embedded as bait. Do not turn any of those
+    // into a validated ecosystem result when neither the onefile member
+    // stream nor the constant directory closed structurally. The caller's
+    // generic static string finding remains available as a weak SUSPECTED
+    // route when a Nuitka-specific text anchor was actually observed.
     return best;
 }
 Finding nuitka_finding(const NuitkaInfo&i){

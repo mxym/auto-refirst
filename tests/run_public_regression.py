@@ -273,7 +273,7 @@ def target_path(build:pathlib.Path,config:str|None,name:str) -> pathlib.Path:
 
 
 def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
-    targets=["auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit"]
+    targets=["auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit","auto_refirst_public_nuitka_unit"]
     build,config=cmake_build(binary,targets)
     model=target_path(build,config,targets[0]); assert run([model]).stdout.strip()=="PASS"
     pyunit=target_path(build,config,targets[1]); p=td/"public.pyc"; p.write_bytes(pyc310())
@@ -290,7 +290,8 @@ def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
     assert run([pyunit,"marshal-hash",malformed,"310"],check=False).returncode==3
     flutter=target_path(build,config,targets[2]); assert run([flutter]).stdout.strip()=="PASS"
     pathunit=target_path(build,config,targets[3]); assert run([pathunit]).stdout.strip()=="PASS"
-    log("[PASS P0] model-trust + generic-path synthetic units + direct CPython pyc trust ingress + Flutter codec")
+    nuitka=target_path(build,config,targets[4]); assert run([nuitka]).stdout.strip()=="PASS"
+    log("[PASS P0] model-trust + generic-path/Nuitka synthetic units + direct CPython pyc trust ingress + Flutter codec")
 
 
 def p0_cli_exit_contract(binary:pathlib.Path) -> None:
