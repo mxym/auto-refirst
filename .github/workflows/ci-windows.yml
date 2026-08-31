@@ -9,6 +9,13 @@ on:
 permissions:
   contents: read
 
+# A newer commit on the same PR/branch supersedes the older CI result. Keep
+# PR, push-to-main, and manual runs in distinct groups so post-merge validation
+# never cancels the PR gate (and vice versa).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   public-static:
     name: Native MSVC P0/P1 static
