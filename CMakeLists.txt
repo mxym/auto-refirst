@@ -303,6 +303,12 @@ add_executable(auto_refirst_public_nuitka_unit EXCLUDE_FROM_ALL
 )
 target_include_directories(auto_refirst_public_nuitka_unit PRIVATE include)
 
+add_executable(auto_refirst_public_static_scan_unit EXCLUDE_FROM_ALL
+    tests/static_scan_unit.cpp
+    src/core/static_scan.cpp
+)
+target_include_directories(auto_refirst_public_static_scan_unit PRIVATE include)
+
 add_executable(auto_refirst_public_fixture_ordinary EXCLUDE_FROM_ALL tests/public/ordinary.c)
 add_executable(auto_refirst_public_fixture_crypto EXCLUDE_FROM_ALL tests/public/crypto_tea.c)
 add_executable(auto_refirst_public_fixture_runtime_child EXCLUDE_FROM_ALL tests/public/runtime_child.c)
@@ -314,6 +320,7 @@ foreach(_public_target
         auto_refirst_public_flutter_codec_unit
         auto_refirst_public_path_utf8_unit
         auto_refirst_public_nuitka_unit
+        auto_refirst_public_static_scan_unit
         auto_refirst_public_fixture_ordinary
         auto_refirst_public_fixture_crypto
         auto_refirst_public_fixture_runtime_child
@@ -326,7 +333,8 @@ foreach(_public_target
         auto_refirst_public_python_bytecode_unit
         auto_refirst_public_flutter_codec_unit
         auto_refirst_public_path_utf8_unit
-        auto_refirst_public_nuitka_unit)
+        auto_refirst_public_nuitka_unit
+        auto_refirst_public_static_scan_unit)
     if(MSVC)
         target_compile_options(${_public_target} PRIVATE /W4 /permissive- /EHsc)
     else()

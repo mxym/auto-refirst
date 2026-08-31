@@ -17,7 +17,10 @@ static constexpr AnchorDef kAnchors[]={
     {"nuitka",H_NUITKA},{"__nuitka__",H_NUITKA},{"constant_bin_data",H_NUITKA},
     {"godot",H_GODOT},{"gdscript::",H_GODOT},{"encrypted pack",H_GODOT},
     {"upx",H_NONE},{"vmprotect",H_NONE},{"themida",H_NONE},{"winlicense",H_NONE},{"autoit",H_AUTOIT},{"au3!ea06",H_AUTOIT},{"electron",H_NONE},{"asar",H_NONE},
-    {"unity",H_UNITY},{"unityplayer",H_UNITY},{"il2cpp",H_UNITY},{"global-metadata.dat",H_UNITY},{"mono",H_NONE},
+    // Bare "unity" is ordinary English and appears in unrelated binaries
+    // (e.g. opportunity/community text and standalone UNITY tokens). Route
+    // only on identifiers that the Unity deep parser can independently use.
+    {"unityplayer",H_UNITY},{"il2cpp",H_UNITY},{"global-metadata.dat",H_UNITY},{"mono",H_NONE},
     {"rust",H_RUST},{"/rustc/",H_RUST},{".cargo/registry/",H_RUST},{"rust_begin_unwind",H_RUST},{"core::panicking",H_RUST},{"library/core/src/",H_RUST},
     {"golang",H_GO},{"go build",H_GO},{"runtime.main",H_GO},
     {"renpy",H_RENPY},{"ren'py",H_RENPY},{"renpy rpc2",H_RENPY},{"pck",H_NONE}
