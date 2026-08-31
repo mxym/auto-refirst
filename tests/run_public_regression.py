@@ -328,6 +328,10 @@ def p0_report_json(binary:pathlib.Path,td:pathlib.Path) -> None:
     assert text_cp.returncode==0 and json_cp.returncode==0,(text_cp.returncode,json_cp.returncode)
     en=text_cp.stdout; obj=json.loads(json_cp.stdout)
     assert "auto-refirst Analysis" in en and obj["format"]["kind"]=="ELF" and obj["report_schema_version"]=="1.0"
+    envelope=json.loads(run([binary,p,"--json","--json-envelope"]).stdout)
+    assert envelope["report_schema_version"]=="1.0" and len(envelope["reports"])==1 and envelope["reports"][0]["format"]["kind"]=="ELF",envelope
+    assert run([binary,p,"--json-envelope"],check=False).returncode==2
+    assert run([binary,p,"--search=ELF","--json","--json-envelope"],check=False).returncode==2
     zh=run([binary,p,"--report-lang=zh"]).stdout
     assert "auto-refirst 分析报告" in zh and "分析指引:" in zh and "可见假设: 声明入口仍是默认分析假设" in zh,zh
     assert "No evidence-gated runtime observation modality was established" not in zh and "absence of alternate evidence is not proof" not in zh,zh
@@ -353,6 +357,8 @@ def p0_report_json(binary:pathlib.Path,td:pathlib.Path) -> None:
     d=td/"report-dir";d.mkdir();(d/"sample.bin").write_bytes(minimal_elf())
     dobj=json.loads(run([binary,d,"--json"]).stdout)
     assert dobj["report_schema_version"]=="1.0" and dobj["reports"] and all(x["report_schema_version"]=="1.0" for x in dobj["reports"])
+    denv=json.loads(run([binary,d,"--json","--json-envelope"]).stdout)
+    assert denv["directory_summary"] and denv["reports"] and denv["report_schema_version"]=="1.0"
     assert run([binary],check=False).returncode==2
     assert run([binary,"--definitely-unknown"],check=False).returncode==2
     assert run([binary,p,"--definitely-unknown"],check=False).returncode==2
@@ -364,7 +370,7 @@ def p0_report_json(binary:pathlib.Path,td:pathlib.Path) -> None:
     fatal_env=dict(os.environ);fatal_env.update({"TMPDIR":str(bad_temp),"TMP":str(bad_temp),"TEMP":str(bad_temp)})
     fatal=run([binary,d,"--json"],check=False,env=fatal_env)
     assert fatal.returncode==4 and "temporary" in fatal.stderr.lower(),fatal.stderr
-    output_cases=[[binary,"--help"],[binary,"--version"],[binary,p],[binary,p,"--json"],
+    output_cases=[[binary,"--help"],[binary,"--version"],[binary,p],[binary,p,"--json"],[binary,p,"--json","--json-envelope"],
                   [binary,p,"--search=ELF"],[binary,p,"--search=definitely-absent"],
                   [binary,d],[binary,d,"--json"]]
     if os.name!="nt":

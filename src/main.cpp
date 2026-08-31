@@ -84,6 +84,7 @@
 namespace {
 struct Options {
     bool json=false;
+    bool json_envelope=false;
     prts::ReportLanguage report_language=prts::ReportLanguage::English;
     bool extract=false;
     bool recursive=false; // explicit recursive artifact graph compatibility flag
@@ -139,6 +140,11 @@ int finish_standard_output(ExitCode code){
     return exit_code(code);
 }
 
+void render_report_set_json(std::ostream&o,const std::vector<prts::AnalysisReport>&reports){
+    o<<"{\n  \"report_schema_version\": \""<<prts::kReportSchemaVersion<<"\",\n  \"reports\": [";
+    for(std::size_t i=0;i<reports.size();++i){if(i)o<<",\n";prts::render_json(o,reports[i]);}
+    o<<"]\n}\n";
+}
 
 void print_version(std::ostream& o){
     o << "auto-refirst " << prts::kProductVersion << "\n"
@@ -154,6 +160,7 @@ void print_help(std::ostream& o){
       << "  -h, --help                 Show this help and exit\n"
       << "  --version                  Show version and exit\n"
       << "  --json                     Emit structured JSON\n"
+      << "  --json-envelope            With --json, wrap file/report-set output in a stable reports[] object\n"
       << "  --report-lang=en|zh        Human-readable report language\n"
       << "  --extract                  Additionally materialize full/bulk static artifacts and heavy maps\n"
       << "  --run                      Run the automatic deep runtime plan (non-destructive)\n"
@@ -548,6 +555,7 @@ bool parse_options(int argc,char**argv,Options&opt){
         if(arg=="-h"||arg=="--help")opt.help=true;
         else if(arg=="--version")opt.version=true;
         else if(arg=="--json")opt.json=true;
+        else if(arg=="--json-envelope")opt.json_envelope=true;
         else if(arg.rfind("--report-lang=",0)==0){auto v=arg.substr(14);if(v=="en")opt.report_language=prts::ReportLanguage::English;else if(v=="zh")opt.report_language=prts::ReportLanguage::Chinese;else{std::cerr<<"unsupported report language (use en or zh): "<<v<<"\n";return false;}}
         else if(arg=="--extract")opt.extract=true;
         else if(arg=="--recursive")opt.recursive=true;
@@ -2138,6 +2146,8 @@ int main(int argc,char**argv){
     if(argc<2){std::cerr<<"usage: auto-refirst <file|directory> [--run] [--apply] [--json] [--extract] [options]\nTry 'auto-refirst --help' for details.\n";return exit_code(ExitCode::Usage);}
     const std::string first=argv[1];if(first=="-h"||first=="--help"){print_help(std::cout);return finish_standard_output(ExitCode::Success);}if(first=="--version"){print_version(std::cout);return finish_standard_output(ExitCode::Success);}if(!first.empty()&&first.front()=='-'){std::cerr<<"unknown option: "<<first<<"\n";return exit_code(ExitCode::Usage);}
     Options opt;if(!parse_options(argc,argv,opt))return exit_code(ExitCode::Usage);if(opt.help){print_help(std::cout);return finish_standard_output(ExitCode::Success);}if(opt.version){print_version(std::cout);return finish_standard_output(ExitCode::Success);}
+    if(opt.json_envelope&&!opt.json){std::cerr<<"--json-envelope requires --json\n";return exit_code(ExitCode::Usage);}
+    if(opt.json_envelope&&!opt.search.empty()){std::cerr<<"--json-envelope is for analysis reports, not --search JSON Lines output\n";return exit_code(ExitCode::Usage);}
     const std::filesystem::path input=cli_path(argv[1]);std::error_code ec;const auto input_status=std::filesystem::status(input,ec);if(ec||input_status.type()==std::filesystem::file_type::not_found){std::cerr<<"cannot access input"<<(ec?": "+prts::error_message_utf8(ec):std::string())<<"\n";return exit_code(ExitCode::Input);}const bool is_dir=input_status.type()==std::filesystem::file_type::directory;if(!is_dir&&input_status.type()!=std::filesystem::file_type::regular){std::cerr<<"input is neither a regular file nor a directory\n";return exit_code(ExitCode::Input);}
     if(!opt.artifact_root_cli.empty()){
         if(is_dir){std::cerr<<"--artifact-root is single-file only; directory analysis needs distinct product-owned roots per input\n";return exit_code(ExitCode::Usage);}
@@ -2221,7 +2231,8 @@ int main(int argc,char**argv){
 
     if(!successful_root_inputs){std::cerr<<"no readable regular input files found\n";return exit_code(ExitCode::Input);}
     if(opt.json){
-        if(reports.size()==1)std::cout<<prts::render_json(reports.front());
+        if(opt.json_envelope)render_report_set_json(std::cout,reports);
+        else if(reports.size()==1)std::cout<<prts::render_json(reports.front());
         else{
             std::cout<<"[\n";for(std::size_t i=0;i<reports.size();++i){if(i)std::cout<<",\n";auto j=prts::render_json(reports[i]);while(!j.empty()&&(j.back()=='\n'||j.back()=='\r'))j.pop_back();std::cout<<j;}std::cout<<"\n]\n";
         }

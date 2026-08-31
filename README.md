@@ -30,6 +30,14 @@ cmake --build build --parallel
 ./build/auto-refirst ./target --extract --recursive --json
 ```
 
+如果机器调用方希望单文件、递归工件图都稳定使用顶层 `reports[]` object，而不依赖 report 数量判断 object/array，可显式选择兼容式 envelope：
+
+```sh
+./build/auto-refirst ./target --extract --recursive --json --json-envelope
+```
+
+原有 `--json` 输出形状保持不变。
+
 运行时分析：
 
 ```sh

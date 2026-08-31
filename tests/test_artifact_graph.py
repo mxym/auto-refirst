@@ -26,11 +26,15 @@ def make_fat_macho():
         out[off:off+len(data)]=data
     return bytes(out)
 
-def reports(p,*args):
-    raw=subprocess.check_output([str(AR),str(p),*args,'--json'],text=True)
-    j=json.loads(raw)
-    if isinstance(j,dict) and 'directory_summary' in j and 'reports' in j: return j['reports']
+def load_json(p,*args):
+    return json.loads(subprocess.check_output([str(AR),str(p),*args,'--json'],text=True))
+
+def normalize_reports(j):
+    if isinstance(j,dict) and 'reports' in j: return j['reports']
     return j if isinstance(j,list) else [j]
+
+def reports(p,*args):
+    return normalize_reports(load_json(p,*args))
 
 def graph(rs): return rs[0]['artifact_graph']
 
@@ -40,8 +44,15 @@ def main():
     with tempfile.TemporaryDirectory(prefix='ar-graph-') as td:
         td=pathlib.Path(td);root=td/'renamed.bin';root.write_bytes(outer)
 
-        rs=reports(root,'--extract','--recursive')
+        legacy=load_json(root,'--extract','--recursive')
+        assert isinstance(legacy,list) and len(legacy)==3,"legacy --json recursive transport must remain a bare array"
+        rs=normalize_reports(legacy)
         assert len(rs)==3,(len(rs),[x['input'] for x in rs])
+        envroot=td/'envelope.bin';envroot.write_bytes(outer)
+        envelope=load_json(envroot,'--extract','--recursive','--json-envelope')
+        assert isinstance(envelope,dict) and envelope['report_schema_version']=='1.0' and len(envelope['reports'])==3,envelope
+        single=td/'single.wasm';single.write_bytes(WASM);single_env=load_json(single,'--json-envelope')
+        assert isinstance(single_env,dict) and len(single_env['reports'])==1 and single_env['reports'][0]['wasm']['valid'],single_env
         assert rs[0]['asar']['valid'] and rs[0]['artifact']['root'] and rs[0]['artifact']['depth']==0
         assert rs[1]['asar']['valid'] and rs[1]['artifact']['depth']==1 and rs[1]['artifact']['relation']=='extracted:asar'
         w=[r for r in rs if r['wasm']['valid']];assert len(w)==1 and w[0]['artifact']['depth']==2

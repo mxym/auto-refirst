@@ -28,6 +28,14 @@ Full/heavy static materialization:
 ./build/auto-refirst ./target --extract --recursive --json
 ```
 
+For machine consumers that want a stable top-level `reports[]` object for both single-file and recursive artifact output, opt into the compatibility-preserving envelope:
+
+```sh
+./build/auto-refirst ./target --extract --recursive --json --json-envelope
+```
+
+The existing `--json` transport shape remains unchanged.
+
 Opt-in runtime analysis:
 
 ```sh
