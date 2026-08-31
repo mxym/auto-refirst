@@ -24,7 +24,7 @@ void append_u64(std::vector<std::uint8_t>& out, std::uint64_t v) {
 void append_name(std::vector<std::uint8_t>& out, std::string_view s) {
     append_text(out,s); out.push_back(0);
 }
-std::vector<std::uint8_t> legacy_constant_directory(bool long64, bool trailing=false) {
+std::vector<std::uint8_t> constant_directory_with_main(const std::vector<std::uint8_t>& main) {
     std::vector<std::uint8_t> bytecode;
     append_u16(bytecode,1);
     bytecode.push_back('B');
@@ -32,6 +32,12 @@ std::vector<std::uint8_t> legacy_constant_directory(bool long64, bool trailing=f
     bytecode.insert(bytecode.end(),1017,'x');
     bytecode.push_back('.');
 
+    std::vector<std::uint8_t> out;
+    append_name(out,".bytecode"); append_u32(out,static_cast<std::uint32_t>(bytecode.size())); out.insert(out.end(),bytecode.begin(),bytecode.end());
+    append_name(out,"__main__"); append_u32(out,static_cast<std::uint32_t>(main.size())); out.insert(out.end(),main.begin(),main.end());
+    return out;
+}
+std::vector<std::uint8_t> legacy_constant_directory(bool long64, bool trailing=false) {
     std::vector<std::uint8_t> main;
     append_u16(main,5);
     main.push_back('u'); append_name(main,"legacy");
@@ -44,11 +50,7 @@ std::vector<std::uint8_t> legacy_constant_directory(bool long64, bool trailing=f
     main.push_back('g'); main.push_back('-'); append_u32(main,1); append_u64(main,123);
     main.push_back('.');
     if(trailing) main.push_back(0);
-
-    std::vector<std::uint8_t> out;
-    append_name(out,".bytecode"); append_u32(out,static_cast<std::uint32_t>(bytecode.size())); out.insert(out.end(),bytecode.begin(),bytecode.end());
-    append_name(out,"__main__"); append_u32(out,static_cast<std::uint32_t>(main.size())); out.insert(out.end(),main.begin(),main.end());
-    return out;
+    return constant_directory_with_main(main);
 }
 [[noreturn]] void fail(const char* msg) { std::cerr << msg << '\n'; std::exit(1); }
 
@@ -148,6 +150,20 @@ int main() {
     auto trailing_legacy=prts::detect_nuitka(legacy_constant_directory(true,true),pe,elf);
     auto trailing_finding=prts::nuitka_finding(trailing_legacy);
     if(trailing_finding.fields["decode_failures"]!="1") fail("legacy constant stream trailing bytes did not fail closed");
+
+    // A byte sequence can be syntactically complete under both the modern
+    // varint and legacy fixed32 profiles while representing different values.
+    // Such cross-profile semantic ambiguity must be withheld rather than guessed.
+    std::vector<std::uint8_t> ambiguous_main;
+    append_u16(ambiguous_main,1); ambiguous_main.push_back('l');
+    ambiguous_main.insert(ambiguous_main.end(),{0x81,0x80,0x80,0x00}); ambiguous_main.push_back('.');
+    auto ambiguous=prts::detect_nuitka(constant_directory_with_main(ambiguous_main),pe,elf);
+    if(ambiguous.decoded_blocks.size()!=2||ambiguous.decoded_blocks[1].success||ambiguous.decoded_blocks[1].error!="constant stream encoding profile ambiguous") fail("cross-profile constant semantics did not fail closed");
+
+    std::vector<std::uint8_t> huge_main;
+    append_u16(huge_main,1); huge_main.push_back('T'); append_u32(huge_main,0xffffffffu); huge_main.push_back('.');
+    auto huge=prts::detect_nuitka(constant_directory_with_main(huge_main),pe,elf);
+    if(huge.decoded_blocks.size()!=2||huge.decoded_blocks[1].success) fail("unreasonable legacy/modern sequence count unexpectedly decoded");
 
     // Malformed/unknown constant streams must not weaken the structural
     // directory identity gate; semantic decoding may remain partial.
