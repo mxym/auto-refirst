@@ -23,6 +23,7 @@ from typing import Iterable
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROVENANCE = ROOT / "tests" / "corpus" / "PROVENANCE.csv"
 THIRD_PARTY_PROVENANCE_CHECK = ROOT / "tests" / "check_third_party_provenance.py"
+PYINSTALLER_REFERENCE_CATALOG_CHECK = ROOT / "tests" / "check_pyinstaller_reference_catalog.py"
 SOURCE_ROOT_METADATA_CHECK = ROOT / "tests" / "test_build_metadata_source_root.py"
 PUBLIC_FIXTURES = (
     "tests/corpus/jvm/LambdaSample.class",
@@ -159,6 +160,9 @@ def provenance_gate() -> None:
     supply_chain = run([sys.executable, THIRD_PARTY_PROVENANCE_CHECK])
     if supply_chain.stdout.strip():
         log(supply_chain.stdout.strip())
+    pyinstaller_catalog = run([sys.executable, PYINSTALLER_REFERENCE_CATALOG_CHECK])
+    if pyinstaller_catalog.stdout.strip():
+        log(pyinstaller_catalog.stdout.strip())
     utf8_contract = run([sys.executable, ROOT / "tests" / "test_public_runner_utf8.py"])
     if utf8_contract.stdout.strip():
         log(utf8_contract.stdout.strip())

@@ -18,7 +18,7 @@ struct PyInstEntry {
     std::string name;
 };
 struct PyInstBootstrapModuleMatch {
-    std::string name,state,sha256,semantic_sha256,normalized_semantic_sha256,reference_label,semantic_error,normalize_error,normalization_source;
+    std::string name,state,sha256,semantic_sha256,normalized_semantic_sha256,reference_label,reference_component,reference_generation,semantic_error,normalize_error,normalization_source;
     std::uint64_t size=0,semantic_error_offset=0,normalized_code_units=0;
     bool reference_available=false;
 };
@@ -33,7 +33,14 @@ struct PyInstArchiveInfo {
     std::vector<std::string> evidence;
     std::string error;
     std::string bootstrap_reference_status;
+    // Direct release-label intersection retained for schema-1.0 compatibility.
     std::string bootstrap_reference_label;
+    // Source-generation identity and release interpretation are authoritative for closure.
+    // Core source generation; Windows extension has its own independent generation.
+    std::string bootstrap_reference_generation;
+    std::string bootstrap_windows_extension_generation;
+    std::string bootstrap_release_candidates;
+    std::string bootstrap_source_equal_releases;
     std::string bootstrap_match_mode;
     std::string bootstrap_profile;
     std::vector<PyInstBootstrapModuleMatch> bootstrap_modules;
@@ -88,6 +95,10 @@ Finding pyinstaller_finding(const PyInstArchiveInfo& info);
 
 void analyze_pyinstaller_bootstrap(std::span<const std::uint8_t> data,PyInstArchiveInfo& info,const CPythonInfo* cpython=nullptr);
 void finalize_pyinstaller_bootstrap_reference(PyInstArchiveInfo& info);
+std::string pyinstaller_reference_component_for_module(std::string_view module);
+std::string pyinstaller_reference_generation_for_label(std::string_view label,std::string_view component);
+std::string pyinstaller_source_equal_releases_for_component_generation(std::string_view component,std::string_view generation);
+std::string pyinstaller_compatible_releases_for_component_generation(std::string_view component,std::string_view generation,int python_minor);
 std::vector<std::string> pyinstaller_bootstrap_required_modules(const PyInstArchiveInfo& info);
 Finding pyinstaller_bootstrap_finding(const PyInstArchiveInfo& info);
 }

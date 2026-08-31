@@ -260,18 +260,25 @@ std::span<const std::uint8_t> bootstrap_semantic_payload(std::span<const std::ui
 std::string join_labels(const std::set<std::string>&s){std::string o;for(const auto&x:s){if(!o.empty())o+='|';o+=x;}return o;}
 }
 void analyze_pyinstaller_bootstrap(std::span<const std::uint8_t>d,PyInstArchiveInfo&a,const CPythonInfo*cpython){
-    a.bootstrap_modules.clear();a.bootstrap_reference_status.clear();a.bootstrap_reference_label.clear();a.bootstrap_match_mode.clear();a.bootstrap_profile.clear();if(!a.valid)return;
+    a.bootstrap_modules.clear();a.bootstrap_reference_status.clear();a.bootstrap_reference_label.clear();a.bootstrap_reference_generation.clear();a.bootstrap_windows_extension_generation.clear();a.bootstrap_release_candidates.clear();a.bootstrap_source_equal_releases.clear();a.bootstrap_match_mode.clear();a.bootstrap_profile.clear();if(!a.valid)return;
     static constexpr const char* names[]={"struct","pyimod01_os_path","pyimod02_archive","pyimod03_importers","pyimod04_ctypes","pyimod01_archive","pyimod02_importers","pyimod03_ctypes","pyimod04_pywin32"};
     auto exact_reference_available=[&](std::string_view module){for(const auto&r:kPyInstallerLoaderReferences)if(r.python_minor==static_cast<int>(a.python_version)&&module==r.module)return true;return false;};
     auto semantic_reference_available=[&](std::string_view module){for(const auto&r:kPyInstallerLoaderSemanticReferences)if(r.python_minor==static_cast<int>(a.python_version)&&module==r.module)return true;return false;};
     auto semantic_labels=[&](std::string_view module,std::string_view hash){std::set<std::string> labels;for(const auto&r:kPyInstallerLoaderSemanticReferences){if(r.python_minor!=static_cast<int>(a.python_version)||module!=r.module)continue;if(hash==r.semantic_sha256)labels.insert(r.label);}return labels;};
+    auto annotate_generation=[&](PyInstBootstrapModuleMatch&m,const std::set<std::string>&labels){
+        m.reference_component=pyinstaller_reference_component_for_module(m.name);
+        if(m.reference_component.empty())return;
+        std::set<std::string> generations;
+        for(const auto&label:labels){auto generation=pyinstaller_reference_generation_for_label(label,m.reference_component);if(!generation.empty())generations.insert(std::move(generation));}
+        m.reference_generation=join_labels(generations);
+    };
     for(auto name:names){
         auto it=std::find_if(a.entries.begin(),a.entries.end(),[&](const PyInstEntry&e){return e.name==name;});if(it==a.entries.end())continue;
         PyInstBootstrapModuleMatch m;m.name=name;m.reference_available=exact_reference_available(m.name)||semantic_reference_available(m.name);auto raw=bootstrap_payload(d,a,*it);if(!raw){m.state="EXTRACT_FAILED";a.bootstrap_modules.push_back(std::move(m));continue;}
         m.size=raw->size();m.sha256=sha256_bytes(*raw);std::set<std::string> labels;
         for(const auto&r:kPyInstallerLoaderReferences){if(r.python_minor!=static_cast<int>(a.python_version)||m.name!=r.module)continue;if(r.size==m.size&&m.sha256==r.sha256)labels.insert(r.label);}
         if(!labels.empty()){
-            m.state="EXACT_MATCH";m.reference_label=join_labels(labels);
+            m.state="EXACT_MATCH";m.reference_label=join_labels(labels);annotate_generation(m,labels);
         }else{
             // If the target interpreter is a proven pure opcode permutation, normalize the serialized
             // code units in-memory before semantic comparison. This handles bootstrap modules compiled
@@ -281,7 +288,7 @@ void analyze_pyinstaller_bootstrap(std::span<const std::uint8_t>d,PyInstArchiveI
                 auto semantic_raw=bootstrap_semantic_payload(*raw,*it);auto normalized=map?remap_python_marshal_opcodes(semantic_raw,a.python_version,map->target_to_official):PythonMarshalOpcodeRewrite{};
                 if(map&&normalized.valid&&normalized.changed){
                     m.normalization_source=map->source;m.normalized_code_units=normalized.rewritten_code_units;auto sem=semantic_hash_python_marshal(normalized.bytes,a.python_version);
-                    if(sem.valid){m.normalized_semantic_sha256=sem.sha256;auto nlabels=semantic_labels(m.name,m.normalized_semantic_sha256);if(!nlabels.empty()){m.state="OPCODE_NORMALIZED_SEMANTIC_MATCH";m.reference_label=join_labels(nlabels);}}
+                    if(sem.valid){m.normalized_semantic_sha256=sem.sha256;auto nlabels=semantic_labels(m.name,m.normalized_semantic_sha256);if(!nlabels.empty()){m.state="OPCODE_NORMALIZED_SEMANTIC_MATCH";m.reference_label=join_labels(nlabels);annotate_generation(m,nlabels);}}
                     else m.normalize_error="normalized marshal semantic parse failed at +0x"+std::to_string(sem.error_offset)+": "+sem.error;
                 }else if(map&&!normalized.valid)m.normalize_error=normalized.error;
             }
@@ -290,7 +297,7 @@ void analyze_pyinstaller_bootstrap(std::span<const std::uint8_t>d,PyInstArchiveI
                 if(!sem.valid){m.state="SEMANTIC_PARSE_FAILED";m.semantic_error=sem.error;m.semantic_error_offset=sem.error_offset;}
                 else{
                     m.semantic_sha256=sem.sha256;auto semlabels=semantic_labels(m.name,m.semantic_sha256);
-                    if(!semlabels.empty()){m.state="SEMANTIC_MATCH";m.reference_label=join_labels(semlabels);}
+                    if(!semlabels.empty()){m.state="SEMANTIC_MATCH";m.reference_label=join_labels(semlabels);annotate_generation(m,semlabels);}
                     else m.state=m.reference_available?"DIFFERENT":"NO_REFERENCE";
                 }
             }
@@ -303,15 +310,20 @@ Finding pyinstaller_bootstrap_finding(const PyInstArchiveInfo&a){
     Finding f;f.kind="reference";f.family="PyInstaller bootstrap";
     if(!a.valid){f.state="FAILED";return f;}
     f.state=(a.bootstrap_reference_status=="REFERENCE_MATCH")?"CONFIRMED":((a.bootstrap_reference_status=="PARTIAL_REFERENCE_MATCH")?"LIKELY":"SUSPECTED");
-    f.variant=a.bootstrap_reference_label;
+    f.variant=!a.bootstrap_release_candidates.empty()?a.bootstrap_release_candidates:a.bootstrap_reference_label;
     f.fields["bootstrap_reference_status"]=a.bootstrap_reference_status;
+    f.fields["bootstrap_direct_reference_labels"]=a.bootstrap_reference_label;
+    f.fields["bootstrap_reference_generation"]=a.bootstrap_reference_generation;
+    f.fields["bootstrap_windows_extension_generation"]=a.bootstrap_windows_extension_generation;
+    f.fields["bootstrap_release_candidates"]=a.bootstrap_release_candidates;
+    f.fields["bootstrap_source_equal_releases"]=a.bootstrap_source_equal_releases;
     f.fields["bootstrap_match_mode"]=a.bootstrap_match_mode;
     f.fields["bootstrap_profile"]=a.bootstrap_profile;
     f.fields["python_version"]=std::to_string(a.python_version);
     const auto required=pyinstaller_bootstrap_required_modules(a);std::size_t required_matched=0;
     int exact=0,semantic=0;
     for(const auto&m:a.bootstrap_modules){
-        f.fields["module."+m.name]=m.state+(m.reference_label.empty()?"":" "+m.reference_label);if(m.normalized_code_units)f.fields["module."+m.name+".normalized_code_units"]=std::to_string(m.normalized_code_units);if(!m.normalization_source.empty())f.fields["module."+m.name+".normalization_source"]=m.normalization_source;if(!m.normalize_error.empty())f.fields["module."+m.name+".normalize_error"]=m.normalize_error;
+        f.fields["module."+m.name]=m.state+(m.reference_label.empty()?"":" "+m.reference_label);if(!m.reference_component.empty())f.fields["module."+m.name+".reference_component"]=m.reference_component;if(!m.reference_generation.empty())f.fields["module."+m.name+".reference_generation"]=m.reference_generation;if(m.normalized_code_units)f.fields["module."+m.name+".normalized_code_units"]=std::to_string(m.normalized_code_units);if(!m.normalization_source.empty())f.fields["module."+m.name+".normalization_source"]=m.normalization_source;if(!m.normalize_error.empty())f.fields["module."+m.name+".normalize_error"]=m.normalize_error;
         const bool module_matched=m.state=="EXACT_MATCH"||m.state=="SEMANTIC_MATCH"||m.state=="OPCODE_NORMALIZED_SEMANTIC_MATCH";
         if(module_matched&&std::find(required.begin(),required.end(),m.name)!=required.end())++required_matched;
         if(m.state=="EXACT_MATCH"){
@@ -332,7 +344,12 @@ Finding pyinstaller_bootstrap_finding(const PyInstArchiveInfo&a){
     f.fields["semantic_modules"]=std::to_string(semantic);
     f.fields["required_modules"]=std::to_string(required.size());
     f.fields["required_modules_matched"]=std::to_string(required_matched);
-    if(a.bootstrap_reference_status=="REFERENCE_MATCH")f.evidence.push_back("all required PyInstaller-owned preload modules for "+a.bootstrap_profile+" match one official loader generation; bootstrap loader layer can be deprioritized");
+    if(a.bootstrap_reference_status=="REFERENCE_MATCH"){
+        auto e="all required PyInstaller-owned preload modules for "+a.bootstrap_profile+" close compatible official loader source component generation(s)";
+        if(!a.bootstrap_release_candidates.empty())e+="; compatible indistinguishable releases="+a.bootstrap_release_candidates;
+        e+="; bootstrap loader layer can be deprioritized";f.evidence.push_back(std::move(e));
+    }else if(a.bootstrap_reference_status=="REFERENCE_METADATA_CONFLICT")f.negative_evidence.push_back("matched loader payloads could not be reconciled with the generated component-generation catalog");
+    else if(a.bootstrap_reference_status=="REFERENCE_COMPATIBILITY_CONFLICT")f.negative_evidence.push_back("matched source component generation(s) have no release compatible with the target Python minor");
     else if(a.bootstrap_reference_status=="REFERENCE_PROFILE_AMBIGUOUS")f.negative_evidence.push_back("both legacy and modern bootstrap module profiles are present; loader generation confirmation is intentionally withheld");
     else if(a.bootstrap_reference_status=="REFERENCE_DIFF")f.suggested_actions.push_back("inspect differing preload module(s) before native-runtime analysis");
     return f;
