@@ -262,14 +262,14 @@ std::string join_labels(const std::set<std::string>&s){std::string o;for(const a
 void analyze_pyinstaller_bootstrap(std::span<const std::uint8_t>d,PyInstArchiveInfo&a,const CPythonInfo*cpython){
     a.bootstrap_modules.clear();a.bootstrap_reference_status.clear();a.bootstrap_reference_label.clear();a.bootstrap_match_mode.clear();a.bootstrap_profile.clear();if(!a.valid)return;
     static constexpr const char* names[]={"struct","pyimod01_os_path","pyimod02_archive","pyimod03_importers","pyimod04_ctypes","pyimod01_archive","pyimod02_importers","pyimod03_ctypes","pyimod04_pywin32"};
+    auto exact_reference_available=[&](std::string_view module){for(const auto&r:kPyInstallerLoaderReferences)if(r.python_minor==static_cast<int>(a.python_version)&&module==r.module)return true;return false;};
     auto semantic_reference_available=[&](std::string_view module){for(const auto&r:kPyInstallerLoaderSemanticReferences)if(r.python_minor==static_cast<int>(a.python_version)&&module==r.module)return true;return false;};
     auto semantic_labels=[&](std::string_view module,std::string_view hash){std::set<std::string> labels;for(const auto&r:kPyInstallerLoaderSemanticReferences){if(r.python_minor!=static_cast<int>(a.python_version)||module!=r.module)continue;if(hash==r.semantic_sha256)labels.insert(r.label);}return labels;};
     for(auto name:names){
         auto it=std::find_if(a.entries.begin(),a.entries.end(),[&](const PyInstEntry&e){return e.name==name;});if(it==a.entries.end())continue;
-        PyInstBootstrapModuleMatch m;m.name=name;auto raw=bootstrap_payload(d,a,*it);if(!raw){m.state="EXTRACT_FAILED";a.bootstrap_modules.push_back(std::move(m));continue;}
-        m.size=raw->size();m.sha256=sha256_bytes(*raw);std::set<std::string> labels;bool exact_ref=false,semantic_ref=semantic_reference_available(m.name);
-        for(const auto&r:kPyInstallerLoaderReferences){if(r.python_minor!=static_cast<int>(a.python_version)||m.name!=r.module)continue;exact_ref=true;if(r.size==m.size&&m.sha256==r.sha256)labels.insert(r.label);}
-        m.reference_available=exact_ref||semantic_ref;
+        PyInstBootstrapModuleMatch m;m.name=name;m.reference_available=exact_reference_available(m.name)||semantic_reference_available(m.name);auto raw=bootstrap_payload(d,a,*it);if(!raw){m.state="EXTRACT_FAILED";a.bootstrap_modules.push_back(std::move(m));continue;}
+        m.size=raw->size();m.sha256=sha256_bytes(*raw);std::set<std::string> labels;
+        for(const auto&r:kPyInstallerLoaderReferences){if(r.python_minor!=static_cast<int>(a.python_version)||m.name!=r.module)continue;if(r.size==m.size&&m.sha256==r.sha256)labels.insert(r.label);}
         if(!labels.empty()){
             m.state="EXACT_MATCH";m.reference_label=join_labels(labels);
         }else{
