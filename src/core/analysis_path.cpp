@@ -33,8 +33,12 @@ std::string implicit_target(const ImplicitExecutionFact&f){if(!f.target_name.emp
 
 std::optional<Finding> build_pyinstaller_cpython_path(const AnalysisReport& r){
     if(!r.pyinstaller.valid||r.pyinstaller.bootstrap_reference_status!="REFERENCE_MATCH"||r.cpython_runtimes.empty())return std::nullopt;
-    Finding f;f.kind="analysis_path";f.family="PyInstaller -> CPython";f.state="CONFIRMED";f.variant=r.pyinstaller.bootstrap_reference_label;
+    Finding f;f.kind="analysis_path";f.family="PyInstaller -> CPython";f.state="CONFIRMED";f.variant=!r.pyinstaller.bootstrap_release_candidates.empty()?r.pyinstaller.bootstrap_release_candidates:r.pyinstaller.bootstrap_reference_label;
     f.fields["bootstrap_reference"]=r.pyinstaller.bootstrap_reference_label;
+    f.fields["bootstrap_reference_generation"]=r.pyinstaller.bootstrap_reference_generation;
+    f.fields["bootstrap_windows_extension_generation"]=r.pyinstaller.bootstrap_windows_extension_generation;
+    f.fields["bootstrap_release_candidates"]=r.pyinstaller.bootstrap_release_candidates;
+    f.fields["bootstrap_source_equal_releases"]=r.pyinstaller.bootstrap_source_equal_releases;
     f.fields["bootstrap_match_mode"]=r.pyinstaller.bootstrap_match_mode;
     f.fields["bootstrap_profile"]=r.pyinstaller.bootstrap_profile;
     f.fields["bootstrap_hypothesis"]="ELIMINATED";
