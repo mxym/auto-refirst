@@ -33,6 +33,8 @@ int main() {
     if(!scan("Can't open encrypted pack-referenced file 'x'.").hints.godot) fail("Godot encrypted-pack referenced-file route lost");
     if(!scan("ENCRYPTED PACK.").hints.godot) fail("case-insensitive Godot encrypted-pack terminal route lost");
     if(scan("unencrypted pack directory").hints.godot) fail("embedded encrypted-pack phrase without left boundary routed Godot");
+    if(scan("bigodot").hints.godot) fail("embedded Godot substring in ordinary identifier routed Godot");
+    if(!scan("Godot Engine v4").hints.godot) fail("delimited Godot engine route lost");
 
     prts::PeInfo pe; prts::ElfInfo elf;
     const std::string packet_text="invalid symkey encrypted packet";

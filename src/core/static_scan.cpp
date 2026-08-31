@@ -15,7 +15,7 @@ struct AnchorDef { const char* text; std::uint32_t hints; };
 static constexpr AnchorDef kAnchors[]={
     {"python",H_NONE},{"pyinstaller",H_PYINSTALLER},{"pyimod",H_PYINSTALLER},{"_mei",H_PYINSTALLER},
     {"nuitka",H_NUITKA},{"__nuitka__",H_NUITKA},{"constant_bin_data",H_NUITKA},
-    {"godot",H_GODOT},{"gdscript::",H_GODOT},
+    {"gdscript::",H_GODOT},
     {"upx",H_NONE},{"vmprotect",H_NONE},{"themida",H_NONE},{"winlicense",H_NONE},{"autoit",H_AUTOIT},{"au3!ea06",H_AUTOIT},{"electron",H_NONE},{"asar",H_NONE},
     // Bare "unity" is ordinary English and appears in unrelated binaries
     // (e.g. opportunity/community text and standalone UNITY tokens). Route
@@ -63,7 +63,7 @@ bool contains_delimited_phrase_ci(std::string_view s,std::string_view lower_phra
     }
     return false;
 }
-bool classify_anchor_string(std::string_view s,EcosystemHints&h){bool any=false;int state=0;const auto&ac=anchors();for(unsigned char c:s){state=ac.step(state,c);for(auto id:ac.outputs(state)){any=true;apply_hint_mask(h,kAnchors[id].hints);}}if(contains_delimited_phrase_ci(s,"encrypted pack")){h.godot=true;any=true;}if(rust_mangled_hint(s)){h.rust=true;any=true;}return any;}
+bool classify_anchor_string(std::string_view s,EcosystemHints&h){bool any=false;int state=0;const auto&ac=anchors();for(unsigned char c:s){state=ac.step(state,c);for(auto id:ac.outputs(state)){any=true;apply_hint_mask(h,kAnchors[id].hints);}}if(contains_delimited_phrase_ci(s,"godot")||contains_delimited_phrase_ci(s,"encrypted pack")){h.godot=true;any=true;}if(rust_mangled_hint(s)){h.rust=true;any=true;}return any;}
 std::uint32_t u32le(std::span<const std::uint8_t>d,std::size_t o){if(o+4>d.size())return 0;return std::uint32_t(d[o])|(std::uint32_t(d[o+1])<<8)|(std::uint32_t(d[o+2])<<16)|(std::uint32_t(d[o+3])<<24);}
 bool valid_pe_at(std::span<const std::uint8_t>d,std::size_t o,std::uint64_t& guessed){if(o+0x40>d.size()||d[o]!='M'||d[o+1]!='Z')return false;auto lf=u32le(d,o+0x3c);if(lf>0x100000||o+lf+24>d.size())return false;if(std::memcmp(d.data()+o+lf,"PE\0\0",4))return false;std::uint16_t ns=d[o+lf+6]|(d[o+lf+7]<<8);std::uint16_t opt=d[o+lf+20]|(d[o+lf+21]<<8);auto st=o+lf+24+opt;if(!ns||ns>96||st+std::size_t(ns)*40>d.size())return false;std::uint64_t end=st+std::size_t(ns)*40;for(std::uint16_t i=0;i<ns;i++){auto sh=st+i*40;auto rs=u32le(d,sh+16),ro=u32le(d,sh+20);if(ro&&rs&&o+std::uint64_t(ro)+rs<=d.size())end=std::max(end,o+std::uint64_t(ro)+rs);}guessed=end-o;return true;}
 bool valid_elf_at(std::span<const std::uint8_t>d,std::size_t o){return o+0x34<=d.size()&&d[o]==0x7f&&d[o+1]=='E'&&d[o+2]=='L'&&d[o+3]=='F'&&(d[o+4]==1||d[o+4]==2)&&(d[o+5]==1||d[o+5]==2);}
@@ -143,7 +143,7 @@ std::vector<Finding> detect_common(std::span<const std::uint8_t>d,const PeInfo&p
         auto add=[&](std::string fam,std::string ev,double c){for(auto&x:out)if(x.family==fam)return;Finding f;f.kind="ecosystem";f.family=std::move(fam);f.state=c>=0.75?"LIKELY":"SUSPECTED";f.confidence=c;f.evidence.push_back(std::move(ev));f.ranges.push_back({s.offset,s.value.size(),"string"});out.push_back(std::move(f));};
         if(low.find("pyinstaller")!=std::string::npos||low.find("pyimod")!=std::string::npos)add("PyInstaller","PyInstaller bootstrap/string anchor",0.75);
         if(low.find("nuitka")!=std::string::npos)add("Nuitka","Nuitka string anchor",0.72);
-        if(low.find("godot")!=std::string::npos||contains_delimited_phrase(low,"encrypted pack"))add("Godot","Godot identifier/pack string anchor (route-only)",0.70);
+        if(contains_delimited_phrase(low,"godot")||contains_delimited_phrase(low,"encrypted pack"))add("Godot","Godot identifier/pack string anchor (route-only)",0.70);
         if(low.find("python")!=std::string::npos)add("CPython-derived","Python runtime string anchor",0.55);
         auto add_protector_marker=[&](std::string claimed,std::string ev){for(const auto&x:out){auto it=x.fields.find("claimed_family");if(x.family=="Packer/protector marker"&&it!=x.fields.end()&&it->second==claimed)return;}Finding f;f.kind="packer_hint";f.family="Packer/protector marker";f.variant=claimed;f.state="SUSPECTED";f.confidence=.30;f.evidence.push_back(std::move(ev));f.negative_evidence.push_back("identifier string is not independent structural evidence; family classification intentionally withheld");f.fields["claimed_family"]=std::move(claimed);f.fields["evidence_strength"]="WEAK_MARKER_ONLY";f.ranges.push_back({s.offset,s.value.size(),"identifier string"});out.push_back(std::move(f));};
         if(low.find("vmprotect")!=std::string::npos)add_protector_marker("VMProtect","VMProtect identifier string present");
