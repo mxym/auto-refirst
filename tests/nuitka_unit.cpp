@@ -134,6 +134,14 @@ int main() {
     if(!onefile.valid || !onefile.onefile || onefile.entries.size()!=1 || onefile.variant.rfind("onefile-KAX-raw",0)!=0)
         fail("synthetic KAX archive did not validate");
 
+    // The real onefile bootstrap reads filenames into filename_char_t[1024].
+    // Incidental KAX bytes followed by a longer printable run must therefore
+    // fail before random zero bytes can close a fake zero-length entry.
+    std::vector<std::uint8_t> long_name_kax={'K','A','X'};
+    long_name_kax.insert(long_name_kax.end(),1024,'a');long_name_kax.push_back(0);
+    long_name_kax.push_back(0);append_u64(long_name_kax,0);long_name_kax.push_back(0);
+    if(prts::detect_nuitka(long_name_kax,pe,elf).valid)fail("overlong onefile filename unexpectedly validated");
+
     // Nuitka before 2.0 used native fixed-width counts and C-long values. Both
     // 64-bit and 32-bit C-long profiles must close through declared count and
     // the final END tag before semantic output is accepted.

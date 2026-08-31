@@ -151,7 +151,7 @@ std::vector<Finding> detect_common(std::span<const std::uint8_t>d,const PeInfo&p
     }
     Finding* godot_marker_finding=nullptr;std::size_t godot_marker_count=0;
     for(auto&e:scan.embedded){
-        if(e.kind=="PYZ"){Finding f;f.kind="container";f.family="PyInstaller";f.state="LIKELY";f.confidence=0.92;f.evidence={"embedded PYZ archive"};f.ranges.push_back({e.offset,e.size,"PYZ"});f.suggested_actions={"extract:pyinstaller"};out.push_back(std::move(f));}
+        if(e.kind=="PYZ"){Finding f;f.kind="container_hint";f.family="PyInstaller";f.state="SUSPECTED";f.confidence=0.55;f.evidence={"PYZ\\0 marker candidate; PyInstaller container structure has not yet validated"};f.negative_evidence={"raw PYZ magic can occur in unrelated binary data and is route-only until CArchive/PYZ structure closes"};f.ranges.push_back({e.offset,e.size,"PYZ marker"});f.suggested_actions={"validate:pyinstaller-carchive"};out.push_back(std::move(f));}
         else if(e.kind=="GodotPCK"){
             ++godot_marker_count;
             if(!godot_marker_finding){

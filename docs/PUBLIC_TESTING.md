@@ -14,6 +14,7 @@ P0 校验：
 - model trust 与 CPython bytecode ingress；
 - Nuitka 弱字符串不提升、constant/onefile 结构 gate；现代 variable-length 与 legacy fixed-width（32/64-bit C-long）constant stream 正例、旧 `G` GenericAlias/固定宽度 bigint 语义、尾随字节和未知 tag fail-closed；以及 ELF64/x86-64 `__compiled__` version tuple 的直接符号/导入 PLT 合成正例、candidate/releaselevel 语义与 descriptor/字段/构造器/导入符号扰动负例；
 - Unity 裸词不路由，以及 Godot `encrypted pack` 的 ASCII 词边界路由：真实 `encrypted pack directory` / `encrypted pack-referenced` 保留，普通 `encrypted packet` 不再触发 Godot；string-only Godot 证据保持 `SUSPECTED`，结构化 PCK 由独立解析器提升；
+- Nuitka onefile filename geometry与 PyInstaller PYZ marker 边界：onefile filename 遵循 upstream bootstrap 的 1024-char buffer（最大 1023 字符），裸 `PYZ\0` 只保留 route-only `SUSPECTED`，CArchive/PYZ 深层结构闭合后才提升；
 - JSON/text/version 与 `0/1/2/3/4` process contract；
 - APK/Hermes child 与 APK/JNI J0-J4 结构关系的有界静态 gate；
 - Windows junction/reparse 输出安全（Windows runner）。

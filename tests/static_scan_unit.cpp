@@ -45,6 +45,15 @@ int main() {
     for(const auto&f:godot_findings)if(f.family=="Godot"){saw_godot=true;if(f.state!="SUSPECTED")fail("string-only Godot evidence was promoted above SUSPECTED");}
     if(!saw_godot)fail("delimited Godot encrypted-pack string finding lost");
 
+    // PYZ magic is a route candidate only. The dedicated PyInstaller parser
+    // must validate CArchive/PYZ geometry before confidence is raised.
+    const std::string pyz_text("xxxxPYZ\0junk",12);
+    auto pyz_scan=scan(pyz_text);
+    if(!pyz_scan.hints.pyinstaller)fail("raw PYZ marker no longer routes PyInstaller validation");
+    auto pyz_findings=prts::detect_common(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(pyz_text.data()),pyz_text.size()),pe,elf,pyz_scan);
+    bool saw_pyz=false;for(const auto&f:pyz_findings)if(f.family=="PyInstaller"){saw_pyz=true;if(f.state!="SUSPECTED"||f.kind!="container_hint")fail("raw PYZ marker was promoted above route-only SUSPECTED");}
+    if(!saw_pyz)fail("raw PYZ marker route-only finding lost");
+
     std::cout << "PASS\n";
     return 0;
 }
