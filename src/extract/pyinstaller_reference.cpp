@@ -112,4 +112,15 @@ void finalize_pyinstaller_bootstrap_reference(PyInstArchiveInfo&a){
 
     a.bootstrap_reference_status="REFERENCE_MATCH";a.bootstrap_reference_label=join_labels(common);a.bootstrap_match_mode=mode_for(matched_modules);
 }
+
+std::vector<std::string> pyinstaller_bootstrap_required_modules(const PyInstArchiveInfo&a){
+    std::vector<std::string> out;
+    if(a.bootstrap_profile=="LEGACY_4X"){
+        for(auto name:kLegacyRequired)out.emplace_back(name);
+    }else if(a.bootstrap_profile=="MODERN_5X_6X"){
+        for(auto name:kModernRequired)out.emplace_back(name);
+        if(has_entry(a,kModernWindowsOptional))out.emplace_back(kModernWindowsOptional);
+    }
+    return out;
+}
 }

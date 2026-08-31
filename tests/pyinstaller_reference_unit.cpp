@@ -13,14 +13,16 @@ PyInstBootstrapModuleMatch match(std::string name,std::string state="EXACT_MATCH
 void entry(PyInstArchiveInfo&a,const char*name){PyInstEntry e;e.name=name;a.entries.push_back(std::move(e));}
 PyInstArchiveInfo modern(bool windows=false){PyInstArchiveInfo a;a.valid=true;for(auto n:{"pyimod01_archive","pyimod02_importers","pyimod03_ctypes"}){entry(a,n);a.bootstrap_modules.push_back(match(n));}if(windows){entry(a,"pyimod04_pywin32");a.bootstrap_modules.push_back(match("pyimod04_pywin32"));}return a;}
 PyInstArchiveInfo legacy(){PyInstArchiveInfo a;a.valid=true;for(auto n:{"pyimod01_os_path","pyimod02_archive","pyimod03_importers","pyimod04_ctypes"}){entry(a,n);a.bootstrap_modules.push_back(match(n));}return a;}
+
 }
 int main(){
     {
         auto a=modern();prts::finalize_pyinstaller_bootstrap_reference(a);
         need(a.bootstrap_profile=="MODERN_5X_6X","modern profile");need(a.bootstrap_reference_status=="REFERENCE_MATCH","modern non-Windows match");need(a.bootstrap_reference_label=="R","modern label");need(a.bootstrap_match_mode=="EXACT","modern exact mode");
+        auto required=prts::pyinstaller_bootstrap_required_modules(a);need(required.size()==3,"modern non-Windows required module count");need(required[0]=="pyimod01_archive"&&required[1]=="pyimod02_importers"&&required[2]=="pyimod03_ctypes","modern required module names");
     }
     {
-        auto a=modern(true);prts::finalize_pyinstaller_bootstrap_reference(a);need(a.bootstrap_reference_status=="REFERENCE_MATCH","modern Windows match");
+        auto a=modern(true);prts::finalize_pyinstaller_bootstrap_reference(a);need(a.bootstrap_reference_status=="REFERENCE_MATCH","modern Windows match");auto required=prts::pyinstaller_bootstrap_required_modules(a);need(required.size()==4&&required.back()=="pyimod04_pywin32","modern Windows required module count");
     }
     {
         auto a=modern(true);a.bootstrap_modules.back()=match("pyimod04_pywin32","NO_REFERENCE","",false);prts::finalize_pyinstaller_bootstrap_reference(a);
@@ -40,7 +42,7 @@ int main(){
     }
     {
         auto a=legacy();prts::finalize_pyinstaller_bootstrap_reference(a);
-        need(a.bootstrap_profile=="LEGACY_4X","legacy profile");need(a.bootstrap_reference_status=="REFERENCE_MATCH","legacy match");
+        need(a.bootstrap_profile=="LEGACY_4X","legacy profile");need(a.bootstrap_reference_status=="REFERENCE_MATCH","legacy match");auto required=prts::pyinstaller_bootstrap_required_modules(a);need(required.size()==4&&required.front()=="pyimod01_os_path"&&required.back()=="pyimod04_ctypes","legacy required module set");
     }
     {
         auto a=legacy();a.bootstrap_modules.back()=match("pyimod04_ctypes","DIFFERENT","",true);prts::finalize_pyinstaller_bootstrap_reference(a);

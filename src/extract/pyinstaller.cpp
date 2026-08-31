@@ -306,10 +306,14 @@ Finding pyinstaller_bootstrap_finding(const PyInstArchiveInfo&a){
     f.variant=a.bootstrap_reference_label;
     f.fields["bootstrap_reference_status"]=a.bootstrap_reference_status;
     f.fields["bootstrap_match_mode"]=a.bootstrap_match_mode;
+    f.fields["bootstrap_profile"]=a.bootstrap_profile;
     f.fields["python_version"]=std::to_string(a.python_version);
+    const auto required=pyinstaller_bootstrap_required_modules(a);std::size_t required_matched=0;
     int exact=0,semantic=0;
     for(const auto&m:a.bootstrap_modules){
         f.fields["module."+m.name]=m.state+(m.reference_label.empty()?"":" "+m.reference_label);if(m.normalized_code_units)f.fields["module."+m.name+".normalized_code_units"]=std::to_string(m.normalized_code_units);if(!m.normalization_source.empty())f.fields["module."+m.name+".normalization_source"]=m.normalization_source;if(!m.normalize_error.empty())f.fields["module."+m.name+".normalize_error"]=m.normalize_error;
+        const bool module_matched=m.state=="EXACT_MATCH"||m.state=="SEMANTIC_MATCH"||m.state=="OPCODE_NORMALIZED_SEMANTIC_MATCH";
+        if(module_matched&&std::find(required.begin(),required.end(),m.name)!=required.end())++required_matched;
         if(m.state=="EXACT_MATCH"){
             ++exact;f.evidence.push_back(m.name+" exact raw marshal payload match"+(m.reference_label.empty()?"":" ("+m.reference_label+")"));
         }else if(m.state=="SEMANTIC_MATCH"){
@@ -326,7 +330,10 @@ Finding pyinstaller_bootstrap_finding(const PyInstArchiveInfo&a){
     }
     f.fields["exact_modules"]=std::to_string(exact);
     f.fields["semantic_modules"]=std::to_string(semantic);
-    if(a.bootstrap_reference_status=="REFERENCE_MATCH")f.evidence.push_back("all four PyInstaller-owned preload modules match one official loader generation; bootstrap loader layer can be deprioritized");
+    f.fields["required_modules"]=std::to_string(required.size());
+    f.fields["required_modules_matched"]=std::to_string(required_matched);
+    if(a.bootstrap_reference_status=="REFERENCE_MATCH")f.evidence.push_back("all required PyInstaller-owned preload modules for "+a.bootstrap_profile+" match one official loader generation; bootstrap loader layer can be deprioritized");
+    else if(a.bootstrap_reference_status=="REFERENCE_PROFILE_AMBIGUOUS")f.negative_evidence.push_back("both legacy and modern bootstrap module profiles are present; loader generation confirmation is intentionally withheld");
     else if(a.bootstrap_reference_status=="REFERENCE_DIFF")f.suggested_actions.push_back("inspect differing preload module(s) before native-runtime analysis");
     return f;
 }

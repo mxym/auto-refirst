@@ -88,5 +88,6 @@ Finding pyinstaller_finding(const PyInstArchiveInfo& info);
 
 void analyze_pyinstaller_bootstrap(std::span<const std::uint8_t> data,PyInstArchiveInfo& info,const CPythonInfo* cpython=nullptr);
 void finalize_pyinstaller_bootstrap_reference(PyInstArchiveInfo& info);
+std::vector<std::string> pyinstaller_bootstrap_required_modules(const PyInstArchiveInfo& info);
 Finding pyinstaller_bootstrap_finding(const PyInstArchiveInfo& info);
 }
