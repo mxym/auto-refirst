@@ -13,7 +13,13 @@ bool printable(std::uint8_t b){return b>=0x20&&b<=0x7e;}
 enum HintMask : std::uint32_t { H_NONE=0,H_PYINSTALLER=1u<<0,H_NUITKA=1u<<1,H_GODOT=1u<<2,H_UNITY=1u<<3,H_RUST=1u<<4,H_GO=1u<<5,H_RENPY=1u<<6,H_AUTOIT=1u<<7,H_CRYPTO=1u<<8 };
 struct AnchorDef { const char* text; std::uint32_t hints; };
 static constexpr AnchorDef kAnchors[]={
-    {"python",H_NONE},{"pyinstaller",H_PYINSTALLER},{"pyimod",H_PYINSTALLER},{"_mei",H_PYINSTALLER},
+    {"python",H_NONE},{"pyinstaller",H_PYINSTALLER},{"pyimod",H_PYINSTALLER},
+    // PyInstaller-specific temporary/runtime identifiers. Do not route on bare
+    // "_mei": ordinary identifiers such as READ_MEID contain that substring.
+    // Researched bootloaders v3.6 -> v6.16 use _MEIXXXXXX on POSIX, _MEI%d/
+    // _MEI%... format strings on Windows, legacy _MEIPASS2, and newer
+    // _PYI_APPLICATION_HOME_DIR/sys._MEIPASS runtime identifiers.
+    {"_meixxxxxx",H_PYINSTALLER},{"_mei%",H_PYINSTALLER},{"_meipass",H_PYINSTALLER},{"_pyi_application_home_dir",H_PYINSTALLER},
     {"nuitka",H_NUITKA},{"__nuitka__",H_NUITKA},{"constant_bin_data",H_NUITKA},
     {"gdscript::",H_GODOT},
     {"upx",H_NONE},{"vmprotect",H_NONE},{"themida",H_NONE},{"winlicense",H_NONE},{"autoit",H_AUTOIT},{"au3!ea06",H_AUTOIT},{"electron",H_NONE},{"asar",H_NONE},

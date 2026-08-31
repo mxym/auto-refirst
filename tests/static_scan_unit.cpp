@@ -63,6 +63,16 @@ int main() {
     bool saw_pyinstaller_string=false;for(const auto&f:pyinstaller_findings)if(f.family=="PyInstaller"){saw_pyinstaller_string=true;if(f.state!="SUSPECTED")fail("string-only PyInstaller evidence was promoted above SUSPECTED");}
     if(!saw_pyinstaller_string)fail("PyInstaller string route-only finding lost");
 
+    // Bare _MEI is too broad: READ_MEID and similar ordinary identifiers
+    // occur in system libraries. Preserve concrete historical/current
+    // PyInstaller bootloader identifiers instead.
+    if(scan("READ_MEID").hints.pyinstaller)fail("ordinary READ_MEID identifier routed PyInstaller");
+    if(!scan("_MEIXXXXXX").hints.pyinstaller)fail("historical POSIX _MEIXXXXXX route lost");
+    if(!scan("_MEI%08xXXXXXX").hints.pyinstaller)fail("Windows/current _MEI format route lost");
+    if(!scan("_MEIPASS2").hints.pyinstaller)fail("legacy _MEIPASS2 route lost");
+    if(!scan("sys._MEIPASS").hints.pyinstaller)fail("sys._MEIPASS route lost");
+    if(!scan("_PYI_APPLICATION_HOME_DIR").hints.pyinstaller)fail("current _PYI application-home route lost");
+
     if(pyz_scan.embedded.size()!=1||pyz_scan.embedded[0].kind!="PYZ"||pyz_scan.embedded[0].state!="SUSPECTED")fail("raw PYZ embedded marker retained high-confidence state");
     const std::string gdpc_text="xxxxGDPCjunk";
     auto gdpc_scan=scan(gdpc_text);
