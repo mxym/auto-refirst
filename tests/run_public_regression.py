@@ -273,7 +273,7 @@ def target_path(build:pathlib.Path,config:str|None,name:str) -> pathlib.Path:
 
 
 def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
-    targets=["auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit"]
+    targets=["auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit","auto_refirst_public_nuitka_unit","auto_refirst_public_static_scan_unit"]
     build,config=cmake_build(binary,targets)
     model=target_path(build,config,targets[0]); assert run([model]).stdout.strip()=="PASS"
     pyunit=target_path(build,config,targets[1]); p=td/"public.pyc"; p.write_bytes(pyc310())
@@ -290,7 +290,9 @@ def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
     assert run([pyunit,"marshal-hash",malformed,"310"],check=False).returncode==3
     flutter=target_path(build,config,targets[2]); assert run([flutter]).stdout.strip()=="PASS"
     pathunit=target_path(build,config,targets[3]); assert run([pathunit]).stdout.strip()=="PASS"
-    log("[PASS P0] model-trust + generic-path synthetic units + direct CPython pyc trust ingress + Flutter codec")
+    nuitka=target_path(build,config,targets[4]); assert run([nuitka]).stdout.strip()=="PASS"
+    static_scan=target_path(build,config,targets[5]); assert run([static_scan]).stdout.strip()=="PASS"
+    log("[PASS P0] model-trust + generic-path/Nuitka/static-scan synthetic units + direct CPython pyc trust ingress + Flutter codec")
 
 
 def p0_cli_exit_contract(binary:pathlib.Path) -> None:
@@ -326,11 +328,37 @@ def p0_report_json(binary:pathlib.Path,td:pathlib.Path) -> None:
     assert text_cp.returncode==0 and json_cp.returncode==0,(text_cp.returncode,json_cp.returncode)
     en=text_cp.stdout; obj=json.loads(json_cp.stdout)
     assert "auto-refirst Analysis" in en and obj["format"]["kind"]=="ELF" and obj["report_schema_version"]=="1.0"
+    envelope=json.loads(run([binary,p,"--json","--json-envelope"]).stdout)
+    assert envelope["report_schema_version"]=="1.0" and len(envelope["reports"])==1 and envelope["reports"][0]["format"]["kind"]=="ELF",envelope
+    assert run([binary,p,"--json-envelope"],check=False).returncode==2
+    assert run([binary,p,"--search=ELF","--json","--json-envelope"],check=False).returncode==2
+    zh=run([binary,p,"--report-lang=zh"]).stdout
+    assert "auto-refirst 分析报告" in zh and "分析指引:" in zh and "可见假设: 声明入口仍是默认分析假设" in zh,zh
+    assert "No evidence-gated runtime observation modality was established" not in zh and "absence of alternate evidence is not proof" not in zh,zh
+    zh_pyc=td/"report-zh.pyc";zh_pyc.write_bytes(pyc310());zh_pyc_text=run([binary,zh_pyc,"--report-lang=zh"]).stdout
+    assert "与官方 CPython 发布系列的 magic 值精确匹配" in zh_pyc_text,zh_pyc_text
+    assert "将反编译源码视为派生辅助信息" in zh_pyc_text and "official CPython release-family magic matched exactly" not in zh_pyc_text,zh_pyc_text
+    relocated_pyc=td/"relocated-report.pyc";relocated_pyc.write_bytes(pyc310())
+    artifact_root=td/"relocated-artifacts"
+    relocated=json.loads(run([binary,relocated_pyc,"--json",f"--artifact-root={artifact_root}"]).stdout)
+    assert artifact_root.is_dir() and (artifact_root/".auto-refirst-owner").is_file(),artifact_root
+    assert pathlib.Path(relocated["materialization"]["root"])==artifact_root,relocated["materialization"]
+    assert not pathlib.Path(str(relocated_pyc)+".auto-refirst").exists(),"default sidecar root should not be created when --artifact-root is used"
+    json.loads(run([binary,relocated_pyc,"--json",f"--artifact-root={artifact_root}"]).stdout)  # matching owner may be reused
+    other_pyc=td/"same-bytes-different-input.pyc";other_pyc.write_bytes(relocated_pyc.read_bytes())
+    assert run([binary,other_pyc,f"--artifact-root={artifact_root}"],check=False).returncode==2,"artifact root must remain bound to one input path"
+    foreign=td/"foreign-artifact-root";foreign.mkdir();(foreign/"do-not-touch.txt").write_text("sentinel",encoding="utf-8")
+    refused=run([binary,relocated_pyc,f"--artifact-root={foreign}"],check=False);assert refused.returncode==2,refused
+    assert (foreign/"do-not-touch.txt").read_text(encoding="utf-8")=="sentinel" and not (foreign/".auto-refirst-owner").exists()
+    droot=td/"artifact-root-dir-input";droot.mkdir();(droot/"x.bin").write_bytes(minimal_elf())
+    assert run([binary,droot,f"--artifact-root={td/'dir-output'}"],check=False).returncode==2
     bad=run([binary,p,"--report-lang=xx"],check=False); assert bad.returncode==2
     version_contract(binary)
     d=td/"report-dir";d.mkdir();(d/"sample.bin").write_bytes(minimal_elf())
     dobj=json.loads(run([binary,d,"--json"]).stdout)
     assert dobj["report_schema_version"]=="1.0" and dobj["reports"] and all(x["report_schema_version"]=="1.0" for x in dobj["reports"])
+    denv=json.loads(run([binary,d,"--json","--json-envelope"]).stdout)
+    assert denv["directory_summary"] and denv["reports"] and denv["report_schema_version"]=="1.0"
     assert run([binary],check=False).returncode==2
     assert run([binary,"--definitely-unknown"],check=False).returncode==2
     assert run([binary,p,"--definitely-unknown"],check=False).returncode==2
@@ -342,7 +370,7 @@ def p0_report_json(binary:pathlib.Path,td:pathlib.Path) -> None:
     fatal_env=dict(os.environ);fatal_env.update({"TMPDIR":str(bad_temp),"TMP":str(bad_temp),"TEMP":str(bad_temp)})
     fatal=run([binary,d,"--json"],check=False,env=fatal_env)
     assert fatal.returncode==4 and "temporary" in fatal.stderr.lower(),fatal.stderr
-    output_cases=[[binary,"--help"],[binary,"--version"],[binary,p],[binary,p,"--json"],
+    output_cases=[[binary,"--help"],[binary,"--version"],[binary,p],[binary,p,"--json"],[binary,p,"--json","--json-envelope"],
                   [binary,p,"--search=ELF"],[binary,p,"--search=definitely-absent"],
                   [binary,d],[binary,d,"--json"]]
     if os.name!="nt":

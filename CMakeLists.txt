@@ -162,6 +162,7 @@ add_executable(auto_refirst
     src/extract/nested_executable.cpp
     src/extract/container_ingress.cpp
     src/extract/nuitka.cpp
+    src/extract/nuitka_version.cpp
     src/extract/lua.cpp
     src/extract/wasm.cpp
     src/extract/hermes.cpp
@@ -296,6 +297,22 @@ add_executable(auto_refirst_public_path_utf8_unit EXCLUDE_FROM_ALL
 )
 target_include_directories(auto_refirst_public_path_utf8_unit PRIVATE include)
 
+add_executable(auto_refirst_public_nuitka_unit EXCLUDE_FROM_ALL
+    tests/nuitka_unit.cpp
+    src/extract/nuitka.cpp
+    src/extract/nuitka_version.cpp
+    src/core/zstd_wrap.c
+    third_party/zydis/Zydis.c
+)
+target_include_directories(auto_refirst_public_nuitka_unit PRIVATE include third_party/zydis)
+target_compile_definitions(auto_refirst_public_nuitka_unit PRIVATE ZYDIS_STATIC_BUILD=1 ZYAN_STATIC_BUILD=1)
+
+add_executable(auto_refirst_public_static_scan_unit EXCLUDE_FROM_ALL
+    tests/static_scan_unit.cpp
+    src/core/static_scan.cpp
+)
+target_include_directories(auto_refirst_public_static_scan_unit PRIVATE include)
+
 add_executable(auto_refirst_public_fixture_ordinary EXCLUDE_FROM_ALL tests/public/ordinary.c)
 add_executable(auto_refirst_public_fixture_crypto EXCLUDE_FROM_ALL tests/public/crypto_tea.c)
 add_executable(auto_refirst_public_fixture_runtime_child EXCLUDE_FROM_ALL tests/public/runtime_child.c)
@@ -306,6 +323,8 @@ foreach(_public_target
         auto_refirst_public_python_bytecode_unit
         auto_refirst_public_flutter_codec_unit
         auto_refirst_public_path_utf8_unit
+        auto_refirst_public_nuitka_unit
+        auto_refirst_public_static_scan_unit
         auto_refirst_public_fixture_ordinary
         auto_refirst_public_fixture_crypto
         auto_refirst_public_fixture_runtime_child
@@ -317,7 +336,9 @@ foreach(_public_target
         auto_refirst_public_model_trust_unit
         auto_refirst_public_python_bytecode_unit
         auto_refirst_public_flutter_codec_unit
-        auto_refirst_public_path_utf8_unit)
+        auto_refirst_public_path_utf8_unit
+        auto_refirst_public_nuitka_unit
+        auto_refirst_public_static_scan_unit)
     if(MSVC)
         target_compile_options(${_public_target} PRIVATE /W4 /permissive- /EHsc)
     else()

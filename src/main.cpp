@@ -84,6 +84,7 @@
 namespace {
 struct Options {
     bool json=false;
+    bool json_envelope=false;
     prts::ReportLanguage report_language=prts::ReportLanguage::English;
     bool extract=false;
     bool recursive=false; // explicit recursive artifact graph compatibility flag
@@ -108,6 +109,9 @@ struct Options {
     std::uint32_t extract_budget_files=std::numeric_limits<std::uint32_t>::max();
     // Internal only: recursive graph nodes use selective APK child materialization.
     bool artifact_graph_node=false;
+    // User-facing exact root is validated/claimed before analysis, then copied
+    // into the internal override used by derived child analysis.
+    std::filesystem::path artifact_root_cli;
     // Internal only: keep all materialized output for a derived child under the root input artifact tree.
     std::filesystem::path artifact_root_override;
     // Internal only: a parent BFS owns high-value child admission; suppress nested independent graph creation.
@@ -136,6 +140,11 @@ int finish_standard_output(ExitCode code){
     return exit_code(code);
 }
 
+void render_report_set_json(std::ostream&o,const std::vector<prts::AnalysisReport>&reports){
+    o<<"{\n  \"report_schema_version\": \""<<prts::kReportSchemaVersion<<"\",\n  \"reports\": [";
+    for(std::size_t i=0;i<reports.size();++i){if(i)o<<",\n";prts::render_json(o,reports[i]);}
+    o<<"]\n}\n";
+}
 
 void print_version(std::ostream& o){
     o << "auto-refirst " << prts::kProductVersion << "\n"
@@ -151,6 +160,7 @@ void print_help(std::ostream& o){
       << "  -h, --help                 Show this help and exit\n"
       << "  --version                  Show version and exit\n"
       << "  --json                     Emit structured JSON\n"
+      << "  --json-envelope            With --json, wrap file/report-set output in a stable reports[] object\n"
       << "  --report-lang=en|zh        Human-readable report language\n"
       << "  --extract                  Additionally materialize full/bulk static artifacts and heavy maps\n"
       << "  --run                      Run the automatic deep runtime plan (non-destructive)\n"
@@ -166,12 +176,15 @@ void print_help(std::ostream& o){
       << "  --artifact-depth=N         Automatic/extracted static-child depth limit (default 4)\n"
       << "  --artifact-nodes=N         Automatic/extracted static-child node limit (default 1024)\n"
       << "  --artifact-bytes=N         Automatic/extracted static-child byte limit (default 512 MiB)\n"
+      << "  --artifact-root=PATH       Single-file product-owned artifact root (supports read-only inputs)\n"
       << "  --search=TEXT              Fast directory string hunt (ASCII/UTF-16LE)\n"
       << "  --search-ignore-case       ASCII case-insensitive search\n"
       << "  --wxid=wx...               Optional WeChat cache decryption identity\n\n"
       << "Artifact policy:\n"
       << "  Default analysis automatically materializes bounded high-value code/scripts/maps under\n"
-      << "  <input>.auto-refirst/ and statically re-analyzes HIGH-priority children. Strict validated\n"
+      << "  <input>.auto-refirst/ and statically re-analyzes HIGH-priority children. For a single file,\n"
+      << "  --artifact-root relocates that product-owned tree (for example when the input is read-only);\n"
+      << "  an ownership marker prevents accidental adoption of an unrelated existing directory. Strict validated\n"
       << "  static repairs and uniquely oracle-closed cross-file semantic children use the same non-runtime path.\n"
       << "  --extract adds\n"
       << "  complete container/resource expansion and explicitly heavy analysis planes; it never\n"
@@ -259,6 +272,38 @@ bool artifact_path_link_or_reparse(const std::filesystem::path&p){
 
 std::filesystem::path artifact_root_for_input(const std::filesystem::path&input){
     return prts::path_with_ascii_suffix(input,".auto-refirst");
+}
+
+std::string artifact_root_owner_key(const std::filesystem::path&input,std::string&error){
+    std::error_code ec;auto a=std::filesystem::absolute(input,ec);if(ec){error="cannot make input path absolute for artifact-root ownership: "+prts::error_message_utf8(ec);return{};}
+    auto u=prts::path_utf8(a.lexically_normal());
+    return prts::sha256_bytes(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(u.data()),u.size()));
+}
+
+bool prepare_user_artifact_root(const std::filesystem::path&input,const std::filesystem::path&requested,std::filesystem::path&resolved,std::string&error){
+    error.clear();resolved.clear();if(requested.empty()){error="--artifact-root requires a non-empty path";return false;}
+    std::error_code ec;auto root=std::filesystem::absolute(requested,ec);if(ec){error="cannot make --artifact-root absolute: "+prts::error_message_utf8(ec);return false;}root=root.lexically_normal();
+    auto input_abs=std::filesystem::absolute(input,ec);if(ec){error="cannot make input path absolute for artifact-root safety check: "+prts::error_message_utf8(ec);return false;}input_abs=input_abs.lexically_normal();
+    if(root==input_abs){error="--artifact-root must not alias the input file";return false;}
+    std::string owner_error;auto owner=artifact_root_owner_key(input,owner_error);if(owner.empty()){error=std::move(owner_error);return false;}
+    const auto marker=root/prts::path_from_utf8(".auto-refirst-owner");
+    auto status=std::filesystem::symlink_status(root,ec);const bool existed=!ec&&status.type()!=std::filesystem::file_type::not_found;
+    if(ec&&ec!=std::errc::no_such_file_or_directory){error="cannot inspect --artifact-root: "+prts::error_message_utf8(ec);return false;}ec.clear();
+    if(existed){
+        if(artifact_path_link_or_reparse(root)){error="--artifact-root is a symlink/reparse point; refusing ownership: "+prts::path_utf8(root);return false;}
+        if(status.type()!=std::filesystem::file_type::directory){error="--artifact-root exists but is not a directory: "+prts::path_utf8(root);return false;}
+        auto mst=std::filesystem::symlink_status(marker,ec);if(ec||mst.type()!=std::filesystem::file_type::regular||artifact_path_link_or_reparse(marker)){error="existing --artifact-root lacks a regular auto-refirst ownership marker: "+prts::path_utf8(root);return false;}
+        std::ifstream in(marker,std::ios::binary);std::string magic,key;if(!std::getline(in,magic)||!std::getline(in,key)||magic!="auto-refirst-artifact-root-v1"||key!="owner_key="+owner){error="existing --artifact-root is owned by a different input or has an invalid ownership marker: "+prts::path_utf8(root);return false;}
+        resolved=root;return true;
+    }
+    if(!root.parent_path().empty())std::filesystem::create_directories(root.parent_path(),ec);
+    if(ec){error="cannot create --artifact-root parent: "+prts::error_message_utf8(ec);return false;}
+    ec.clear();
+    if(!std::filesystem::create_directory(root,ec)){if(ec){error="cannot create --artifact-root: "+prts::error_message_utf8(ec);return false;}error="--artifact-root appeared concurrently; refusing to claim an existing unmarked directory";return false;}
+    status=std::filesystem::symlink_status(root,ec);if(ec||status.type()!=std::filesystem::file_type::directory||artifact_path_link_or_reparse(root)){error="new --artifact-root did not resolve to a real non-reparse directory";return false;}
+    std::ofstream out(marker,std::ios::binary|std::ios::trunc);if(!out){error="cannot create --artifact-root ownership marker";return false;}
+    out<<"auto-refirst-artifact-root-v1\nowner_key="<<owner<<"\ninput="<<prts::path_utf8(input_abs)<<"\n";out.flush();if(!out){error="cannot persist --artifact-root ownership marker";return false;}
+    resolved=root;return true;
 }
 
 bool ensure_artifact_subdirectory(const std::filesystem::path&root,const std::filesystem::path&dir,std::string&error){
@@ -510,6 +555,7 @@ bool parse_options(int argc,char**argv,Options&opt){
         if(arg=="-h"||arg=="--help")opt.help=true;
         else if(arg=="--version")opt.version=true;
         else if(arg=="--json")opt.json=true;
+        else if(arg=="--json-envelope")opt.json_envelope=true;
         else if(arg.rfind("--report-lang=",0)==0){auto v=arg.substr(14);if(v=="en")opt.report_language=prts::ReportLanguage::English;else if(v=="zh")opt.report_language=prts::ReportLanguage::Chinese;else{std::cerr<<"unsupported report language (use en or zh): "<<v<<"\n";return false;}}
         else if(arg=="--extract")opt.extract=true;
         else if(arg=="--recursive")opt.recursive=true;
@@ -527,6 +573,7 @@ bool parse_options(int argc,char**argv,Options&opt){
         else if(arg.rfind("--artifact-depth=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(17),v)||v>32){std::cerr<<"invalid artifact depth (0..32): "<<arg<<"\n";return false;}opt.artifact_max_depth=static_cast<std::uint32_t>(v);}
         else if(arg.rfind("--artifact-nodes=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(17),v)||v==0||v>1000000){std::cerr<<"invalid artifact node limit (1..1000000): "<<arg<<"\n";return false;}opt.artifact_max_nodes=static_cast<std::uint32_t>(v);}
         else if(arg.rfind("--artifact-bytes=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(17),v)||v==0){std::cerr<<"invalid artifact byte limit: "<<arg<<"\n";return false;}opt.artifact_max_bytes=v;}
+        else if(arg.rfind("--artifact-root=",0)==0){auto v=arg.substr(16);if(v.empty()){std::cerr<<"--artifact-root requires a non-empty path\n";return false;}opt.artifact_root_cli=cli_path(v);}
         else {std::cerr<<"unknown option: "<<arg<<"\n";return false;}
     }
     if(opt.run_requested&&opt.run_mode.empty())opt.run_mode="auto";
@@ -2099,7 +2146,15 @@ int main(int argc,char**argv){
     if(argc<2){std::cerr<<"usage: auto-refirst <file|directory> [--run] [--apply] [--json] [--extract] [options]\nTry 'auto-refirst --help' for details.\n";return exit_code(ExitCode::Usage);}
     const std::string first=argv[1];if(first=="-h"||first=="--help"){print_help(std::cout);return finish_standard_output(ExitCode::Success);}if(first=="--version"){print_version(std::cout);return finish_standard_output(ExitCode::Success);}if(!first.empty()&&first.front()=='-'){std::cerr<<"unknown option: "<<first<<"\n";return exit_code(ExitCode::Usage);}
     Options opt;if(!parse_options(argc,argv,opt))return exit_code(ExitCode::Usage);if(opt.help){print_help(std::cout);return finish_standard_output(ExitCode::Success);}if(opt.version){print_version(std::cout);return finish_standard_output(ExitCode::Success);}
+    if(opt.json_envelope&&!opt.json){std::cerr<<"--json-envelope requires --json\n";return exit_code(ExitCode::Usage);}
+    if(opt.json_envelope&&!opt.search.empty()){std::cerr<<"--json-envelope is for analysis reports, not --search JSON Lines output\n";return exit_code(ExitCode::Usage);}
     const std::filesystem::path input=cli_path(argv[1]);std::error_code ec;const auto input_status=std::filesystem::status(input,ec);if(ec||input_status.type()==std::filesystem::file_type::not_found){std::cerr<<"cannot access input"<<(ec?": "+prts::error_message_utf8(ec):std::string())<<"\n";return exit_code(ExitCode::Input);}const bool is_dir=input_status.type()==std::filesystem::file_type::directory;if(!is_dir&&input_status.type()!=std::filesystem::file_type::regular){std::cerr<<"input is neither a regular file nor a directory\n";return exit_code(ExitCode::Input);}
+    if(!opt.artifact_root_cli.empty()){
+        if(is_dir){std::cerr<<"--artifact-root is single-file only; directory analysis needs distinct product-owned roots per input\n";return exit_code(ExitCode::Usage);}
+        if(opt.recursive&&opt.extract){std::cerr<<"--artifact-root is not yet compatible with --extract --recursive because recursive graph nodes require distinct roots\n";return exit_code(ExitCode::Usage);}
+        if(!opt.search.empty()){std::cerr<<"--artifact-root is not used by --search\n";return exit_code(ExitCode::Usage);}
+        std::string artifact_error;std::filesystem::path resolved;if(!prepare_user_artifact_root(input,opt.artifact_root_cli,resolved,artifact_error)){std::cerr<<artifact_error<<"\n";return exit_code(ExitCode::Usage);}opt.artifact_root_override=std::move(resolved);
+    }
     if(opt.run_mode=="trace")std::cerr<<"warning: --run=trace is DEPRECATED; prefer bare --run for automatic deep non-destructive analysis\n";
     else if(opt.run_mode=="unpack")std::cerr<<"warning: --run=unpack is DEPRECATED and is non-destructive; prefer bare --run, and add --apply only when you explicitly authorize validated installation\n";
     else if(opt.run_mode=="python-probe")std::cerr<<"warning: --run=python-probe is a DEPRECATED forced-debug compatibility mode; bare --run routes the probe automatically when it can answer an unresolved question\n";
@@ -2176,7 +2231,8 @@ int main(int argc,char**argv){
 
     if(!successful_root_inputs){std::cerr<<"no readable regular input files found\n";return exit_code(ExitCode::Input);}
     if(opt.json){
-        if(reports.size()==1)std::cout<<prts::render_json(reports.front());
+        if(opt.json_envelope)render_report_set_json(std::cout,reports);
+        else if(reports.size()==1)std::cout<<prts::render_json(reports.front());
         else{
             std::cout<<"[\n";for(std::size_t i=0;i<reports.size();++i){if(i)std::cout<<",\n";auto j=prts::render_json(reports[i]);while(!j.empty()&&(j.back()=='\n'||j.back()=='\r'))j.pop_back();std::cout<<j;}std::cout<<"\n]\n";
         }

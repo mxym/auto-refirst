@@ -28,6 +28,14 @@ Full/heavy static materialization:
 ./build/auto-refirst ./target --extract --recursive --json
 ```
 
+For machine consumers that want a stable top-level `reports[]` object for both single-file and recursive artifact output, opt into the compatibility-preserving envelope:
+
+```sh
+./build/auto-refirst ./target --extract --recursive --json --json-envelope
+```
+
+The existing `--json` transport shape remains unchanged.
+
 Opt-in runtime analysis:
 
 ```sh
@@ -40,7 +48,13 @@ Validated transactional installation additionally requires `--apply`:
 ./build/auto-refirst ./target --run --apply --json
 ```
 
-See [docs/CLI.md](docs/CLI.md), the exact [CLI process and authorization contract](docs/CLI_CONTRACT.md), [docs/BUILD.md](docs/BUILD.md), and the maintainer [release checklist](docs/RELEASE_CHECKLIST.md).
+For evidence on read-only media or system paths, relocate a single file's product-owned artifact tree to a writable location:
+
+```sh
+./build/auto-refirst /read-only/evidence.bin --artifact-root=/writable/case/evidence-artifacts --json
+```
+
+The root is bound to the input path by an ownership marker; unrelated existing directories are not adopted. See [docs/CLI.md](docs/CLI.md), the exact [CLI process and authorization contract](docs/CLI_CONTRACT.md), [docs/BUILD.md](docs/BUILD.md), and the maintainer [release checklist](docs/RELEASE_CHECKLIST.md).
 
 ## Capability groups
 

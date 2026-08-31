@@ -1169,6 +1169,59 @@ std::string render_text(const AnalysisReport& r) {
 }
 
 namespace {
+std::string localize_semantic_zh(std::string_view text) {
+    static constexpr std::pair<std::string_view,std::string_view> exact[] = {
+        {"declared entry remains the default hypothesis", "声明入口仍是默认分析假设"},
+        {"absence of alternate evidence is not proof that hidden execution is impossible", "没有发现替代路径证据，并不能证明隐藏执行路径不存在"},
+        {"No evidence-gated runtime observation modality was established; continue with static analysis unless later evidence proves a runtime dependency.", "尚未建立由证据触发的运行时观测需求；继续静态分析，除非后续证据证明必须依赖运行时行为。"},
+        {"STATIC_SUFFICIENT is a routing statement, not proof that runtime behavior is impossible or irrelevant.", "STATIC_SUFFICIENT 只是分析路由结论，并不证明运行时行为不可能发生或与分析无关。"},
+        {"Python runtime string anchor", "发现 Python 运行时字符串锚点"},
+        {"Nuitka string anchor", "发现 Nuitka 字符串锚点"},
+        {"official CPython release-family magic matched exactly", "与官方 CPython 发布系列的 magic 值精确匹配"},
+        {"PEP 552-era 16-byte header geometry and defined flag bits validated", "已验证 PEP 552 时代的 16 字节头部结构及已定义标志位"},
+        {"bytes after the header parse completely as exactly one top-level marshal code object under the authenticated minor-family layout", "头部之后的数据可按已认证的小版本系列布局完整解析为且仅为一个顶层 marshal 代码对象"},
+        {"root co_code/co_consts/co_names structure validated without executing marshal data", "无需执行 marshal 数据即可验证根代码对象的 co_code/co_consts/co_names 结构"},
+        {"Nuitka constant_bin directory structurally parsed", "已按结构解析 Nuitka constant_bin 目录"},
+        {".bytecode and module constant blocks recovered", "已恢复 .bytecode 与模块常量块"},
+        {"constant tag streams decoded and validated against declared counts/END tags", "常量标签流已解码，并依据声明计数与 END 标签完成验证"},
+        {"Nuitka __compiled__ named-tuple descriptor and major/minor/micro/releaselevel initializers were structurally recovered from bounded ELF64/x86-64 generated code", "已从有界 ELF64/x86-64 生成代码中按结构恢复 Nuitka __compiled__ 命名元组描述符，以及 major/minor/micro/releaselevel 初始化逻辑"},
+        {"KA[X/Y] payload located and contained-file stream structurally parsed", "已定位 KA[X/Y] 载荷，并按结构解析其内含文件流"},
+        {"Zstandard payload successfully decompressed", "Zstandard 载荷已成功解压"},
+        {"KAY marker followed by a structurally bounded Zstandard frame", "KAY 标记之后存在结构边界明确的 Zstandard 帧"},
+        {"deep parser entered because Unity family/backend route evidence", "由于存在 Unity 家族/后端路由证据，已进入深度解析器"},
+        {"Unity route produced no backend-specific or generic structural evidence", "Unity 路由未产生后端专属或通用结构证据"},
+        {"loader/runtime invokes a structurally declared target outside the explicit entry CFG", "加载器/运行时会调用显式入口 CFG 之外、由结构元数据声明的目标"},
+        {"dynamic loader processes DT_INIT before transferring to the program entry path", "动态加载器会在转入程序入口路径之前处理 DT_INIT"},
+        {"initializer slot is an ordinary implicit execution surface", "初始化槽位属于常规的隐式执行面"},
+        {"loader consumes DT_INIT_ARRAY_SLOT slot", "加载器会消费 DT_INIT_ARRAY_SLOT 槽位"},
+        {"identifier string is not independent structural evidence; family classification intentionally withheld", "标识字符串不构成独立结构证据；因此有意不提升到具体家族分类"},
+        {"raw GDPC bytes can occur in executable code/data and are not structural PCK confirmation", "原始 GDPC 字节可能自然出现在可执行代码/数据中，不能作为 PCK 的结构确认"},
+        {"budget exhaustion is not evidence that runtime execution is required; no modality was guessed from truncated analysis", "预算耗尽并不能证明必须执行运行时分析；不会根据被截断的分析猜测运行时模态"},
+    };
+    for(const auto&[from,to]:exact)if(text==from)return std::string(to);
+
+    std::string s(text);
+    constexpr std::string_view pyc_priority_prefix="authenticated direct CPython ";
+    constexpr std::string_view pyc_priority_suffix=" bytecode is the decisive reverse-analysis surface; use its bounded code-object map before generic native/runtime hypotheses";
+    if(s.starts_with(pyc_priority_prefix)&&s.ends_with(pyc_priority_suffix)){
+        auto version=s.substr(pyc_priority_prefix.size(),s.size()-pyc_priority_prefix.size()-pyc_priority_suffix.size());
+        return "经认证的直接 CPython "+version+" 字节码是决定性的逆向分析面；应先使用其有界代码对象映射，再考虑通用原生/运行时假设";
+    }
+    constexpr std::string_view dis_prefix="use the emitted code-object/name/constant map and a CPython ";
+    constexpr std::string_view dis_suffix="-compatible disassembler/decompiler for selected code objects";
+    if(s.starts_with(dis_prefix)&&s.ends_with(dis_suffix)){
+        auto version=s.substr(dis_prefix.size(),s.size()-dis_prefix.size()-dis_suffix.size());
+        return "使用已生成的代码对象/名称/常量映射，并用兼容 CPython "+version+" 的反汇编器/反编译器处理选定代码对象";
+    }
+    if(s=="treat decompiled source as a derived aid; serialized code-object structure and authenticated bytecode family remain the authoritative evidence")
+        return "将反编译源码视为派生辅助信息；序列化代码对象结构与已认证的字节码系列仍是权威证据";
+    if(s=="inspect the failed structure as a possible modified, corrupt, or unsupported variant before applying ecosystem-specific tooling")
+        return "在使用生态专用工具前，先检查失败结构是否属于被修改、损坏或暂未支持的变体";
+    if(s=="raise explicit artifact byte budget only if the input is trusted enough to justify it")
+        return "仅当输入足够可信且确有必要时，才显式提高产物字节预算";
+    return s;
+}
+
 std::string localize_text_zh(std::string_view text) {
     static constexpr std::pair<std::string_view,std::string_view> prefixes[] = {
         {"auto-refirst Analysis", "auto-refirst 分析报告"},
@@ -1192,6 +1245,12 @@ std::string localize_text_zh(std::string_view text) {
         {"Entry: ", "入口: "},
         {"Interpreter: ", "解释器: "},
         {"ELF ordinary dynamic: ", "ELF 常规动态元数据: "},
+        {"ELF dynamic extraction: ", "ELF 动态元数据提取: "},
+        {"ELF unwind extraction: ", "ELF 展开信息提取: "},
+        {"  symbols CSV: ", "  符号 CSV: "},
+        {"  relocations CSV: ", "  重定位 CSV: "},
+        {"  CIE CSV: ", "  CIE CSV: "},
+        {"  FDE CSV: ", "  FDE CSV: "},
         {"Needed libraries:", "依赖库:"},
         {"Program headers: ", "程序头: "},
         {"Segments:", "段:"},
@@ -1217,11 +1276,23 @@ std::string localize_text_zh(std::string_view text) {
         {"PyInstaller extraction:", "PyInstaller 提取:"},
         {"Crypto key-use recovery:", "密码学密钥使用恢复:"},
         {"Implicit execution: ", "隐式执行: "},
+        {"  fact #", "  事实 #"},
+        {"    reason: ", "    原因: "},
+        {"    condition: ", "    条件: "},
+        {"    detail: ", "    详情: "},
+        {"    evidence: ", "    证据: "},
+        {"    negative_evidence: ", "    负证据: "},
+        {"    artifact: ", "    产物: "},
+        {"  extraction: ", "  提取结果: "},
+        {"  extraction error: ", "  提取错误: "},
         {"Analysis guidance:", "分析指引:"},
         {"  visible_hypothesis: ", "  可见假设: "},
         {"  declared_entry_default: ", "  声明入口仍为默认: "},
         {"  decoy_risk: ", "  误导风险: "},
         {"  strong_evidence_counts: ", "  强证据计数: "},
+        {"  runtime_modality_policy: ", "  运行时模态策略: "},
+        {"  runtime_modality_priority: ", "  运行时模态优先级: "},
+        {"  runtime_modality: ", "  运行时模态: "},
         {"  contradictory_evidence: ", "  矛盾证据: "},
         {"  alternate_execution_path: ", "  替代执行路径: "},
         {"  unresolved_alternative: ", "  未决替代路径: "},
@@ -1229,6 +1300,13 @@ std::string localize_text_zh(std::string_view text) {
         {"High entropy ranges:", "高熵范围:"},
         {"Embedded objects:", "嵌入对象:"},
         {"Findings:", "发现:"},
+        {"Orchestration runtime plan", "编排运行时计划"},
+        {"  policy: ", "  策略: "},
+        {"  apply_requested: ", "  已请求应用替换: "},
+        {"  runtime_eligible: ", "  可执行运行时分析: "},
+        {"  runtime_eligibility_reason: ", "  运行时资格原因: "},
+        {"    result: ", "    结果: "},
+        {"    refusal: ", "    拒绝原因: "},
         {"Timeline (relative)", "时间线（相对时间）"},
         {"Runtime artifacts", "运行时产物"},
         {"Unpack replacement", "脱壳替换"},
@@ -1251,7 +1329,9 @@ std::string localize_text_zh(std::string_view text) {
         {"  incoming references to new executable regions:", "  指向新可执行区域的传入引用:"},
         {"  semantic probes:", "  语义探针:"},
         {"  section differences:", "  节区差异:"},
+        {"  root: ", "  产物根目录: "},
         {"  parent: ", "  父产物: "},
+        {"    parent: ", "    父产物: "},
         {"  root_input: ", "  根输入: "},
         {"  offset_basis: ", "  偏移基准: "},
         {"  state: ", "  状态: "},
@@ -1282,6 +1362,11 @@ std::string localize_text_zh(std::string_view text) {
         std::size_t pos=0;
         while((pos=line.find(from,pos))!=std::string::npos){line.replace(pos,from.size(),to);pos+=to.size();}
     };
+    auto localize_payload=[](std::string&line,std::string_view prefix){
+        if(line.rfind(prefix,0)!=0)return false;
+        line.replace(prefix.size(),line.size()-prefix.size(),localize_semantic_zh(std::string_view(line).substr(prefix.size())));
+        return true;
+    };
     std::ostringstream out;
     std::size_t pos=0;
     while(pos<text.size()){
@@ -1294,8 +1379,37 @@ std::string localize_text_zh(std::string_view text) {
         if(line.rfind("    + ",0)==0)line.replace(0,6,"    证据 + ");
         else if(line.rfind("    - ",0)==0)line.replace(0,6,"    负证据 - ");
         else if(line.rfind("    -> ",0)==0)line.replace(0,7,"    建议 -> ");
-        if(line.rfind("  [",0)==0){replace_all(line," state="," 状态=");replace_all(line," confidence="," 置信度=");}
+
+        for(const auto prefix:{std::string_view("    证据 + "),std::string_view("    负证据 - "),std::string_view("    建议 -> "),
+                               std::string_view("    原因: "),std::string_view("    条件: "),std::string_view("    证据: "),
+                               std::string_view("    负证据: "),std::string_view("  可见假设: "),std::string_view("  未决替代路径: "),
+                               std::string_view("  优先理由: "),std::string_view("  运行时模态优先级: ")}){
+            if(localize_payload(line,prefix))break;
+        }
+
+        if(line.rfind("  [",0)==0){
+            replace_all(line," state="," 状态=");replace_all(line," confidence="," 置信度=");
+            replace_all(line," role="," 角色=");replace_all(line," priority="," 优先级=");
+        }
+        if(line.rfind("    size=",0)==0){
+            line.replace(4,5,"大小=");replace_all(line," normalized="," 已规范化=");replace_all(line," runtime_confirmed="," 运行时已确认=");
+        }
         replace_all(line,", section headers: ",", 节区头: ");
+        if(line.rfind("隐式执行: ",0)==0){
+            replace_all(line,"state=","状态=");replace_all(line,"facts=","事实数=");replace_all(line,"rendered=","已展示=");
+            replace_all(line,"high=","高优先级=");replace_all(line,"review=","需复核=");replace_all(line,"anomalies=","异常=");
+            replace_all(line,"informational=","信息项=");replace_all(line,"unresolved_runtime_semantics=","未决运行时语义=");replace_all(line,"analysis_limited=","分析受限=");
+        }else if(line.rfind("  运行时模态: ",0)==0){
+            replace_all(line," state="," 状态=");replace_all(line," confidence="," 置信度=");replace_all(line," gate="," 证据门槛=");
+        }
+        constexpr std::string_view implicit_truncated="  ... default implicit fact table truncated; complete CSV: ";
+        if(line.rfind(implicit_truncated,0)==0)
+            line.replace(0,implicit_truncated.size(),"  ... 默认隐式执行事实表已截断；完整 CSV: ");
+        else if(line=="  ... default implicit fact table truncated; complete CSV omitted by the default artifact budget; use --extract for the full supported map")
+            line="  ... 默认隐式执行事实表已截断；完整 CSV 因默认产物预算而省略，可使用 --extract 获取完整受支持映射";
+        else if(line.rfind("  section ",0)==0&&line.ends_with(" present")){
+            line.replace(0,10,"  节区 ");line.replace(line.size()-8,8," 存在");
+        }
         if(line.rfind("  Type Flags Address",0)==0)line="  类型 标志 地址             偏移        文件大小    内存大小    熵";
         else if(line.rfind("  Name       RVA",0)==0)line="  名称       RVA       虚拟大小    原始偏移    原始大小    有效大小    熵      权限";
         else if(line.rfind("  Name               Address",0)==0)line="  名称               地址              偏移        大小        有效大小    熵      标志";

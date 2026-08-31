@@ -14,6 +14,7 @@ auto-refirst <file|directory> [options]
 -h, --help
 --version
 --json
+--json-envelope
 --report-lang=en|zh
 --extract
 --run
@@ -33,12 +34,23 @@ auto-refirst file --extract --recursive --json
 
 默认静态模式可自动物化有界高价值工件。`--extract` 增加完整容器/resource 展开和重型静态分析。递归工件模式不会执行子工件。
 
+`--json` 的现有输出形状保持兼容：单文件通常是一个 report object，`--extract --recursive` 在产生多个 report 时是顶层 array，而目录分析使用带 `reports` 的 directory envelope。需要稳定集合传输层的调用方可显式使用 `--json --json-envelope`：单文件与递归工件图都统一为 `{ "report_schema_version": "1.0", "reports": [...] }`；目录 JSON 本来就是 envelope，因此保持其现有 directory 字段和 `reports` 数组。该选项是 opt-in，不改变既有 `--json` 输出，也不提升 `report_schema_version`。`--json-envelope` 必须与 `--json` 一起使用，且不适用于 `--search` 的 JSON Lines 模式。
+
+单文件输入默认写入 `<input>.auto-refirst/`。如果输入位于只读介质、系统目录或不希望产生旁路文件的位置，可显式迁移整个产物树：
+
+```sh
+auto-refirst /read-only/evidence.bin --artifact-root=/writable/case/evidence-artifacts --json
+```
+
+`--artifact-root` 是**精确的单输入 product-owned 根目录**。首次使用要求该路径不存在；工具创建目录并写入 `.auto-refirst-owner`。后续仅允许同一输入路径复用匹配的 ownership marker。已有但无 marker 的目录、其他输入拥有的 root、symlink/reparse root 都会拒绝，避免把任意用户目录误当成可管理产物树。当前该选项不与目录输入、纯 `--search` 或 `--extract --recursive` 多节点图模式组合；这些情况返回用法错误。
+
 相关限制：
 
 ```text
 --artifact-depth=N
 --artifact-nodes=N
 --artifact-bytes=N
+--artifact-root=PATH
 ```
 
 ## 快速字符串搜索
