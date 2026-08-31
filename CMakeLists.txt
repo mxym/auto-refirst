@@ -211,7 +211,10 @@ target_include_directories(auto_refirst SYSTEM PRIVATE third_party/miniz)
 set_target_properties(auto_refirst PROPERTIES OUTPUT_NAME "auto-refirst")
 auto_refirst_enable_msvc_utf8(auto_refirst)
 if(MSVC)
-  target_compile_options(auto_refirst PRIVATE /W4 /permissive- /EHsc)
+  # MSBuild /m parallelizes projects, but auto_refirst is one large project
+  # with many translation units. Bound cl.exe intra-project parallelism to two
+  # processes; do not use unbounded /MP so CI memory/CPU use remains predictable.
+  target_compile_options(auto_refirst PRIVATE /W4 /permissive- /EHsc /MP2)
   target_compile_definitions(auto_refirst PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
   set_property(TARGET auto_refirst PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 else()
@@ -230,7 +233,9 @@ if(WIN32)
     # Otherwise MSVC sees /MD vs /MT and char vs wchar_t symbol mismatches.
     set_property(TARGET libpeconv PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     target_compile_definitions(libpeconv PRIVATE UNICODE _UNICODE)
-    target_compile_options(libpeconv PRIVATE /utf-8 /wd4828)
+    # libpeconv is a 29-source prerequisite project and is built before the
+    # product target, so give it the same bounded intra-project parallelism.
+    target_compile_options(libpeconv PRIVATE /utf-8 /wd4828 /MP2)
   endif()
   target_link_libraries(auto_refirst PRIVATE libpeconv)
   if(MSVC)
