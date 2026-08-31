@@ -77,11 +77,51 @@ bool writes_reg(const XInsn&x,ZydisRegister wanted) {
     return false;
 }
 
-std::optional<std::uint64_t> symbol_va(const ElfInfo&e,std::string_view name) {
-    if(e.dynamic.state!="RESOLVED")return{};
-    std::optional<std::uint64_t> found;
-    for(const auto&s:e.dynamic.symbols)if(s.name==name&&s.value&&s.value_file_backed){if(found&&*found!=s.value)return{};found=s.value;}
-    return found;
+struct CallResolver {
+    std::map<std::uint64_t,std::string> direct_symbols;
+    std::map<std::string,std::uint64_t> direct_name_vas;
+    std::set<std::string> ambiguous_direct_names;
+    std::map<std::uint64_t,std::string> got_imports;
+};
+
+CallResolver make_call_resolver(const ElfInfo&e) {
+    CallResolver out;
+    for(const auto&s:e.dynamic.symbols){
+        if(s.name.empty()||!s.value||!s.value_file_backed)continue;
+        auto [it,inserted]=out.direct_symbols.emplace(s.value,s.name);
+        if(!inserted&&it->second!=s.name)it->second.clear();
+        auto [ni,ninserted]=out.direct_name_vas.emplace(s.name,s.value);
+        if(!ninserted&&ni->second!=s.value)out.ambiguous_direct_names.insert(s.name);
+    }
+    for(const auto&r:e.dynamic.relocations){
+        if(r.symbol_index>=e.dynamic.symbols.size())continue;
+        const auto&s=e.dynamic.symbols[r.symbol_index];
+        if(!s.imported||s.name.empty()||!r.target_va)continue;
+        auto [it,inserted]=out.got_imports.emplace(r.target_va,s.name);
+        if(!inserted&&it->second!=s.name)it->second.clear();
+    }
+    return out;
+}
+
+std::optional<std::string> target_symbol_name(std::span<const std::uint8_t>d,const ElfInfo&e,const ZydisDecoder&dec,const CallResolver&r,std::uint64_t va) {
+    if(auto it=r.direct_symbols.find(va);it!=r.direct_symbols.end()&&!it->second.empty()&&!r.ambiguous_direct_names.count(it->second)){
+        return it->second;
+    }
+    auto ip=va;
+    for(int i=0;i<3;++i){auto x=decode_one(d,e,dec,ip);if(!x)return{};
+        if(x->ins.meta.category==ZYDIS_CATEGORY_UNCOND_BR&&x->ins.operand_count_visible){auto slot=rip_target(*x,x->ops[0]);if(!slot)return{};auto it=r.got_imports.find(*slot);return it==r.got_imports.end()||it->second.empty()?std::optional<std::string>{}:std::optional<std::string>{it->second};}
+        if(x->ins.mnemonic!=ZYDIS_MNEMONIC_ENDBR64&&x->ins.mnemonic!=ZYDIS_MNEMONIC_NOP)return{};
+        auto next=add_unsigned(ip,x->ins.length);if(!next)return{};ip=*next;
+    }
+    return{};
+}
+
+std::optional<std::string> call_symbol_name(std::span<const std::uint8_t>d,const ElfInfo&e,const ZydisDecoder&dec,const CallResolver&r,const XInsn&x) {
+    if(x.ins.meta.category!=ZYDIS_CATEGORY_CALL||!x.ins.operand_count_visible)return{};
+    const auto&o=x.ops[0];
+    if(auto slot=rip_target(x,o)){auto it=r.got_imports.find(*slot);if(it!=r.got_imports.end()&&!it->second.empty())return it->second;}
+    if(auto target=rel_target(x))return target_symbol_name(d,e,dec,r,*target);
+    return{};
 }
 
 bool read_u64_va(std::span<const std::uint8_t>d,const ElfInfo&e,std::uint64_t va,std::uint64_t&out) {
@@ -128,26 +168,26 @@ std::optional<DescriptorInfo> descriptor_before_call(std::span<const std::uint8_
     return{};
 }
 
-std::optional<XInsn> find_next_direct_call(std::span<const std::uint8_t>d,const ElfInfo&e,const ZydisDecoder&dec,std::uint64_t ip,std::uint64_t target) {
-    for(std::uint32_t steps=0;steps<16;++steps){auto x=decode_one(d,e,dec,ip);if(!x)return{};if(x->ins.meta.category==ZYDIS_CATEGORY_CALL){auto t=rel_target(*x);if(t&&*t==target)return x;return{};}if(x->ins.meta.category==ZYDIS_CATEGORY_UNCOND_BR||x->ins.meta.category==ZYDIS_CATEGORY_RET)return{};auto next=add_unsigned(ip,x->ins.length);if(!next)return{};ip=*next;}
+std::optional<XInsn> find_next_named_call(std::span<const std::uint8_t>d,const ElfInfo&e,const ZydisDecoder&dec,const CallResolver&r,std::uint64_t ip,std::string_view name) {
+    for(std::uint32_t steps=0;steps<16;++steps){auto x=decode_one(d,e,dec,ip);if(!x)return{};if(x->ins.meta.category==ZYDIS_CATEGORY_CALL){auto n=call_symbol_name(d,e,dec,r,*x);if(n&&*n==name)return x;return{};}if(x->ins.meta.category==ZYDIS_CATEGORY_UNCOND_BR||x->ins.meta.category==ZYDIS_CATEGORY_RET)return{};auto next=add_unsigned(ip,x->ins.length);if(!next)return{};ip=*next;}
     return{};
 }
 
-bool direct_call_within(std::span<const std::uint8_t>d,const ElfInfo&e,const ZydisDecoder&dec,std::uint64_t begin,std::uint64_t target,std::size_t span) {
+bool named_call_within(std::span<const std::uint8_t>d,const ElfInfo&e,const ZydisDecoder&dec,const CallResolver&r,std::uint64_t begin,std::string_view name,std::size_t span) {
     const auto ex=va_extent(e,begin,d.size());if(!ex)return false;auto end=add_unsigned(begin,std::min<std::uint64_t>(span,ex->second));if(!end)return false;auto ip=begin;
-    for(std::uint32_t steps=0;ip<*end&&steps<128;++steps){auto x=decode_one(d,e,dec,ip);if(!x)return false;if(x->ins.meta.category==ZYDIS_CATEGORY_CALL){auto t=rel_target(*x);if(t&&*t==target)return true;}if(x->ins.meta.category==ZYDIS_CATEGORY_RET)return false;auto next=add_unsigned(ip,x->ins.length);if(!next)return false;ip=*next;}
+    for(std::uint32_t steps=0;ip<*end&&steps<128;++steps){auto x=decode_one(d,e,dec,ip);if(!x)return false;if(x->ins.meta.category==ZYDIS_CATEGORY_CALL){auto n=call_symbol_name(d,e,dec,r,*x);if(n&&*n==name)return true;}if(x->ins.meta.category==ZYDIS_CATEGORY_RET)return false;auto next=add_unsigned(ip,x->ins.length);if(!next)return false;ip=*next;}
     return false;
 }
 
 enum class ProvKind {Unknown,Tuple,CallResult};
 struct Prov {ProvKind kind=ProvKind::Unknown;std::size_t call=0;};
-struct CallRecord {std::uint64_t target=0,arg=0;bool arg_known=false;std::string pointed_string;};
+struct CallRecord {std::uint64_t target=0,arg=0;bool arg_known=false;std::string target_name,pointed_string;};
 
 void clobber_callers(std::map<ZydisRegister,Prov>&regs) {
     for(auto r:{ZYDIS_REGISTER_RAX,ZYDIS_REGISTER_RCX,ZYDIS_REGISTER_RDX,ZYDIS_REGISTER_RSI,ZYDIS_REGISTER_RDI,ZYDIS_REGISTER_R8,ZYDIS_REGISTER_R9,ZYDIS_REGISTER_R10,ZYDIS_REGISTER_R11})regs[reg64(r)]={};
 }
 
-std::optional<NuitkaCompiledVersionInfo> recover_tuple(std::span<const std::uint8_t>d,const ElfInfo&e,const ZydisDecoder&dec,const DescriptorInfo&desc,const XInsn&new_call,std::uint64_t py_long,std::uint64_t py_long_new,std::uint64_t py_unicode) {
+std::optional<NuitkaCompiledVersionInfo> recover_tuple(std::span<const std::uint8_t>d,const ElfInfo&e,const ZydisDecoder&dec,const CallResolver&resolver,const DescriptorInfo&desc,const XInsn&new_call) {
     std::map<ZydisRegister,Prov>regs;std::set<std::uint64_t>tuple_globals;std::vector<CallRecord>calls;
     regs[ZYDIS_REGISTER_RAX]={ProvKind::Tuple,0};bool rdi_known=false;std::uint64_t rdi_value=0;std::optional<std::int64_t>first_slot;std::array<std::uint32_t,3>version{};std::size_t version_count=0;std::uint64_t constructor=0;std::string release;
     auto ip0=add_unsigned(new_call.va,new_call.ins.length);if(!ip0)return{};auto end=add_unsigned(*ip0,kMaxTupleSpanBytes);if(!end)return{};auto ip=*ip0;
@@ -155,8 +195,8 @@ std::optional<NuitkaCompiledVersionInfo> recover_tuple(std::span<const std::uint
         auto x=decode_one(d,e,dec,ip);if(!x)return{};
         if(x->ins.meta.category==ZYDIS_CATEGORY_UNCOND_BR||x->ins.meta.category==ZYDIS_CATEGORY_RET)return{};
         if(x->ins.meta.category==ZYDIS_CATEGORY_CALL){
-            auto target=rel_target(*x);if(!target)return{};CallRecord c;c.target=*target;c.arg_known=rdi_known;c.arg=rdi_value;
-            if(c.arg_known&&*target==py_unicode){auto s=cstr_va(d,e,c.arg,64);if(s)c.pointed_string=*s;}
+            auto target=rel_target(*x);if(!target)return{};CallRecord c;c.target=*target;c.arg_known=rdi_known;c.arg=rdi_value;if(auto n=call_symbol_name(d,e,dec,resolver,*x))c.target_name=*n;
+            if(c.arg_known&&c.target_name=="PyUnicode_FromString"){auto s=cstr_va(d,e,c.arg,64);if(s)c.pointed_string=*s;}
             calls.push_back(std::move(c));const auto id=calls.size()-1;clobber_callers(regs);regs[ZYDIS_REGISTER_RAX]={ProvKind::CallResult,id};rdi_known=false;auto next=add_unsigned(ip,x->ins.length);if(!next)return{};ip=*next;continue;
         }
 
@@ -178,8 +218,14 @@ std::optional<NuitkaCompiledVersionInfo> recover_tuple(std::span<const std::uint
                         if(!constructor){if(!c.target)return{};constructor=c.target;}else if(constructor!=c.target)return{};
                         version[version_count++]=static_cast<std::uint32_t>(c.arg);
                     }else if(release.empty()&&disp==*first_slot+24){
-                        if(c.target!=py_unicode||c.pointed_string.empty())return{};
-                        if(c.pointed_string!="alpha"&&c.pointed_string!="beta"&&c.pointed_string!="candidate"&&c.pointed_string!="release")return{};
+                        if(c.target_name!="PyUnicode_FromString"||c.pointed_string.empty())return{};
+                        // Nuitka code generation maps is_final to exactly
+                        // "release" or "candidate" and discards rc_number.
+                        // The PyStructSequence field documentation mentions
+                        // alpha/beta for sys.version_info similarity, but
+                        // those strings are not emitted by the generations
+                        // covered by this structural profile.
+                        if(c.pointed_string!="candidate"&&c.pointed_string!="release")return{};
                         release=c.pointed_string;
                     }
                 }
@@ -197,9 +243,11 @@ std::optional<NuitkaCompiledVersionInfo> recover_tuple(std::span<const std::uint
         auto next=add_unsigned(ip,x->ins.length);if(!next)return{};ip=*next;
     }
     if(version_count!=3||release.empty()||(!version[0]&&!version[1]&&!version[2]))return{};
-    bool constructor_ok=py_long&&constructor==py_long;
-    std::string profile="ELF64_X86_64_PYSTRUCTSEQUENCE_PYLONG_DIRECT";
-    if(!constructor_ok&&py_long_new){constructor_ok=direct_call_within(d,e,dec,constructor,py_long_new,256);profile="ELF64_X86_64_PYSTRUCTSEQUENCE_NUITKA_INT_WRAPPER";}
+    auto constructor_name=target_symbol_name(d,e,dec,resolver,constructor);
+    bool constructor_ok=constructor_name&&*constructor_name=="PyLong_FromLong";
+    std::string profile;
+    if(constructor_ok){auto it=resolver.direct_symbols.find(constructor);profile=it!=resolver.direct_symbols.end()&&it->second=="PyLong_FromLong"?"ELF64_X86_64_PYSTRUCTSEQUENCE_PYLONG_DIRECT":"ELF64_X86_64_PYSTRUCTSEQUENCE_PYLONG_PLT_IMPORT";}
+    else{profile="ELF64_X86_64_PYSTRUCTSEQUENCE_NUITKA_INT_WRAPPER";constructor_ok=named_call_within(d,e,dec,resolver,constructor,"_PyLong_New",256);}
     if(!constructor_ok)return{};
     NuitkaCompiledVersionInfo out;out.valid=true;out.major=version[0];out.minor=version[1];out.micro=version[2];out.releaselevel=release;out.profile=std::move(profile);out.descriptor_va=desc.va;out.descriptor_field_count=desc.fields;out.int_constructor_va=constructor;return out;
 }
@@ -209,15 +257,14 @@ std::optional<NuitkaCompiledVersionInfo> recover_tuple(std::span<const std::uint
 NuitkaCompiledVersionInfo detect_nuitka_compiled_version(std::span<const std::uint8_t>d,const ElfInfo&e) {
     NuitkaCompiledVersionInfo empty;
     if(!e.valid||!e.elf64||!e.little_endian||e.machine!=62||e.dynamic.state!="RESOLVED")return empty;
-    const auto init=symbol_va(e,"PyStructSequence_InitType"),create=symbol_va(e,"PyStructSequence_New"),py_long=symbol_va(e,"PyLong_FromLong"),py_long_new=symbol_va(e,"_PyLong_New"),py_unicode=symbol_va(e,"PyUnicode_FromString");
-    if(!init||!create||!py_unicode||(!py_long&&!py_long_new))return empty;
+    const auto resolver=make_call_resolver(e);
     std::uint64_t exec_bytes=0;for(const auto&s:e.segments)if(s.type==1&&(s.flags&1)){if(s.file_size>kMaxExecScanBytes-exec_bytes){empty.error="Nuitka compiled-version executable scan exceeds bounded 64 MiB profile";return empty;}exec_bytes+=s.file_size;}
     ZydisDecoder dec;if(!ZYAN_SUCCESS(ZydisDecoderInit(&dec,ZYDIS_MACHINE_MODE_LONG_64,ZYDIS_STACK_WIDTH_64))){empty.error="Zydis decoder initialization failed";return empty;}
     std::optional<NuitkaCompiledVersionInfo> found;
     for(const auto&s:e.segments){if(s.type!=1||!(s.flags&1)||s.offset>=d.size())continue;const auto n=std::min<std::uint64_t>(s.file_size,d.size()-s.offset);
-        for(std::size_t rel=0;rel+5<=n;++rel){const auto off=static_cast<std::size_t>(s.offset)+rel;if(d[off]!=0xe8)continue;auto raw=raw_direct_call(d,s,off);if(!raw||*raw!=*init)continue;auto call_va=add_unsigned(s.address,rel);if(!call_va)continue;auto ci=decode_one(d,e,dec,*call_va);if(!ci||ci->ins.meta.category!=ZYDIS_CATEGORY_CALL||ci->ins.length!=5||rel_target(*ci)!=init)continue;
-            auto desc=descriptor_before_call(d,e,dec,*call_va,off);if(!desc)continue;auto next=add_unsigned(*call_va,ci->ins.length);if(!next)continue;auto nc=find_next_direct_call(d,e,dec,*next,*create);if(!nc)continue;
-            auto v=recover_tuple(d,e,dec,*desc,*nc,py_long.value_or(0),py_long_new.value_or(0),*py_unicode);if(!v)continue;v->init_call_va=*call_va;
+        for(std::size_t rel=0;rel+5<=n;++rel){const auto off=static_cast<std::size_t>(s.offset)+rel;if(d[off]!=0xe8)continue;auto raw=raw_direct_call(d,s,off);if(!raw)continue;auto call_va=add_unsigned(s.address,rel);if(!call_va)continue;auto ci=decode_one(d,e,dec,*call_va);if(!ci||ci->ins.meta.category!=ZYDIS_CATEGORY_CALL||ci->ins.length!=5)continue;auto init_name=call_symbol_name(d,e,dec,resolver,*ci);if(!init_name||*init_name!="PyStructSequence_InitType")continue;
+            auto desc=descriptor_before_call(d,e,dec,*call_va,off);if(!desc)continue;auto next=add_unsigned(*call_va,ci->ins.length);if(!next)continue;auto nc=find_next_named_call(d,e,dec,resolver,*next,"PyStructSequence_New");if(!nc)continue;
+            auto v=recover_tuple(d,e,dec,resolver,*desc,*nc);if(!v)continue;v->init_call_va=*call_va;
             if(found){empty.error="multiple independently validated Nuitka __compiled__ version initializers found; exact tuple withheld";return empty;}found=std::move(v);
         }
     }

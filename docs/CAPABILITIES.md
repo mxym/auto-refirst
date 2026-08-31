@@ -60,7 +60,7 @@
 - UPX 和多类 PE packer/protector 的有界结构/入口/语义路由。
 - PyInstaller CArchive/PYZ，优先物化用户入口/高价值 Python bytecode 并进行子分析。
 - Nuitka、AutoIt、Electron ASAR、Ren'Py/RPA、wxapkg 等格式/封装路线。
-- Nuitka 的 onefile KA[X/Y] 与 standalone `constant_bin` 分别先完成结构确认。对于**当前镜像本身**为 standalone `constant_bin` 的 **ELF64/x86-64** 受支持生成布局，可进一步闭合 `__nuitka_version__` `PyStructSequence` 描述符、连续 major/minor/micro 初始化和 releaselevel 写入；只有 CPython 构造器关系也能由文件内符号/代码验证时才输出 `compiled_version_tuple`。该字段表达目标二进制实际构造的 `__compiled__` major/minor/micro 元组，**不是完整发行 tag**：例如 Nuitka `0.6.19.7` 的生成产物只编码 `0.6.19`，因此不能由该平面恢复末尾 `.7`。onefile 顶层 bootstrap 不继承/推断 child 的 tuple；物化后的 child 可独立进入同一检测。当前不把这项证据外推到 PE、其他 ABI 或未闭合的 CPython 链接布局。
+- Nuitka 的 onefile KA[X/Y] 与 standalone `constant_bin` 保持各自的结构确认门；此外，**ELF64/x86-64 extension module** 可由当前镜像自身的 `__compiled__` 结构独立闭合身份。版本平面验证 `__nuitka_version__` `PyStructSequence` 描述符、连续 major/minor/micro 初始化和 releaselevel 写入：standalone 可闭合文件内 CPython 构造器，动态扩展模块则沿 ELF relocation/GOT/PLT 精确解析到导入的 CPython API，只有整条调用与 tuple-slot 关系闭合时才输出 `compiled_version_tuple`。该字段表达目标二进制实际构造的 `__compiled__` major/minor/micro 元组，**不是完整发行 tag**：Nuitka `0.6.19.7` 只编码 `0.6.19`；0.9.6 至 4.2 的生成器还显式丢弃 `rc_number`，只将预发布状态编码为 `candidate`，因此不能恢复 rc 序号。onefile 顶层 bootstrap 不继承/推断 child 的 tuple；物化后的 child 可独立进入同一检测。当前不把这项证据外推到 PE、其他 ABI 或未闭合的 CPython 链接布局。
 - Unreal Pak v1-v12 footer/index/hash profile 与 IoStore UTOC/UCAS pair/chunk geometry；加密内容、未知版本或未验证签名保持 `PARTIAL`，不声明 asset semantics 枚举。
 - ZIP 派生容器、ASAR、APK 和嵌套 executable 进入统一工件图。
 

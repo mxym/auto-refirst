@@ -71,6 +71,19 @@ VersionFixture version_fixture() {
     version(4,0x18);version(2,0x20);version(0,0x28);emit_lea_rip(f.bytes,o,XVA,0x3d,release);emit_call(f.bytes,o,XVA,UNICODE);emit(f.bytes,o,{0x49,0x89,0x44,0x24,0x30,0xc3});
     f.field0_off=0x1400;return f;
 }
+VersionFixture imported_version_fixture() {
+    auto f=version_fixture();constexpr std::uint64_t XVA=0x400000,DVA=0x500000;
+    const std::array<std::pair<std::string,std::uint64_t>,4> api={{{"PyStructSequence_InitType",XVA+0x500},{"PyStructSequence_New",XVA+0x510},{"PyLong_FromLong",XVA+0x520},{"PyUnicode_FromString",XVA+0x530}}};
+    f.elf.dynamic.symbols.clear();f.elf.dynamic.relocations.clear();
+    for(std::size_t i=0;i<api.size();++i){
+        prts::ElfDynamicSymbol sym;sym.index=static_cast<std::uint32_t>(i);sym.name=api[i].first;sym.imported=true;f.elf.dynamic.symbols.push_back(sym);
+        const auto got=DVA+0x700+i*8,plt=api[i].second;const auto off=static_cast<std::size_t>(plt-XVA);std::size_t q=off;emit(f.bytes,q,{0xff,0x25,0,0,0,0});
+        const auto disp=static_cast<std::int64_t>(got)-static_cast<std::int64_t>(plt+6);put_u32(f.bytes,off+2,static_cast<std::uint32_t>(static_cast<std::int32_t>(disp)));
+        prts::ElfRelocation rel;rel.symbol_index=static_cast<std::uint32_t>(i);rel.target_va=got;rel.plt=true;f.elf.dynamic.relocations.push_back(rel);
+    }
+    prts::ElfDynamicSymbol init;init.index=static_cast<std::uint32_t>(f.elf.dynamic.symbols.size());init.name="PyInit_sample";init.value=XVA+0x600;init.value_file_backed=true;init.exported=true;f.elf.dynamic.symbols.push_back(init);
+    return f;
+}
 }
 
 int main() {
@@ -109,6 +122,16 @@ int main() {
     auto vf=version_fixture();auto cv=prts::detect_nuitka_compiled_version(vf.bytes,vf.elf);
     if(!cv.valid||cv.major!=4||cv.minor!=2||cv.micro!=0||cv.releaselevel!="release") fail("synthetic __compiled__ version tuple did not validate");
     if(cv.profile!="ELF64_X86_64_PYSTRUCTSEQUENCE_PYLONG_DIRECT") fail("synthetic version tuple used unexpected profile");
+    auto imported=imported_version_fixture();auto imported_cv=prts::detect_nuitka_compiled_version(imported.bytes,imported.elf);
+    if(!imported_cv.valid||imported_cv.major!=4||imported_cv.minor!=2||imported_cv.micro!=0||imported_cv.releaselevel!="release") fail("synthetic imported-PLT __compiled__ tuple did not validate");
+    if(imported_cv.profile!="ELF64_X86_64_PYSTRUCTSEQUENCE_PYLONG_PLT_IMPORT") fail("synthetic imported-PLT tuple used unexpected profile");
+    auto candidate=vf;put_cstr(candidate.bytes,0x1390,"candidate");auto candidate_cv=prts::detect_nuitka_compiled_version(candidate.bytes,candidate.elf);
+    if(!candidate_cv.valid||candidate_cv.releaselevel!="candidate") fail("Nuitka candidate releaselevel did not validate");
+    auto alpha=vf;put_cstr(alpha.bytes,0x1390,"alpha");if(prts::detect_nuitka_compiled_version(alpha.bytes,alpha.elf).valid) fail("non-emitted alpha releaselevel unexpectedly validated");
+    auto bad_import=imported;bad_import.elf.dynamic.symbols[0].name="PyStructSequence_InitType_bait";if(prts::detect_nuitka_compiled_version(bad_import.bytes,bad_import.elf).valid) fail("mismatched imported CPython symbol unexpectedly validated");
+    auto imported_identity=prts::detect_nuitka(imported.bytes,pe,imported.elf);
+    if(!imported_identity.valid||imported_identity.onefile||imported_identity.variant!="module-compiled-version-structseq"||!imported_identity.compiled_version.valid) fail("compiled-version structseq did not independently confirm synthetic Nuitka module");
+    auto imported_finding=prts::nuitka_finding(imported_identity);if(imported_finding.state!="CONFIRMED") fail("structurally validated synthetic Nuitka module was not CONFIRMED");
     auto bad_name=vf;bad_name.bytes[bad_name.desc_name_off]='X';if(prts::detect_nuitka_compiled_version(bad_name.bytes,bad_name.elf).valid) fail("mutated Nuitka descriptor name did not fail closed");
     auto bad_field=vf;bad_field.bytes[bad_field.field0_off]='M';if(prts::detect_nuitka_compiled_version(bad_field.bytes,bad_field.elf).valid) fail("mutated Nuitka descriptor field order did not fail closed");
     auto bad_ctor=vf;bad_ctor.bytes[bad_ctor.third_call_off]=0xe8;put_u32(bad_ctor.bytes,bad_ctor.third_call_off+1,0);if(prts::detect_nuitka_compiled_version(bad_ctor.bytes,bad_ctor.elf).valid) fail("mixed integer constructor provenance did not fail closed");
