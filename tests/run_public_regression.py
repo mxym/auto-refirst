@@ -261,9 +261,11 @@ def cmake_build(binary: pathlib.Path, targets: list[str]) -> tuple[pathlib.Path,
     build,config=cmake_context(binary); cmd=["cmake","--build",build]
     if config: cmd += ["--config",config]
     # Public helper targets are independent and intentionally EXCLUDE_FROM_ALL.
-    # Build them with the same bounded parallelism as CI's primary build instead
-    # of letting Make/MSBuild compile the P0/P1 helper set serially.
-    cmd += ["--parallel","2","--target",*targets]
+    # Use the host's available CPU count, but cap helper-build concurrency at 4
+    # so local/high-core machines do not turn this regression gate into an
+    # unbounded compiler fan-out. One/two-core hosts remain naturally bounded.
+    jobs=max(1,min(os.cpu_count() or 1,4))
+    cmd += ["--parallel",str(jobs),"--target",*targets]
     run_toolchain(cmd,timeout=180)
     return build,config
 
