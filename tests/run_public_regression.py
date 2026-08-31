@@ -260,7 +260,10 @@ def cmake_context(binary: pathlib.Path):
 def cmake_build(binary: pathlib.Path, targets: list[str]) -> tuple[pathlib.Path,str|None]:
     build,config=cmake_context(binary); cmd=["cmake","--build",build]
     if config: cmd += ["--config",config]
-    cmd += ["--target",*targets]
+    # Public helper targets are independent and intentionally EXCLUDE_FROM_ALL.
+    # Build them with the same bounded parallelism as CI's primary build instead
+    # of letting Make/MSBuild compile the P0/P1 helper set serially.
+    cmd += ["--parallel","2","--target",*targets]
     run_toolchain(cmd,timeout=180)
     return build,config
 
