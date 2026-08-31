@@ -42,7 +42,13 @@ cmake --build build --parallel
 ./build/auto-refirst ./target --run --apply --json
 ```
 
-完整参数见 [docs/CLI.md](docs/CLI.md)，精确退出码与授权契约见 [docs/CLI_CONTRACT.md](docs/CLI_CONTRACT.md)，构建说明见 [docs/BUILD.md](docs/BUILD.md)。
+如果样本位于只读目录，可把单文件产物树安全迁移到可写位置：
+
+```sh
+./build/auto-refirst /read-only/evidence.bin --artifact-root=/writable/case/evidence-artifacts --json
+```
+
+该 root 由 ownership marker 绑定到输入路径，不会接管任意已有目录。完整参数见 [docs/CLI.md](docs/CLI.md)，精确退出码与授权契约见 [docs/CLI_CONTRACT.md](docs/CLI_CONTRACT.md)，构建说明见 [docs/BUILD.md](docs/BUILD.md)。
 
 ## 能力概览
 

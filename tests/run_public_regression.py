@@ -334,6 +334,20 @@ def p0_report_json(binary:pathlib.Path,td:pathlib.Path) -> None:
     zh_pyc=td/"report-zh.pyc";zh_pyc.write_bytes(pyc310());zh_pyc_text=run([binary,zh_pyc,"--report-lang=zh"]).stdout
     assert "与官方 CPython 发布系列的 magic 值精确匹配" in zh_pyc_text,zh_pyc_text
     assert "将反编译源码视为派生辅助信息" in zh_pyc_text and "official CPython release-family magic matched exactly" not in zh_pyc_text,zh_pyc_text
+    relocated_pyc=td/"relocated-report.pyc";relocated_pyc.write_bytes(pyc310())
+    artifact_root=td/"relocated-artifacts"
+    relocated=json.loads(run([binary,relocated_pyc,"--json",f"--artifact-root={artifact_root}"]).stdout)
+    assert artifact_root.is_dir() and (artifact_root/".auto-refirst-owner").is_file(),artifact_root
+    assert pathlib.Path(relocated["materialization"]["root"])==artifact_root,relocated["materialization"]
+    assert not pathlib.Path(str(relocated_pyc)+".auto-refirst").exists(),"default sidecar root should not be created when --artifact-root is used"
+    json.loads(run([binary,relocated_pyc,"--json",f"--artifact-root={artifact_root}"]).stdout)  # matching owner may be reused
+    other_pyc=td/"same-bytes-different-input.pyc";other_pyc.write_bytes(relocated_pyc.read_bytes())
+    assert run([binary,other_pyc,f"--artifact-root={artifact_root}"],check=False).returncode==2,"artifact root must remain bound to one input path"
+    foreign=td/"foreign-artifact-root";foreign.mkdir();(foreign/"do-not-touch.txt").write_text("sentinel",encoding="utf-8")
+    refused=run([binary,relocated_pyc,f"--artifact-root={foreign}"],check=False);assert refused.returncode==2,refused
+    assert (foreign/"do-not-touch.txt").read_text(encoding="utf-8")=="sentinel" and not (foreign/".auto-refirst-owner").exists()
+    droot=td/"artifact-root-dir-input";droot.mkdir();(droot/"x.bin").write_bytes(minimal_elf())
+    assert run([binary,droot,f"--artifact-root={td/'dir-output'}"],check=False).returncode==2
     bad=run([binary,p,"--report-lang=xx"],check=False); assert bad.returncode==2
     version_contract(binary)
     d=td/"report-dir";d.mkdir();(d/"sample.bin").write_bytes(minimal_elf())

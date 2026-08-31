@@ -23,5 +23,7 @@ Runtime observations are represented in the text or JSON report. A target exit, 
 - `--run=unpack` is a deprecated compatibility alias for non-destructive deep runtime analysis. Without `--apply`, it may retain recovered artifacts but may not install or replace the input.
 - `--apply` is rejected unless runtime execution is also authorized. Even with `--run --apply` (or the compatible `--run=unpack --apply` form), installation occurs only after the implemented validation, backup, and rollback gates succeed.
 - Automatically extracted or recursively analyzed child artifacts remain static-only; authorization for a root target is not inherited by children.
+- `--artifact-root=PATH` relocates a **single file's** product-owned artifact tree. It never authorizes replacement of the input. A pre-existing root is accepted only when its regular `.auto-refirst-owner` marker binds it to the same input path; unrelated existing directories and symlink/reparse roots are refused with usage exit code `2`.
+- `--artifact-root` is currently incompatible with directory input, pure `--search`, and `--extract --recursive`, because those modes require either no artifact tree or multiple independently owned roots.
 
 `--run` executes potentially untrusted code. Use an isolated environment appropriate to the target; auto-refirst is not a sandbox.
