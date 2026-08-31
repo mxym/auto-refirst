@@ -1,0 +1,70 @@
+name: PyInstaller Windows reference research
+
+on:
+  push:
+    branches:
+      - research/pyinstaller-windows-samples
+    paths:
+      - .github/workflows/pyinstaller-windows-reference-research.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-sample:
+    name: PyInstaller ${{ matrix.pyinstaller }} / Python 3.10
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pyinstaller: ['4.10', '5.13.2', '6.0.0', '6.16.0', '6.22.2']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10.11'
+          architecture: 'x64'
+      - name: Install exact PyInstaller wheel
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --only-binary=:all: "pyinstaller==${{ matrix.pyinstaller }}"
+          python -m pip freeze | Out-File -Encoding utf8 pip-freeze.txt
+          python - <<'PY'
+          import hashlib, importlib.metadata, pathlib, PyInstaller
+          print('pyinstaller', importlib.metadata.version('pyinstaller'))
+          print('python', __import__('sys').version)
+          root=pathlib.Path(PyInstaller.__file__).parent
+          for name in ['pyimod01_os_path.py','pyimod02_archive.py','pyimod03_importers.py','pyimod04_ctypes.py','pyimod01_archive.py','pyimod02_importers.py','pyimod03_ctypes.py','pyimod04_pywin32.py']:
+              p=root/'loader'/name
+              if p.is_file(): print(name,p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest())
+          PY
+      - name: Build onefile sample
+        shell: pwsh
+        run: |
+          @'
+          import sys
+          print("AUTO_REFIRST_PYINSTALLER_WINDOWS_REFERENCE")
+          print(sys.version_info[:3])
+          '@ | Out-File -Encoding utf8 sample.py
+          python -m PyInstaller --clean --noconfirm --onefile --name sample sample.py *>&1 | Tee-Object -FilePath pyinstaller-build.log
+          if (!(Test-Path dist/sample.exe)) { throw "dist/sample.exe missing" }
+          Get-FileHash dist/sample.exe -Algorithm SHA256 | Format-List | Out-File -Encoding utf8 sample-sha256.txt
+      - name: Smoke-run generated sample
+        shell: pwsh
+        run: |
+          $out = & ./dist/sample.exe
+          $out | Out-File -Encoding utf8 sample-runtime.txt
+          if ($LASTEXITCODE -ne 0) { throw "sample exit code $LASTEXITCODE" }
+          if (($out -join "`n") -notmatch 'AUTO_REFIRST_PYINSTALLER_WINDOWS_REFERENCE') { throw "sample marker missing" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pyinstaller-${{ matrix.pyinstaller }}-py310-windows-x64
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            dist/sample.exe
+            sample.py
+            sample-sha256.txt
+            sample-runtime.txt
+            pyinstaller-build.log
+            pip-freeze.txt
