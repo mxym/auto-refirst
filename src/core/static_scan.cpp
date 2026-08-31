@@ -15,7 +15,7 @@ struct AnchorDef { const char* text; std::uint32_t hints; };
 static constexpr AnchorDef kAnchors[]={
     {"python",H_NONE},{"pyinstaller",H_PYINSTALLER},{"pyimod",H_PYINSTALLER},{"_mei",H_PYINSTALLER},
     {"nuitka",H_NUITKA},{"__nuitka__",H_NUITKA},{"constant_bin_data",H_NUITKA},
-    {"godot",H_GODOT},{"gdscript::",H_GODOT},{"encrypted pack",H_GODOT},
+    {"godot",H_GODOT},{"gdscript::",H_GODOT},
     {"upx",H_NONE},{"vmprotect",H_NONE},{"themida",H_NONE},{"winlicense",H_NONE},{"autoit",H_AUTOIT},{"au3!ea06",H_AUTOIT},{"electron",H_NONE},{"asar",H_NONE},
     // Bare "unity" is ordinary English and appears in unrelated binaries
     // (e.g. opportunity/community text and standalone UNITY tokens). Route
@@ -38,7 +38,32 @@ private:
 const AnchorAutomaton& anchors(){static const AnchorAutomaton a;return a;}
 void apply_hint_mask(EcosystemHints&h,std::uint32_t m){if(m&H_PYINSTALLER)h.pyinstaller=true;if(m&H_NUITKA)h.nuitka=true;if(m&H_GODOT)h.godot=true;if(m&H_UNITY)h.unity=true;if(m&H_RUST)h.rust=true;if(m&H_GO)h.golang=true;if(m&H_RENPY)h.renpy=true;if(m&H_AUTOIT)h.autoit=true;if(m&H_CRYPTO)h.crypto=true;}
 bool rust_mangled_hint(std::string_view s){if(s.rfind("_R",0)==0&&s.size()>8)return true;auto p=s.find("17h");if(p==std::string_view::npos||p+20>s.size())return false;for(std::size_t i=p+3;i<p+19;i++)if(!std::isxdigit(static_cast<unsigned char>(s[i])))return false;return s[p+19]=='E';}
-bool classify_anchor_string(std::string_view s,EcosystemHints&h){bool any=false;int state=0;const auto&ac=anchors();for(unsigned char c:s){state=ac.step(state,c);for(auto id:ac.outputs(state)){any=true;apply_hint_mask(h,kAnchors[id].hints);}}if(rust_mangled_hint(s)){h.rust=true;any=true;}return any;}
+bool ascii_word(std::uint8_t c){return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_';}
+std::uint8_t ascii_lower(std::uint8_t c){return c>='A'&&c<='Z'?std::uint8_t(c+32):c;}
+bool contains_delimited_phrase(std::string_view s,std::string_view phrase){
+    std::size_t pos=0;
+    while((pos=s.find(phrase,pos))!=std::string_view::npos){
+        const bool left=pos==0||!ascii_word(static_cast<std::uint8_t>(s[pos-1]));
+        const auto end=pos+phrase.size();
+        const bool right=end==s.size()||!ascii_word(static_cast<std::uint8_t>(s[end]));
+        if(left&&right)return true;
+        ++pos;
+    }
+    return false;
+}
+bool contains_delimited_phrase_ci(std::string_view s,std::string_view lower_phrase){
+    if(lower_phrase.empty()||s.size()<lower_phrase.size())return false;
+    for(std::size_t pos=0;pos+lower_phrase.size()<=s.size();++pos){
+        bool same=true;for(std::size_t i=0;i<lower_phrase.size();++i)if(ascii_lower(static_cast<std::uint8_t>(s[pos+i]))!=static_cast<std::uint8_t>(lower_phrase[i])){same=false;break;}
+        if(!same)continue;
+        const bool left=pos==0||!ascii_word(static_cast<std::uint8_t>(s[pos-1]));
+        const auto end=pos+lower_phrase.size();
+        const bool right=end==s.size()||!ascii_word(static_cast<std::uint8_t>(s[end]));
+        if(left&&right)return true;
+    }
+    return false;
+}
+bool classify_anchor_string(std::string_view s,EcosystemHints&h){bool any=false;int state=0;const auto&ac=anchors();for(unsigned char c:s){state=ac.step(state,c);for(auto id:ac.outputs(state)){any=true;apply_hint_mask(h,kAnchors[id].hints);}}if(contains_delimited_phrase_ci(s,"encrypted pack")){h.godot=true;any=true;}if(rust_mangled_hint(s)){h.rust=true;any=true;}return any;}
 std::uint32_t u32le(std::span<const std::uint8_t>d,std::size_t o){if(o+4>d.size())return 0;return std::uint32_t(d[o])|(std::uint32_t(d[o+1])<<8)|(std::uint32_t(d[o+2])<<16)|(std::uint32_t(d[o+3])<<24);}
 bool valid_pe_at(std::span<const std::uint8_t>d,std::size_t o,std::uint64_t& guessed){if(o+0x40>d.size()||d[o]!='M'||d[o+1]!='Z')return false;auto lf=u32le(d,o+0x3c);if(lf>0x100000||o+lf+24>d.size())return false;if(std::memcmp(d.data()+o+lf,"PE\0\0",4))return false;std::uint16_t ns=d[o+lf+6]|(d[o+lf+7]<<8);std::uint16_t opt=d[o+lf+20]|(d[o+lf+21]<<8);auto st=o+lf+24+opt;if(!ns||ns>96||st+std::size_t(ns)*40>d.size())return false;std::uint64_t end=st+std::size_t(ns)*40;for(std::uint16_t i=0;i<ns;i++){auto sh=st+i*40;auto rs=u32le(d,sh+16),ro=u32le(d,sh+20);if(ro&&rs&&o+std::uint64_t(ro)+rs<=d.size())end=std::max(end,o+std::uint64_t(ro)+rs);}guessed=end-o;return true;}
 bool valid_elf_at(std::span<const std::uint8_t>d,std::size_t o){return o+0x34<=d.size()&&d[o]==0x7f&&d[o+1]=='E'&&d[o+2]=='L'&&d[o+3]=='F'&&(d[o+4]==1||d[o+4]==2)&&(d[o+5]==1||d[o+5]==2);}
@@ -118,7 +143,7 @@ std::vector<Finding> detect_common(std::span<const std::uint8_t>d,const PeInfo&p
         auto add=[&](std::string fam,std::string ev,double c){for(auto&x:out)if(x.family==fam)return;Finding f;f.kind="ecosystem";f.family=std::move(fam);f.state=c>=0.75?"LIKELY":"SUSPECTED";f.confidence=c;f.evidence.push_back(std::move(ev));f.ranges.push_back({s.offset,s.value.size(),"string"});out.push_back(std::move(f));};
         if(low.find("pyinstaller")!=std::string::npos||low.find("pyimod")!=std::string::npos)add("PyInstaller","PyInstaller bootstrap/string anchor",0.75);
         if(low.find("nuitka")!=std::string::npos)add("Nuitka","Nuitka string anchor",0.72);
-        if(low.find("godot")!=std::string::npos||low.find("encrypted pack")!=std::string::npos)add("Godot","Godot engine/pack string anchor",0.78);
+        if(low.find("godot")!=std::string::npos||contains_delimited_phrase(low,"encrypted pack"))add("Godot","Godot identifier/pack string anchor (route-only)",0.70);
         if(low.find("python")!=std::string::npos)add("CPython-derived","Python runtime string anchor",0.55);
         auto add_protector_marker=[&](std::string claimed,std::string ev){for(const auto&x:out){auto it=x.fields.find("claimed_family");if(x.family=="Packer/protector marker"&&it!=x.fields.end()&&it->second==claimed)return;}Finding f;f.kind="packer_hint";f.family="Packer/protector marker";f.variant=claimed;f.state="SUSPECTED";f.confidence=.30;f.evidence.push_back(std::move(ev));f.negative_evidence.push_back("identifier string is not independent structural evidence; family classification intentionally withheld");f.fields["claimed_family"]=std::move(claimed);f.fields["evidence_strength"]="WEAK_MARKER_ONLY";f.ranges.push_back({s.offset,s.value.size(),"identifier string"});out.push_back(std::move(f));};
         if(low.find("vmprotect")!=std::string::npos)add_protector_marker("VMProtect","VMProtect identifier string present");
