@@ -305,6 +305,7 @@ add_executable(auto_refirst_public_nuitka_unit EXCLUDE_FROM_ALL
     third_party/zydis/Zydis.c
 )
 target_include_directories(auto_refirst_public_nuitka_unit PRIVATE include third_party/zydis)
+target_compile_definitions(auto_refirst_public_nuitka_unit PRIVATE ZYDIS_STATIC_BUILD=1 ZYAN_STATIC_BUILD=1)
 
 add_executable(auto_refirst_public_static_scan_unit EXCLUDE_FROM_ALL
     tests/static_scan_unit.cpp
