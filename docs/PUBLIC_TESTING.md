@@ -12,7 +12,7 @@ P0 校验：
 - interpreter/runtime-modality 静态授权边界；
 - nested executable 与 recursive artifact graph；
 - model trust 与 CPython bytecode ingress；
-- Nuitka 弱字符串不提升、constant/onefile 结构 gate，以及 ELF64/x86-64 `__compiled__` version tuple 的直接符号/导入 PLT 合成正例、candidate/releaselevel 语义与 descriptor/字段/构造器/导入符号扰动负例；
+- Nuitka 弱字符串不提升、constant/onefile 结构 gate；现代 variable-length 与 legacy fixed-width（32/64-bit C-long）constant stream 正例、旧 `G` GenericAlias/固定宽度 bigint 语义、尾随字节和未知 tag fail-closed；以及 ELF64/x86-64 `__compiled__` version tuple 的直接符号/导入 PLT 合成正例、candidate/releaselevel 语义与 descriptor/字段/构造器/导入符号扰动负例；
 - JSON/text/version 与 `0/1/2/3/4` process contract；
 - APK/Hermes child 与 APK/JNI J0-J4 结构关系的有界静态 gate；
 - Windows junction/reparse 输出安全（Windows runner）。

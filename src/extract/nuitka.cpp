@@ -49,13 +49,29 @@ std::optional<std::pair<std::uint64_t,std::vector<NuitkaConstantBlock>>> find_co
     }
     return{};
 }
+enum class ConstEncoding { Varint, LegacyLong32, LegacyLong64 };
 struct ConstReader {
-    std::span<const std::uint8_t> d; std::size_t p=0; NuitkaDecodedBlock *out=nullptr; int depth=0;
+    std::span<const std::uint8_t> d;
+    std::size_t p=0;
+    NuitkaDecodedBlock *out=nullptr;
+    int depth=0;
+    ConstEncoding encoding=ConstEncoding::Varint;
     bool fail(std::string msg){if(out&&out->error.empty()){out->error=std::move(msg);out->error_offset=p;}return false;}
     bool need(std::size_t n){return n<=d.size()-std::min(p,d.size())||fail("constant blob truncated");}
+    bool legacy()const{return encoding!=ConstEncoding::Varint;}
+    std::size_t legacy_long_width()const{return encoding==ConstEncoding::LegacyLong64?8u:4u;}
     std::uint8_t byte(){if(!need(1))return 0;return d[p++];}
     std::uint16_t word(){if(!need(2))return 0;auto v=static_cast<std::uint16_t>(std::uint16_t(d[p])|(std::uint16_t(d[p+1])<<8));p+=2;return v;}
+    std::uint32_t fixed32(){if(!need(4))return 0;auto v=u32(d,p);p+=4;return v;}
+    std::uint64_t fixed64(){if(!need(8))return 0;auto v=u64(d,p);p+=8;return v;}
+    std::int64_t signed_fixed(std::size_t width){
+        std::uint64_t v=width==8?fixed64():fixed32();if(out&&!out->error.empty())return 0;
+        if(width==4){if(v&0x80000000ull)return -1-static_cast<std::int64_t>((~v)&0xffffffffull);return static_cast<std::int64_t>(v);}
+        if(v&(1ull<<63))return -1-static_cast<std::int64_t>(~v);
+        return static_cast<std::int64_t>(v);
+    }
     std::uint64_t var(){std::uint64_t r=0,f=1;for(int i=0;i<10;i++){auto v=byte();if(out&&!out->error.empty())return 0;if(v&0x7f){if((v&0x7f)>std::numeric_limits<std::uint64_t>::max()/f){fail("constant varint overflow");return 0;}r+=std::uint64_t(v&0x7f)*f;}if(v<128)return r;if(f>(std::numeric_limits<std::uint64_t>::max()>>7)){fail("constant varint overflow");return 0;}f<<=7;}fail("constant varint too long");return 0;}
+    std::uint64_t size_value(){return legacy()?fixed32():var();}
     std::string cstr(std::size_t max=1<<20){auto q=p;while(q<d.size()&&q-p<max&&d[q])++q;if(q>=d.size()||q-p>=max){fail("unterminated constant string");return{};}std::string x(reinterpret_cast<const char*>(d.data()+p),q-p);p=q+1;return x;}
     std::string rawstr(std::size_t n){if(n>d.size()-p){fail("constant string length out of range");return{};}std::string x(reinterpret_cast<const char*>(d.data()+p),n);p+=n;return x;}
 };
@@ -67,32 +83,71 @@ struct DVal { std::string repr; std::optional<std::string> str; };
 bool decode_value(ConstReader&r,DVal&v,std::optional<DVal> previous);
 bool decode_seq(ConstReader&r,std::size_t n,std::vector<DVal>&vals){if(n>1000000)return r.fail("constant sequence count unreasonable");vals.reserve(n);std::optional<DVal>prev;for(std::size_t i=0;i<n;i++){DVal v;if(!decode_value(r,v,prev))return false;vals.push_back(v);prev=v;}return true;}
 std::string vals_repr(const std::vector<DVal>&v,std::string_view a,std::string_view b){std::vector<std::string>x;x.reserve(v.size());for(const auto&q:v)x.push_back(q.repr);return join_values(a,b,x);}
-bool decode_code(ConstReader&r,DVal&v){if(r.depth>128)return r.fail("Nuitka constant nesting too deep");NuitkaCodeObjectInfo ci;ci.flags=r.var();if(!r.out->error.empty())return false;DVal name;if(!decode_value(r,name,std::nullopt))return false;ci.name=name.str.value_or(name.repr);ci.line=static_cast<std::uint32_t>(r.var()+1);DVal args;if(!decode_value(r,args,std::nullopt))return false;ci.args=args.repr;ci.arg_count=static_cast<std::uint32_t>(r.var());constexpr std::uint64_t QUAL=1,FREE=2,KW=4,POS=8;if(ci.flags&QUAL){DVal q;if(!decode_value(r,q,std::nullopt))return false;ci.qualname=q.str.value_or(q.repr)+"."+ci.name;}else ci.qualname=ci.name;if(ci.flags&FREE){DVal q;if(!decode_value(r,q,std::nullopt))return false;ci.free_vars=q.repr;}if(ci.flags&KW)ci.kw_only=static_cast<std::uint32_t>(r.var()+1);if(ci.flags&POS)ci.pos_only=static_cast<std::uint32_t>(r.var()+1);if(!r.out->error.empty())return false;r.out->code_objects.push_back(ci);std::ostringstream o;o<<"code(name="<<repr_text(ci.name)<<", line="<<ci.line<<", argc="<<ci.arg_count<<", flags=0x"<<std::hex<<ci.flags<<std::dec<<")";v.repr=o.str();return true;}
-bool decode_value(ConstReader&r,DVal&v,std::optional<DVal> previous){if(r.depth++>128){--r.depth;return r.fail("Nuitka constant nesting too deep");}auto done=[&](bool ok){--r.depth;return ok;};auto save_string=[&](const std::string&x){v.str=x;if(r.out&&printable_hint(x)&&r.out->string_values.size()<4096)r.out->string_values.push_back(x);};auto tag=r.byte();if(!r.out->error.empty())return done(false);switch(tag){
- case 0x70: if(!previous)return done(r.fail("PREVIOUS tag without previous value"));v=*previous;return done(true);
- case 0x6e:v.repr="None";return done(true);case 0x74:v.repr="True";return done(true);case 0x46:v.repr="False";return done(true);case 0x73:v.repr="\"\"";v.str=std::string();return done(true);
- case 0x54:case 0x4c:case 0x53:case 0x50:{auto n=r.var();std::vector<DVal>x;if(!decode_seq(r,n,x))return done(false);if(tag==0x54)v.repr=vals_repr(x,"(",")");else if(tag==0x4c)v.repr=vals_repr(x,"[","]");else if(tag==0x53)v.repr=vals_repr(x,"set{","}");else v.repr=vals_repr(x,"frozenset{","}");return done(true);}
- case 0x44:{auto n=r.var();std::vector<DVal>k,x;if(!decode_seq(r,n,k)||!decode_seq(r,n,x))return done(false);std::string z="{";for(std::size_t i=0;i<k.size();i++){if(i)z+=", ";if(z.size()+k[i].repr.size()+x[i].repr.size()>2048){z+="...";break;}z+=k[i].repr+": "+x[i].repr;}z+='}';v.repr=std::move(z);return done(true);}
- case 0x6c:case 0x71:case 0x69:case 0x49:{auto n=r.var();bool neg=tag==0x71||tag==0x49;v.repr=(neg?"-":"")+std::to_string(n);return done(true);}
- case 0x67:case 0x47:{auto n=r.var();if(n>100000)return done(r.fail("large integer part count unreasonable"));std::string z=(tag==0x47?"-":"")+std::string("bigint[")+std::to_string(n)+" parts]";for(std::uint64_t i=0;i<n;i++)(void)r.var();v.repr=z;return done(r.out->error.empty());}
- case 0x66:{if(!r.need(8))return done(false);std::uint64_t u=0;for(int i=0;i<8;i++)u|=std::uint64_t(r.d[r.p+i])<<(8*i);r.p+=8;double f;std::memcpy(&f,&u,8);std::ostringstream o;o<<std::setprecision(17)<<f;v.repr=o.str();return done(true);}
- case 0x6a:{if(!r.need(16))return done(false);std::uint64_t a=0,b=0;for(int i=0;i<8;i++){a|=std::uint64_t(r.d[r.p+i])<<(8*i);b|=std::uint64_t(r.d[r.p+8+i])<<(8*i);}r.p+=16;double x,y;std::memcpy(&x,&a,8);std::memcpy(&y,&b,8);std::ostringstream o;o<<'('<<std::setprecision(17)<<x<<(y>=0?"+":"")<<y<<"j)";v.repr=o.str();return done(true);}
- case 0x4a:{std::vector<DVal>x;if(!decode_seq(r,2,x))return done(false);v.repr="complex("+x[0].repr+", "+x[1].repr+")";return done(true);}
- case 0x77:case 0x64:{if(!r.need(1))return done(false);std::string x(1,char(r.byte()));save_string(x);v.repr=(tag==0x77?repr_text(x):repr_bytes(x));return done(true);}
- case 0x75:case 0x61:case 0x63:{auto x=r.cstr();if(!r.out->error.empty())return done(false);save_string(x);v.repr=(tag==0x63?repr_bytes(x):repr_text(x));return done(true);}
- case 0x76:case 0x62:case 0x42:{auto n=r.var();if(n>(1ull<<31))return done(r.fail("constant byte/string length unreasonable"));auto x=r.rawstr(static_cast<std::size_t>(n));if(!r.out->error.empty())return done(false);save_string(x);v.repr=(tag==0x76?repr_text(x):(tag==0x42?"bytearray("+repr_bytes(x)+")":repr_bytes(x)));return done(true);}
- case 0x3a:case 0x3b:{std::vector<DVal>x;if(!decode_seq(r,3,x))return done(false);v.repr=std::string(tag==0x3a?"slice(":"range(")+x[0].repr+", "+x[1].repr+", "+x[2].repr+")";return done(true);}
- case 0x4d:case 0x51:{auto n=r.byte();v.repr=std::string(tag==0x4d?"builtin_anon#":"builtin_special#")+std::to_string(n);return done(r.out->error.empty());}
- case 0x4f:case 0x45:{auto x=r.cstr();if(!r.out->error.empty())return done(false);v.repr=std::string(tag==0x45?"exception(":"builtin(")+x+")";save_string(x);return done(true);}
- case 0x5a:{auto n=r.byte();static const char*sp[]={"0.0","-0.0","nan","-nan","inf","-inf"};if(n>=6)return done(r.fail("invalid float-special subtype"));v.repr=sp[n];return done(true);}
- case 0x58:{auto n=r.var();if(n>r.d.size()-r.p)return done(r.fail("blob-data length out of range"));r.p+=static_cast<std::size_t>(n);v.repr="blob_data["+std::to_string(n)+"]";return done(true);}
- case 0x41:{std::vector<DVal>x;if(!decode_seq(r,2,x))return done(false);v.repr="GenericAlias("+x[0].repr+", "+x[1].repr+")";return done(true);}
- case 0x48:{std::vector<DVal>x;if(!decode_seq(r,1,x))return done(false);v.repr="Union("+x[0].repr+")";return done(true);}
- case 0x43:{auto ok=decode_code(r,v);return done(ok);}
- case 0x2e:return done(r.fail("unexpected END tag before declared constant count"));
- default:{std::ostringstream o;o<<"unknown Nuitka constant tag 0x"<<std::hex<<unsigned(tag);return done(r.fail(o.str()));}
- }}
-NuitkaDecodedBlock decode_constant_block(std::span<const std::uint8_t>all,const NuitkaConstantBlock&b){NuitkaDecodedBlock o;o.name=b.name;if(b.data_offset>all.size()||b.size>all.size()-b.data_offset){o.error="constant block bounds invalid";return o;}auto d=all.subspan(b.data_offset,b.size);ConstReader r{d,0,&o};if(d.size()<3){o.error="constant block too small";return o;}o.declared_count=r.word();std::vector<DVal> vals;if(!decode_seq(r,o.declared_count,vals)){o.consumed=r.p;return o;}if(r.p>=d.size()||d[r.p]!=0x2e){o.error="constant stream END tag missing after declared count";o.error_offset=r.p;o.consumed=r.p;return o;}++r.p;o.consumed=r.p;o.success=true;std::size_t cap=512;for(std::size_t i=0;i<vals.size()&&i<cap;i++){o.values.push_back(vals[i].repr);}if(vals.size()>cap)o.values.push_back("... "+std::to_string(vals.size()-cap)+" more constants");return o;}
+bool decode_code(ConstReader&r,DVal&v){if(r.legacy())return r.fail("code-object tag is not valid in legacy fixed-width constant streams");if(r.depth>128)return r.fail("Nuitka constant nesting too deep");NuitkaCodeObjectInfo ci;ci.flags=r.var();if(!r.out->error.empty())return false;DVal name;if(!decode_value(r,name,std::nullopt))return false;ci.name=name.str.value_or(name.repr);ci.line=static_cast<std::uint32_t>(r.var()+1);DVal args;if(!decode_value(r,args,std::nullopt))return false;ci.args=args.repr;ci.arg_count=static_cast<std::uint32_t>(r.var());constexpr std::uint64_t QUAL=1,FREE=2,KW=4,POS=8;if(ci.flags&QUAL){DVal q;if(!decode_value(r,q,std::nullopt))return false;ci.qualname=q.str.value_or(q.repr)+"."+ci.name;}else ci.qualname=ci.name;if(ci.flags&FREE){DVal q;if(!decode_value(r,q,std::nullopt))return false;ci.free_vars=q.repr;}if(ci.flags&KW)ci.kw_only=static_cast<std::uint32_t>(r.var()+1);if(ci.flags&POS)ci.pos_only=static_cast<std::uint32_t>(r.var()+1);if(!r.out->error.empty())return false;r.out->code_objects.push_back(ci);std::ostringstream o;o<<"code(name="<<repr_text(ci.name)<<", line="<<ci.line<<", argc="<<ci.arg_count<<", flags=0x"<<std::hex<<ci.flags<<std::dec<<")";v.repr=o.str();return true;}
+bool decode_value(ConstReader&r,DVal&v,std::optional<DVal> previous){
+    if(r.depth++>128){--r.depth;return r.fail("Nuitka constant nesting too deep");}
+    auto done=[&](bool ok){--r.depth;return ok;};
+    auto save_string=[&](const std::string&x){v.str=x;if(r.out&&printable_hint(x)&&r.out->string_values.size()<4096)r.out->string_values.push_back(x);};
+    auto tag=r.byte();if(!r.out->error.empty())return done(false);
+    switch(tag){
+    case 0x70: if(!previous)return done(r.fail("PREVIOUS tag without previous value"));v=*previous;return done(true);
+    case 0x6e:v.repr="None";return done(true);case 0x74:v.repr="True";return done(true);case 0x46:v.repr="False";return done(true);case 0x73:v.repr="\"\"";v.str=std::string();return done(true);
+    case 0x54:case 0x4c:case 0x53:case 0x50:{auto n=r.size_value();std::vector<DVal>x;if(!decode_seq(r,n,x))return done(false);if(tag==0x54)v.repr=vals_repr(x,"(",")");else if(tag==0x4c)v.repr=vals_repr(x,"[","]");else if(tag==0x53)v.repr=vals_repr(x,"set{","}");else v.repr=vals_repr(x,"frozenset{","}");return done(true);}
+    case 0x44:{auto n=r.size_value();std::vector<DVal>k,x;if(!decode_seq(r,n,k)||!decode_seq(r,n,x))return done(false);std::string z="{";for(std::size_t i=0;i<k.size();i++){if(i)z+=", ";if(z.size()+k[i].repr.size()+x[i].repr.size()>2048){z+="...";break;}z+=k[i].repr+": "+x[i].repr;}z+='}';v.repr=std::move(z);return done(true);}
+    case 0x6c:case 0x71:case 0x69:case 0x49:{
+        if(r.legacy()){
+            if(tag==0x49)return done(r.fail("negative-int tag is not valid in legacy fixed-width constant streams"));
+            auto n=tag==0x71?r.signed_fixed(8):r.signed_fixed(r.legacy_long_width());if(!r.out->error.empty())return done(false);v.repr=std::to_string(n);return done(true);
+        }
+        auto n=r.var();bool neg=tag==0x71||tag==0x49;v.repr=(neg?"-":"")+std::to_string(n);return done(true);
+    }
+    case 0x67:{
+        if(r.legacy()){
+            auto sign=r.byte();if(sign!='+'&&sign!='-')return done(r.fail("invalid legacy bigint sign"));auto n=r.fixed32();if(n>100000)return done(r.fail("large integer part count unreasonable"));for(std::uint64_t i=0;i<n;i++)(void)r.fixed64();if(!r.out->error.empty())return done(false);v.repr=std::string(sign=='-'?"-":"")+"bigint["+std::to_string(n)+" parts]";return done(true);
+        }
+        auto n=r.var();if(n>100000)return done(r.fail("large integer part count unreasonable"));for(std::uint64_t i=0;i<n;i++)(void)r.var();v.repr="bigint["+std::to_string(n)+" parts]";return done(r.out->error.empty());
+    }
+    case 0x47:{
+        if(r.legacy()){std::vector<DVal>x;if(!decode_seq(r,2,x))return done(false);v.repr="GenericAlias("+x[0].repr+", "+x[1].repr+")";return done(true);}
+        auto n=r.var();if(n>100000)return done(r.fail("large integer part count unreasonable"));for(std::uint64_t i=0;i<n;i++)(void)r.var();v.repr="-bigint["+std::to_string(n)+" parts]";return done(r.out->error.empty());
+    }
+    case 0x66:{if(!r.need(8))return done(false);std::uint64_t u=0;for(int i=0;i<8;i++)u|=std::uint64_t(r.d[r.p+i])<<(8*i);r.p+=8;double f;std::memcpy(&f,&u,8);std::ostringstream o;o<<std::setprecision(17)<<f;v.repr=o.str();return done(true);}
+    case 0x6a:{if(!r.need(16))return done(false);std::uint64_t a=0,b=0;for(int i=0;i<8;i++){a|=std::uint64_t(r.d[r.p+i])<<(8*i);b|=std::uint64_t(r.d[r.p+8+i])<<(8*i);}r.p+=16;double x,y;std::memcpy(&x,&a,8);std::memcpy(&y,&b,8);std::ostringstream o;o<<'('<<std::setprecision(17)<<x<<(y>=0?"+":"")<<y<<"j)";v.repr=o.str();return done(true);}
+    case 0x4a:{std::vector<DVal>x;if(!decode_seq(r,2,x))return done(false);v.repr="complex("+x[0].repr+", "+x[1].repr+")";return done(true);}
+    case 0x77:case 0x64:{if(!r.need(1))return done(false);std::string x(1,char(r.byte()));save_string(x);v.repr=(tag==0x77?repr_text(x):repr_bytes(x));return done(true);}
+    case 0x75:case 0x61:case 0x63:{auto x=r.cstr();if(!r.out->error.empty())return done(false);save_string(x);v.repr=(tag==0x63?repr_bytes(x):repr_text(x));return done(true);}
+    case 0x76:case 0x62:case 0x42:{auto n=r.size_value();if(n>(1ull<<31))return done(r.fail("constant byte/string length unreasonable"));auto x=r.rawstr(static_cast<std::size_t>(n));if(!r.out->error.empty())return done(false);save_string(x);v.repr=(tag==0x76?repr_text(x):(tag==0x42?"bytearray("+repr_bytes(x)+")":repr_bytes(x)));return done(true);}
+    case 0x3a:case 0x3b:{std::vector<DVal>x;if(!decode_seq(r,3,x))return done(false);v.repr=std::string(tag==0x3a?"slice(":"range(")+x[0].repr+", "+x[1].repr+", "+x[2].repr+")";return done(true);}
+    case 0x4d:case 0x51:{auto n=r.byte();v.repr=std::string(tag==0x4d?"builtin_anon#":"builtin_special#")+std::to_string(n);return done(r.out->error.empty());}
+    case 0x4f:case 0x45:{auto x=r.cstr();if(!r.out->error.empty())return done(false);v.repr=std::string(tag==0x45?"exception(":"builtin(")+x+")";save_string(x);return done(true);}
+    case 0x5a:{auto n=r.byte();static const char*sp[]={"0.0","-0.0","nan","-nan","inf","-inf"};if(n>=6)return done(r.fail("invalid float-special subtype"));v.repr=sp[n];return done(true);}
+    case 0x58:{auto n=r.size_value();if(n>r.d.size()-r.p)return done(r.fail("blob-data length out of range"));r.p+=static_cast<std::size_t>(n);v.repr="blob_data["+std::to_string(n)+"]";return done(true);}
+    case 0x41:{if(r.legacy())return done(r.fail("GenericAlias tag is not valid in legacy fixed-width constant streams"));std::vector<DVal>x;if(!decode_seq(r,2,x))return done(false);v.repr="GenericAlias("+x[0].repr+", "+x[1].repr+")";return done(true);}
+    case 0x48:{std::vector<DVal>x;if(!decode_seq(r,1,x))return done(false);v.repr="Union("+x[0].repr+")";return done(true);}
+    case 0x43:{auto ok=decode_code(r,v);return done(ok);}
+    case 0x2e:return done(r.fail("unexpected END tag before declared constant count"));
+    default:{std::ostringstream o;o<<"unknown Nuitka constant tag 0x"<<std::hex<<unsigned(tag);return done(r.fail(o.str()));}
+    }
+}
+NuitkaDecodedBlock decode_constant_block_profile(std::span<const std::uint8_t>all,const NuitkaConstantBlock&b,ConstEncoding encoding){
+    NuitkaDecodedBlock o;o.name=b.name;if(b.data_offset>all.size()||b.size>all.size()-b.data_offset){o.error="constant block bounds invalid";return o;}auto d=all.subspan(b.data_offset,b.size);ConstReader r{d,0,&o,0,encoding};if(d.size()<3){o.error="constant block too small";return o;}o.declared_count=r.word();std::vector<DVal> vals;if(!decode_seq(r,o.declared_count,vals)){o.consumed=r.p;return o;}if(r.p>=d.size()||d[r.p]!=0x2e){o.error="constant stream END tag missing after declared count";o.error_offset=r.p;o.consumed=r.p;return o;}++r.p;o.consumed=r.p;if(r.p!=d.size()){o.error="constant stream trailing bytes after END tag";o.error_offset=r.p;return o;}o.success=true;std::size_t cap=512;for(std::size_t i=0;i<vals.size()&&i<cap;i++)o.values.push_back(vals[i].repr);if(vals.size()>cap)o.values.push_back("... "+std::to_string(vals.size()-cap)+" more constants");return o;
+}
+bool same_decoded_semantics(const NuitkaDecodedBlock&a,const NuitkaDecodedBlock&b){
+    if(a.declared_count!=b.declared_count||a.values!=b.values||a.string_values!=b.string_values||a.code_objects.size()!=b.code_objects.size())return false;
+    for(std::size_t i=0;i<a.code_objects.size();++i){const auto&x=a.code_objects[i];const auto&y=b.code_objects[i];if(x.name!=y.name||x.qualname!=y.qualname||x.args!=y.args||x.free_vars!=y.free_vars||x.flags!=y.flags||x.line!=y.line||x.arg_count!=y.arg_count||x.kw_only!=y.kw_only||x.pos_only!=y.pos_only)return false;}
+    return true;
+}
+NuitkaDecodedBlock decode_constant_block(std::span<const std::uint8_t>all,const NuitkaConstantBlock&b){
+    auto modern=decode_constant_block_profile(all,b,ConstEncoding::Varint);
+    auto legacy64=decode_constant_block_profile(all,b,ConstEncoding::LegacyLong64);
+    auto legacy32=decode_constant_block_profile(all,b,ConstEncoding::LegacyLong32);
+    std::vector<const NuitkaDecodedBlock*> successes;for(const auto*x:{&modern,&legacy64,&legacy32})if(x->success)successes.push_back(x);
+    if(!successes.empty()){
+        for(std::size_t i=1;i<successes.size();++i)if(!same_decoded_semantics(*successes[0],*successes[i])){NuitkaDecodedBlock o;o.name=b.name;o.declared_count=successes[0]->declared_count;o.error="constant stream encoding profile ambiguous";return o;}
+        return *successes[0];
+    }
+    const NuitkaDecodedBlock*best=&modern;for(const auto*x:{&legacy64,&legacy32})if(x->consumed>best->consumed)best=x;return *best;
+}
 void decode_constant_blocks(std::span<const std::uint8_t>d,NuitkaInfo&i){i.decoded_blocks.clear();for(const auto&b:i.constant_blocks)i.decoded_blocks.push_back(decode_constant_block(d,b));}
 std::string block_safe_name(std::string n){if(n.empty())n="__global__";for(auto&c:n)if(!(std::isalnum(static_cast<unsigned char>(c))||c=='_'||c=='.'||c=='-'))c='_';return n;}
 std::string decoded_manifest(const NuitkaDecodedBlock&b){std::ostringstream o;o<<"Nuitka constants block: "<<(b.name.empty()?"<global>":b.name)<<"\nstate: "<<(b.success?"CONFIRMED":"FAILED")<<"\ndeclared_count: "<<b.declared_count<<"\nconsumed: "<<b.consumed<<"\n";if(!b.error.empty())o<<"error_offset: 0x"<<std::hex<<b.error_offset<<std::dec<<"\nerror: "<<b.error<<"\n";if(!b.code_objects.empty()){o<<"code_objects:\n";for(const auto&c:b.code_objects)o<<"  "<<c.qualname<<" line="<<c.line<<" argc="<<c.arg_count<<" kwonly="<<c.kw_only<<" posonly="<<c.pos_only<<" flags=0x"<<std::hex<<c.flags<<std::dec<<" args="<<c.args<<" free="<<c.free_vars<<"\n";}o<<"constants:\n";for(std::size_t i=0;i<b.values.size();i++)o<<"  ["<<i<<"] "<<b.values[i]<<"\n";return o.str();}

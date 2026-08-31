@@ -12,6 +12,9 @@ namespace {
 void append_text(std::vector<std::uint8_t>& out, std::string_view s) {
     out.insert(out.end(), s.begin(), s.end());
 }
+void append_u16(std::vector<std::uint8_t>& out, std::uint16_t v) {
+    for (unsigned i=0;i<2;++i) out.push_back(static_cast<std::uint8_t>(v>>(i*8)));
+}
 void append_u32(std::vector<std::uint8_t>& out, std::uint32_t v) {
     for (unsigned i=0;i<4;++i) out.push_back(static_cast<std::uint8_t>(v>>(i*8)));
 }
@@ -20,6 +23,32 @@ void append_u64(std::vector<std::uint8_t>& out, std::uint64_t v) {
 }
 void append_name(std::vector<std::uint8_t>& out, std::string_view s) {
     append_text(out,s); out.push_back(0);
+}
+std::vector<std::uint8_t> legacy_constant_directory(bool long64, bool trailing=false) {
+    std::vector<std::uint8_t> bytecode;
+    append_u16(bytecode,1);
+    bytecode.push_back('B');
+    append_u32(bytecode,1017);
+    bytecode.insert(bytecode.end(),1017,'x');
+    bytecode.push_back('.');
+
+    std::vector<std::uint8_t> main;
+    append_u16(main,5);
+    main.push_back('u'); append_name(main,"legacy");
+    main.push_back('l');
+    if(long64) append_u64(main,42); else append_u32(main,42);
+    main.push_back('q'); append_u64(main,0xffffffffffffffd5ull);
+    main.push_back('G');
+    main.push_back('u'); append_name(main,"origin");
+    main.push_back('u'); append_name(main,"args");
+    main.push_back('g'); main.push_back('-'); append_u32(main,1); append_u64(main,123);
+    main.push_back('.');
+    if(trailing) main.push_back(0);
+
+    std::vector<std::uint8_t> out;
+    append_name(out,".bytecode"); append_u32(out,static_cast<std::uint32_t>(bytecode.size())); out.insert(out.end(),bytecode.begin(),bytecode.end());
+    append_name(out,"__main__"); append_u32(out,static_cast<std::uint32_t>(main.size())); out.insert(out.end(),main.begin(),main.end());
+    return out;
 }
 [[noreturn]] void fail(const char* msg) { std::cerr << msg << '\n'; std::exit(1); }
 
@@ -103,8 +132,25 @@ int main() {
     if(!onefile.valid || !onefile.onefile || onefile.entries.size()!=1 || onefile.variant.rfind("onefile-KAX-raw",0)!=0)
         fail("synthetic KAX archive did not validate");
 
-    // Constant tag encodings changed across Nuitka generations. The directory
-    // geometry itself is the identity gate; tag decoding may remain partial.
+    // Nuitka before 2.0 used native fixed-width counts and C-long values. Both
+    // 64-bit and 32-bit C-long profiles must close through declared count and
+    // the final END tag before semantic output is accepted.
+    for(bool long64:std::array<bool,2>{true,false}){
+        auto legacy_bytes=legacy_constant_directory(long64);
+        auto legacy=prts::detect_nuitka(legacy_bytes,pe,elf);
+        if(!legacy.valid||legacy.constant_blocks.size()!=2||legacy.decoded_blocks.size()!=2) fail("legacy fixed-width constant directory did not validate");
+        if(!legacy.decoded_blocks[0].success||!legacy.decoded_blocks[1].success) fail("legacy fixed-width constant stream did not decode");
+        const auto& values=legacy.decoded_blocks[1].values;
+        if(values.size()!=5||values[0]!="\"legacy\""||values[1]!="42"||values[2]!="-43"||values[3]!="GenericAlias(\"origin\", \"args\")"||values[4]!="-bigint[1 parts]") fail("legacy fixed-width constant semantics were not recovered");
+        auto legacy_finding=prts::nuitka_finding(legacy);
+        if(legacy_finding.fields["decoded_blocks"]!="2"||legacy_finding.fields["decode_failures"]!="0") fail("legacy fixed-width decode accounting was not complete");
+    }
+    auto trailing_legacy=prts::detect_nuitka(legacy_constant_directory(true,true),pe,elf);
+    auto trailing_finding=prts::nuitka_finding(trailing_legacy);
+    if(trailing_finding.fields["decode_failures"]!="1") fail("legacy constant stream trailing bytes did not fail closed");
+
+    // Malformed/unknown constant streams must not weaken the structural
+    // directory identity gate; semantic decoding may remain partial.
     std::vector<std::uint8_t> constants;
     append_name(constants,".bytecode"); append_u32(constants,1025); constants.insert(constants.end(),1025,0x72);
     append_name(constants,"__main__"); append_u32(constants,8); constants.insert(constants.end(),8,0);
