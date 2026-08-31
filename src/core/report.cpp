@@ -1184,6 +1184,7 @@ std::string localize_semantic_zh(std::string_view text) {
         {"Nuitka constant_bin directory structurally parsed", "已按结构解析 Nuitka constant_bin 目录"},
         {".bytecode and module constant blocks recovered", "已恢复 .bytecode 与模块常量块"},
         {"constant tag streams decoded and validated against declared counts/END tags", "常量标签流已解码，并依据声明计数与 END 标签完成验证"},
+        {"Nuitka __compiled__ named-tuple descriptor and major/minor/micro/releaselevel initializers were structurally recovered from bounded ELF64/x86-64 generated code", "已从有界 ELF64/x86-64 生成代码中按结构恢复 Nuitka __compiled__ 命名元组描述符，以及 major/minor/micro/releaselevel 初始化逻辑"},
         {"KA[X/Y] payload located and contained-file stream structurally parsed", "已定位 KA[X/Y] 载荷，并按结构解析其内含文件流"},
         {"Zstandard payload successfully decompressed", "Zstandard 载荷已成功解压"},
         {"KAY marker followed by a structurally bounded Zstandard frame", "KAY 标记之后存在结构边界明确的 Zstandard 帧"},

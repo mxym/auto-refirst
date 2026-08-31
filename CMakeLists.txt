@@ -162,6 +162,7 @@ add_executable(auto_refirst
     src/extract/nested_executable.cpp
     src/extract/container_ingress.cpp
     src/extract/nuitka.cpp
+    src/extract/nuitka_version.cpp
     src/extract/lua.cpp
     src/extract/wasm.cpp
     src/extract/hermes.cpp
@@ -299,9 +300,11 @@ target_include_directories(auto_refirst_public_path_utf8_unit PRIVATE include)
 add_executable(auto_refirst_public_nuitka_unit EXCLUDE_FROM_ALL
     tests/nuitka_unit.cpp
     src/extract/nuitka.cpp
+    src/extract/nuitka_version.cpp
     src/core/zstd_wrap.c
+    third_party/zydis/Zydis.c
 )
-target_include_directories(auto_refirst_public_nuitka_unit PRIVATE include)
+target_include_directories(auto_refirst_public_nuitka_unit PRIVATE include third_party/zydis)
 
 add_executable(auto_refirst_public_static_scan_unit EXCLUDE_FROM_ALL
     tests/static_scan_unit.cpp
