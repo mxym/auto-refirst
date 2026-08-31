@@ -29,15 +29,17 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --only-binary=:all: "pyinstaller==${{ matrix.pyinstaller }}"
           python -m pip freeze | Out-File -Encoding utf8 pip-freeze.txt
-          python - <<'PY'
-          import hashlib, importlib.metadata, pathlib, PyInstaller
+          @'
+          import hashlib, importlib.metadata, pathlib, sys, PyInstaller
           print('pyinstaller', importlib.metadata.version('pyinstaller'))
-          print('python', __import__('sys').version)
-          root=pathlib.Path(PyInstaller.__file__).parent
+          print('python', sys.version)
+          root = pathlib.Path(PyInstaller.__file__).parent
           for name in ['pyimod01_os_path.py','pyimod02_archive.py','pyimod03_importers.py','pyimod04_ctypes.py','pyimod01_archive.py','pyimod02_importers.py','pyimod03_ctypes.py','pyimod04_pywin32.py']:
-              p=root/'loader'/name
-              if p.is_file(): print(name,p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest())
-          PY
+              p = root / 'loader' / name
+              if p.is_file():
+                  print(name, p.stat().st_size, hashlib.sha256(p.read_bytes()).hexdigest())
+          '@ | Set-Content -Encoding utf8 inspect-pyinstaller.py
+          python inspect-pyinstaller.py
       - name: Build onefile sample
         shell: pwsh
         run: |
