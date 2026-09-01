@@ -42,9 +42,11 @@ Mandiant FLARE 的 Go symbol recovery tool，可提取编译器/程序、函数�
 
 ### Cpp2IL
 
-Unity IL2CPP reverse-engineering toolchain，覆盖 metadata/native image 等深层恢复。auto-refirst 侧重自动发现、结构确认、跨文件关系和分析优先级；完整 IL2CPP 反编译可交给 Cpp2IL 等专门工具。
+Unity IL2CPP reverse-engineering toolchain，覆盖 metadata/native image 等深层恢复。auto-refirst 侧重自动发现、结构确认、跨文件关系和分析优先级；完整 IL2CPP 反编译可交给 Cpp2IL 等专门工具。其公开 metadata reader / `Il2CppMetadataRegistration` 定义也用于交叉核对 Unity 6.5/6.6 过渡期的 v106、106.1、双形态 v107 与 v108 结构边界；本项目不复制其源代码或二进制。
 
 - https://github.com/SamboyCoding/Cpp2IL
+- https://github.com/SamboyCoding/Cpp2IL/blob/development/LibCpp2IL/Metadata/Il2CppMetadata.cs
+- https://github.com/SamboyCoding/Cpp2IL/blob/development/LibCpp2IL/BinaryStructures/Il2CppMetadataRegistration.cs
 
 ### GDRETools / gdsdecomp
 

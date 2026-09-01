@@ -280,7 +280,7 @@ def target_path(build:pathlib.Path,config:str|None,name:str) -> pathlib.Path:
 
 
 def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
-    targets=["auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit","auto_refirst_public_nuitka_unit","auto_refirst_public_static_scan_unit","auto_refirst_public_pyinstaller_reference_unit"]
+    targets=["auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit","auto_refirst_public_nuitka_unit","auto_refirst_public_static_scan_unit","auto_refirst_public_pyinstaller_reference_unit","auto_refirst_public_unity_registration_profile_unit"]
     build,config=cmake_build(binary,targets)
     model=target_path(build,config,targets[0]); assert run([model]).stdout.strip()=="PASS"
     pyunit=target_path(build,config,targets[1]); p=td/"public.pyc"; p.write_bytes(pyc310())
@@ -300,7 +300,8 @@ def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
     nuitka=target_path(build,config,targets[4]); assert run([nuitka]).stdout.strip()=="PASS"
     static_scan=target_path(build,config,targets[5]); assert run([static_scan]).stdout.strip()=="PASS"
     pyinstaller_ref=target_path(build,config,targets[6]); assert run([pyinstaller_ref]).stdout.strip()=="PASS"
-    log("[PASS P0] model-trust + generic-path/Nuitka/static-scan/PyInstaller-reference synthetic units + direct CPython pyc trust ingress + Flutter codec")
+    unity_registration=target_path(build,config,targets[7]); assert run([unity_registration]).stdout.strip()=="PASS"
+    log("[PASS P0] model-trust + generic-path/Nuitka/static-scan/PyInstaller-reference/Unity-registration-profile synthetic units + direct CPython pyc trust ingress + Flutter codec")
 
 
 def p0_cli_exit_contract(binary:pathlib.Path) -> None:
@@ -517,7 +518,7 @@ def sanitizer_smoke(harness:pathlib.Path,td:pathlib.Path) -> None:
         p=td/name; p.write_bytes(data); cp=run([harness,p],check=False,timeout=30)
         assert cp.returncode == 0, (name,cp.returncode,cp.stderr)
         stderr=cp.stderr.lower(); assert "addresssanitizer" not in stderr and "runtime error:" not in stderr,(name,cp.stderr)
-    log("[PASS SAN] ASan+UBSan parser harness: PE/ELF/JVM/DEX/Wasm/Hermes/Lua malformed corpus; static only")
+    log("[PASS SAN] ASan+UBSan parser harness: PE/ELF/JVM/DEX/Wasm/Hermes/Lua + Unity registration-profile malformed/static corpus; static only")
 
 
 
