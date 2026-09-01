@@ -12,6 +12,7 @@ void need(bool value, const char* message) {
     }
 }
 using E = prts::UnityMetadataRegistrationTailEvidence;
+using H = prts::UnityMetadataRegistrationEngineHint;
 void put64(std::vector<std::uint8_t>&d,std::size_t off,std::uint64_t v){
     need(off+8<=d.size(),"put64 bounds");
     for(std::size_t i=0;i<8;++i)d[off+i]=static_cast<std::uint8_t>(v>>(i*8));
@@ -24,6 +25,15 @@ prts::PeInfo synthetic_pe(){
 }
 
 int main() {
+    {
+        prts::UnityEngineVersionValue v{6000,6,0,5,'a'};
+        need(prts::unity_metadata_registration_engine_hint(106,v)==H::Traditional106,"v106 before 6000.6.0a6 maps to 106");
+        v.channel_number=6;need(prts::unity_metadata_registration_engine_hint(106,v)==H::Extended1061,"v106 6000.6.0a6 maps to 106.1");
+        v={6000,6,0,1,'b'};need(prts::unity_metadata_registration_engine_hint(106,v)==H::Extended1061,"v106 beta sorts after alpha threshold");
+        v={6000,5,1,1,'f'};need(prts::unity_metadata_registration_engine_hint(107,v)==H::Traditional106,"v107 Unity 6.5 backport maps to 106");
+        v={6000,6,0,1,'a'};need(prts::unity_metadata_registration_engine_hint(107,v)==H::Extended1061,"v107 Unity 6.6 maps to 106.1");
+        need(prts::unity_metadata_registration_engine_hint(105,v)==H::None,"unrelated declared version has no 106 hint");
+    }
     {
         auto d = prts::decide_unity_metadata_registration_profile(105, E::NotApplicable);
         need(d.state == "RESOLVED" && d.profile == "traditional-8pair" && d.normalized_variant == "105" && d.role_count == 8 && !d.include_always_init,
@@ -42,6 +52,22 @@ int main() {
         auto unresolved = prts::decide_unity_metadata_registration_profile(declared, E::Unresolved);
         need(unresolved.state == "AMBIGUOUS" && unresolved.normalized_variant == "106|106.1" && unresolved.role_count == 8 && !unresolved.include_always_init,
              "106/107 malformed or unproven tail remains ambiguous");
+    }
+    for (int declared : {106,107}) {
+        auto t0=prts::decide_unity_metadata_registration_profile(declared,E::ZeroPair,H::Traditional106);
+        need(t0.state=="RESOLVED"&&t0.normalized_variant=="106"&&t0.role_count==8&&!t0.include_always_init,"engine 106 resolves zero tail as traditional");
+        auto tu=prts::decide_unity_metadata_registration_profile(declared,E::Unresolved,H::Traditional106);
+        need(tu.state=="RESOLVED"&&tu.normalized_variant=="106"&&!tu.include_always_init,"engine 106 treats unresolved post-prefix bytes as outside 8-pair struct");
+        auto tc=prts::decide_unity_metadata_registration_profile(declared,E::StrongExtended,H::Traditional106);
+        need(tc.state=="CONFLICT"&&tc.normalized_variant=="106|106.1"&&tc.role_count==8&&!tc.include_always_init,"engine 106 conflicts with strong 106.1 structure");
+        auto ez=prts::decide_unity_metadata_registration_profile(declared,E::ZeroPair,H::Extended1061);
+        need(ez.state=="RESOLVED"&&ez.normalized_variant=="106.1"&&ez.role_count==9&&ez.include_always_init,"engine 106.1 resolves zero extension");
+        auto es=prts::decide_unity_metadata_registration_profile(declared,E::StrongExtended,H::Extended1061);
+        need(es.state=="RESOLVED"&&es.normalized_variant=="106.1"&&es.role_count==9&&es.include_always_init,"engine and strong 106.1 structure corroborate");
+        auto ei=prts::decide_unity_metadata_registration_profile(declared,E::Unresolved,H::Extended1061);
+        need(ei.state=="INVALID"&&ei.role_count==8&&!ei.include_always_init,"engine 106.1 cannot wash malformed ninth pair");
+        auto eb=prts::decide_unity_metadata_registration_profile(declared,E::NotFileBacked,H::Extended1061);
+        need(eb.state=="INVALID"&&eb.role_count==8&&!eb.include_always_init,"engine 106.1 requires file-backed ninth pair");
     }
     {
         auto d = prts::decide_unity_metadata_registration_profile(108, E::StrongExtended);

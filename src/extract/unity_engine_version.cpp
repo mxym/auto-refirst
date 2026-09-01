@@ -60,15 +60,19 @@ UnityEngineVersionProbe read_probe_file(const std::filesystem::path&path,bool gg
 std::string summarize_invalid(const UnityEngineVersionProbe&p){return p.source+"="+p.state+(p.detail.empty()?std::string{}:"("+p.detail+")");}
 }
 
+bool parse_unity_engine_version_value(std::string_view text,UnityEngineVersionValue&value){
+    value={};if(text.empty()||text.size()>kMaxVersionLength)return false;
+    std::size_t pos=0;
+    if(!parse_decimal(text,pos,value.major)||pos>=text.size()||text[pos++]!='.')return false;
+    if(!parse_decimal(text,pos,value.minor)||pos>=text.size()||text[pos++]!='.')return false;
+    if(!parse_decimal(text,pos,value.patch)||pos>=text.size())return false;
+    value.channel=text[pos++];if(value.channel!='a'&&value.channel!='b'&&value.channel!='c'&&value.channel!='f'&&value.channel!='p'&&value.channel!='x')return false;
+    if(!parse_decimal(text,pos,value.channel_number)||pos!=text.size())return false;
+    return true;
+}
+
 bool parse_unity_engine_version_string(std::string_view text,std::string&canonical){
-    canonical.clear();if(text.empty()||text.size()>kMaxVersionLength)return false;
-    std::size_t pos=0;std::uint32_t major=0,minor=0,patch=0,build=0;
-    if(!parse_decimal(text,pos,major)||pos>=text.size()||text[pos++]!='.')return false;
-    if(!parse_decimal(text,pos,minor)||pos>=text.size()||text[pos++]!='.')return false;
-    if(!parse_decimal(text,pos,patch)||pos>=text.size())return false;
-    const char channel=text[pos++];if(channel!='a'&&channel!='b'&&channel!='c'&&channel!='f'&&channel!='p'&&channel!='x')return false;
-    if(!parse_decimal(text,pos,build)||pos!=text.size())return false;
-    canonical.assign(text);return true;
+    canonical.clear();UnityEngineVersionValue value;if(!parse_unity_engine_version_value(text,value))return false;canonical.assign(text);return true;
 }
 
 UnityEngineVersionProbe probe_unity_globalgamemanagers(std::span<const std::uint8_t>prefix,std::uint64_t actual_file_size){

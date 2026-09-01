@@ -35,7 +35,17 @@ bool unity_profile_sanitizer_contract() {
     if(malformed.evidence!=prts::UnityMetadataRegistrationTailEvidence::Unresolved)return false;
     const auto edge=pe.image_base+0x1ff8;
     auto truncated=prts::probe_unity_metadata_registration_tail(image,pe,edge,4,4,4,4);
-    return truncated.evidence==prts::UnityMetadataRegistrationTailEvidence::NotFileBacked;
+    if(truncated.evidence!=prts::UnityMetadataRegistrationTailEvidence::NotFileBacked)return false;
+    prts::UnityEngineVersionValue old_branch{6000,5,0,6,'a'},new_branch{6000,6,0,6,'a'};
+    const auto old_hint=prts::unity_metadata_registration_engine_hint(106,old_branch);
+    const auto new_hint=prts::unity_metadata_registration_engine_hint(106,new_branch);
+    if(old_hint!=prts::UnityMetadataRegistrationEngineHint::Traditional106||new_hint!=prts::UnityMetadataRegistrationEngineHint::Extended1061)return false;
+    const auto old_decision=prts::decide_unity_metadata_registration_profile(106,prts::UnityMetadataRegistrationTailEvidence::Unresolved,old_hint);
+    const auto conflict_decision=prts::decide_unity_metadata_registration_profile(106,prts::UnityMetadataRegistrationTailEvidence::StrongExtended,old_hint);
+    const auto new_decision=prts::decide_unity_metadata_registration_profile(106,prts::UnityMetadataRegistrationTailEvidence::Unresolved,new_hint);
+    return old_decision.state=="RESOLVED"&&old_decision.normalized_variant=="106"&&!old_decision.include_always_init&&
+           conflict_decision.state=="CONFLICT"&&!conflict_decision.include_always_init&&
+           new_decision.state=="INVALID"&&new_decision.normalized_variant=="106|106.1"&&!new_decision.include_always_init;
 }
 }
 
