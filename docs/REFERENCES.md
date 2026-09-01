@@ -48,6 +48,15 @@ Unity IL2CPP reverse-engineering toolchain，覆盖 metadata/native image 等深
 - https://github.com/SamboyCoding/Cpp2IL/blob/development/LibCpp2IL/Metadata/Il2CppMetadata.cs
 - https://github.com/SamboyCoding/Cpp2IL/blob/development/LibCpp2IL/BinaryStructures/Il2CppMetadataRegistration.cs
 
+### AssetRipper
+
+Unity serialized-file / bundle format reference，用于交叉核对 `globalgamemanagers` 的 serialized-file header 几何，以及 `UnityFS` bundle signature/version/header-string 顺序。auto-refirst 只实现独立的 bounded prefix parser，不复制或分发 AssetRipper 源码/二进制。
+
+- https://github.com/AssetRipper/AssetRipper
+- https://github.com/AssetRipper/AssetRipper/blob/master/Source/AssetRipper.IO.Files/SerializedFiles/Parser/SerializedFileHeader.cs
+- https://github.com/AssetRipper/AssetRipper/blob/master/Source/AssetRipper.IO.Files/BundleFiles/BundleHeader.cs
+- https://github.com/AssetRipper/AssetRipper/blob/master/Source/AssetRipper.IO.Files/BundleFiles/FileStream/FileStreamBundleHeader.cs
+
 ### GDRETools / gdsdecomp
 
 Godot reverse-engineering suite，支持 PCK、GDScript 和项目恢复。auto-refirst 提供自动 PCK/GDScript/GDExtension routing/materialization，并对未闭环布局保持保守状态。

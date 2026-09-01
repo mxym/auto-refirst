@@ -43,6 +43,7 @@
 - Unity Mono：托管应用程序集、Mono runtime 与宿主关系，优先定位 `Assembly-CSharp` 等应用层载荷。
 - Unity IL2CPP：`global-metadata.dat`、`GameAssembly`/native image、metadata 版本/注册结构、managed/native 关联与优先级。
 - Unity 6.5/6.6 过渡期的 declared metadata v106/v107 不能仅凭整数版本区分 106.0 与 106.1：第 9 个 `alwaysInitMetadataUsages` pair 只有在 pointer/slot/encoded-usage 结构闭合时才作为 106.1 正证据；缺少 Unity engine-version 证据且尾部不具唯一性时保留 `AMBIGUOUS`，版本敏感 plane 不做无证据升级。
+- Unity engine-version evidence：从已验证 IL2CPP metadata 路径向上做有界目录关联；`globalgamemanagers` 必须通过 serialized-file generation/file-size/data-offset 几何和严格版本字符串校验，`data.unity3d` 当前只接受结构化 `UnityFS` v6-v8 header；每个文件只读取 512-byte prefix，双来源冲突保留 `CONFLICT`。本阶段该证据只报告，不直接改写 registration profile。
 - 关系确认依赖结构和跨文件一致性。文件名可参与弱排序，但不能单独形成高置信结论。
 
 ### Godot

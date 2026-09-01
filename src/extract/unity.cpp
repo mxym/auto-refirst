@@ -1,4 +1,5 @@
 #include "prts/unity.hpp"
+#include "unity_engine_version.hpp"
 #include "unity_registration_profile.hpp"
 #include "prts/byte_search.hpp"
 #include "prts/mapped_file.hpp"
@@ -966,6 +967,14 @@ std::string escape_literal_value(const std::string&s){std::string out;out.reserv
 bool ascii_ieq(std::string_view a,std::string_view b){if(a.size()!=b.size())return false;for(std::size_t i=0;i<a.size();++i)if(std::tolower(static_cast<unsigned char>(a[i]))!=std::tolower(static_cast<unsigned char>(b[i])))return false;return true;}
 bool pe_imports_module(const PeInfo&pe,std::string_view name){if(!pe.valid)return false;return std::any_of(pe.imports.begin(),pe.imports.end(),[&](const auto&m){return ascii_ieq(m.name,name);});}
 bool pe_has_il2cpp_export(const PeInfo&pe){if(!pe.valid)return false;return std::any_of(pe.exports.begin(),pe.exports.end(),[](const auto&e){return e.name.rfind("il2cpp_",0)==0&&e.name.size()>8;});}
+void resolve_engine_version_evidence(UnityInfo&u){
+    if(u.metadata_path.empty())return;
+    const auto ev=inspect_unity_engine_version_near(u.metadata_path);
+    u.engine_version_state=ev.state;u.engine_version=ev.version;u.engine_version_source=ev.source;u.engine_version_detail=ev.detail;u.engine_version_root=ev.root;
+    u.globalgamemanagers_path=ev.globalgamemanagers_path;u.data_unity3d_path=ev.data_unity3d_path;
+    if(!ev.globalgamemanagers_path.empty()){u.globalgamemanagers_state=ev.globalgamemanagers.state;u.globalgamemanagers_version=ev.globalgamemanagers.version;u.globalgamemanagers_detail=ev.globalgamemanagers.detail;}
+    if(!ev.data_unity3d_path.empty()){u.data_unity3d_state=ev.data_unity3d.state;u.data_unity3d_version=ev.data_unity3d.version;u.data_unity3d_detail=ev.data_unity3d.detail;}
+}
 }
 UnityInfo inspect_unity_il2cpp_metadata(std::span<const std::uint8_t>d){return parse_meta(d);}
 UnityInfo detect_unity(const std::filesystem::path&input,std::span<const std::uint8_t>d,const PeInfo&pe){
@@ -973,6 +982,7 @@ UnityInfo detect_unity(const std::filesystem::path&input,std::span<const std::ui
     if(d.size()>=8&&u32(d,0)==0xFAB11BAF){
         u=parse_meta(d);u.metadata_path=input;
         if(u.metadata_valid){
+            resolve_engine_version_evidence(u);
             auto ga=find_gameassembly(input);
             if(!ga.empty()){MappedFile gm(ga);if(gm.valid()){auto gp=parse_pe(gm.bytes());if(gp.valid){u.game_assembly_path=ga;auto hh=header(d);auto ll=layout(hh);auto ims=parse_images(d,hh,ll);resolve_codereg(u,gm.bytes(),gp,ims);u.game_assembly_validated=u.registration_resolved;}}}
         }
@@ -991,7 +1001,7 @@ UnityInfo detect_unity(const std::filesystem::path&input,std::span<const std::ui
             auto parsed=parse_meta(m.bytes());
             if(parsed.metadata_valid){
                 parsed.unity_generic=u.unity_generic;parsed.unity_player_import=u.unity_player_import;parsed.il2cpp_export_evidence=u.il2cpp_export_evidence;parsed.il2cpp_string_evidence=u.il2cpp_string_evidence;
-                parsed.metadata_path=md;parsed.game_assembly_path=input;
+                parsed.metadata_path=md;parsed.game_assembly_path=input;resolve_engine_version_evidence(parsed);
                 if(pe.valid){auto hh=header(m.bytes());auto ll=layout(hh);auto ims=parse_images(m.bytes(),hh,ll);resolve_codereg(parsed,d,pe,ims);parsed.game_assembly_validated=parsed.registration_resolved;}
                 return parsed;
             }
@@ -1006,6 +1016,16 @@ Finding unity_finding(const UnityInfo&u){
     Finding f;f.kind="ecosystem";f.family="Unity";
     if(!u.valid){f.state="FAILED";return f;}
     f.fields["backend_state"]=u.backend_state;
+    if(u.engine_version_state!="NOT_ATTEMPTED"){
+        f.fields["engine_version_state"]=u.engine_version_state;f.fields["engine_version"]=u.engine_version;f.fields["engine_version_source"]=u.engine_version_source;f.fields["engine_version_detail"]=u.engine_version_detail;
+        if(!u.globalgamemanagers_path.empty()){f.fields["globalgamemanagers_state"]=u.globalgamemanagers_state;f.fields["globalgamemanagers_version"]=u.globalgamemanagers_version;}
+        if(!u.data_unity3d_path.empty()){f.fields["data_unity3d_state"]=u.data_unity3d_state;f.fields["data_unity3d_version"]=u.data_unity3d_version;}
+        if(u.engine_version_state=="RESOLVED"){
+            f.evidence.push_back("adjacent Unity data file header(s) structurally validate engine version "+u.engine_version+" via "+u.engine_version_source);
+            if(u.engine_version_detail.rfind("resolved source(s) agree; ignored",0)==0)f.negative_evidence.push_back("other Unity engine-version candidate(s) were ignored after failing structural validation: "+u.engine_version_detail);
+        }else if(u.engine_version_state=="CONFLICT")f.negative_evidence.push_back("Unity engine-version sources conflict: "+u.engine_version_detail);
+        else if(u.engine_version_state=="UNRESOLVED")f.negative_evidence.push_back("adjacent Unity engine-version candidate(s) did not pass structural validation: "+u.engine_version_detail);
+    }
     if(!u.metadata_valid){
         if(u.mono){f.state="CONFIRMED";f.variant=u.il2cpp?"HYBRID_OR_AMBIGUOUS":"Mono";f.evidence={"directory correlation validated a Unity-managed CLR payload and exact Mono runtime export surface"};if(!u.managed_path.empty())f.fields["managed_payload"]=u.managed_path.string();if(!u.mono_runtime_path.empty())f.fields["mono_runtime"]=u.mono_runtime_path.string();if(u.il2cpp)f.negative_evidence.push_back("independent Mono and IL2CPP surfaces are both present; neither backend is suppressed");if(!u.error.empty())f.negative_evidence.push_back(u.error);return f;}
         if(u.il2cpp&&u.il2cpp_export_evidence){f.state="LIKELY";f.confidence=.90;f.variant="IL2CPP";f.evidence={"one or more exact il2cpp_* exports are present in a validated PE native image"};f.negative_evidence.push_back("IL2CPP metadata/native registration relationship is not validated, so backend confirmation is withheld");if(!u.error.empty())f.negative_evidence.push_back(u.error);return f;}
