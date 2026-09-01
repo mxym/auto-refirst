@@ -281,9 +281,15 @@ def target_path(build:pathlib.Path,config:str|None,name:str) -> pathlib.Path:
 
 def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
     targets=["auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit","auto_refirst_public_nuitka_unit","auto_refirst_public_static_scan_unit","auto_refirst_public_pyinstaller_reference_unit","auto_refirst_public_unity_registration_profile_unit","auto_refirst_public_unity_metadata_usage_codec_unit","auto_refirst_public_unity_engine_version_unit"]
-    build,config=cmake_build(binary,targets)
-    model=target_path(build,config,targets[0]); assert run([model]).stdout.strip()=="PASS"
-    pyunit=target_path(build,config,targets[1]); p=td/"public.pyc"; p.write_bytes(pyc310())
+    assert len(targets)==len(set(targets)),targets
+    build,config=cmake_build(binary,targets);seen:set[str]=set()
+    def unit(name:str) -> pathlib.Path:
+        assert name in targets,name
+        assert name not in seen,name
+        seen.add(name)
+        return target_path(build,config,name)
+    model=unit("auto_refirst_public_model_trust_unit"); assert run([model]).stdout.strip()=="PASS"
+    pyunit=unit("auto_refirst_public_python_bytecode_unit"); p=td/"public.pyc"; p.write_bytes(pyc310())
     out=run([pyunit,"inspect",p,"1"]).stdout.strip().split("\t",7)
     assert out[0:4]==["1","1","3.10","TIMESTAMP"],out
     bad=td/"bad.pyc"; bad.write_bytes(p.read_bytes()[:10]); out=run([pyunit,"inspect",bad,"1"]).stdout
@@ -295,14 +301,15 @@ def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
     assert hash_a==hash_b and len(hash_a)==64,(hash_a,hash_b)
     malformed=td/"marshal-set-truncated.bin";malformed.write_bytes(set_a.read_bytes()[:-1])
     assert run([pyunit,"marshal-hash",malformed,"310"],check=False).returncode==3
-    flutter=target_path(build,config,targets[2]); assert run([flutter]).stdout.strip()=="PASS"
-    pathunit=target_path(build,config,targets[3]); assert run([pathunit]).stdout.strip()=="PASS"
-    nuitka=target_path(build,config,targets[4]); assert run([nuitka]).stdout.strip()=="PASS"
-    static_scan=target_path(build,config,targets[5]); assert run([static_scan]).stdout.strip()=="PASS"
-    pyinstaller_ref=target_path(build,config,targets[6]); assert run([pyinstaller_ref]).stdout.strip()=="PASS"
-    unity_registration=target_path(build,config,targets[7]); assert run([unity_registration]).stdout.strip()=="PASS"
-    unity_usage_codec=target_path(build,config,targets[8]); assert run([unity_usage_codec]).stdout.strip()=="PASS"
-    unity_engine_version=target_path(build,config,targets[9]); assert run([unity_engine_version]).stdout.strip()=="PASS"
+    flutter=unit("auto_refirst_public_flutter_codec_unit"); assert run([flutter]).stdout.strip()=="PASS"
+    pathunit=unit("auto_refirst_public_path_utf8_unit"); assert run([pathunit]).stdout.strip()=="PASS"
+    nuitka=unit("auto_refirst_public_nuitka_unit"); assert run([nuitka]).stdout.strip()=="PASS"
+    static_scan=unit("auto_refirst_public_static_scan_unit"); assert run([static_scan]).stdout.strip()=="PASS"
+    pyinstaller_ref=unit("auto_refirst_public_pyinstaller_reference_unit"); assert run([pyinstaller_ref]).stdout.strip()=="PASS"
+    unity_registration=unit("auto_refirst_public_unity_registration_profile_unit"); assert run([unity_registration]).stdout.strip()=="PASS"
+    unity_usage_codec=unit("auto_refirst_public_unity_metadata_usage_codec_unit"); assert run([unity_usage_codec]).stdout.strip()=="PASS"
+    unity_engine_version=unit("auto_refirst_public_unity_engine_version_unit"); assert run([unity_engine_version]).stdout.strip()=="PASS"
+    assert seen==set(targets),(sorted(set(targets)-seen),sorted(seen-set(targets)))
     log("[PASS P0] model-trust + generic-path/Nuitka/static-scan/PyInstaller-reference/Unity-registration-profile/Unity-metadata-usage-codec/Unity-engine-version synthetic units + direct CPython pyc trust ingress + Flutter codec")
 
 
