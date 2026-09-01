@@ -5,6 +5,7 @@
 #include "prts/lua.hpp"
 #include "prts/pe.hpp"
 #include "prts/wasm.hpp"
+#include "unity_engine_version.hpp"
 #include "unity_registration_profile.hpp"
 #include <cstdint>
 #include <fstream>
@@ -57,6 +58,8 @@ int main(int argc, char** argv) {
     prts::PeInfo probe_pe;probe_pe.valid=true;probe_pe.pe64=true;probe_pe.machine=0x8664;probe_pe.image_base=0x180000000ull;
     prts::PeSection probe_sec;probe_sec.name=".data";probe_sec.rva=0x1000;probe_sec.vsize=static_cast<std::uint32_t>(std::min<std::size_t>(data.size(),std::numeric_limits<std::uint32_t>::max()));probe_sec.raw_size=probe_sec.vsize;probe_sec.characteristics=0xC0000040u;probe_pe.sections.push_back(probe_sec);
     (void)prts::probe_unity_metadata_registration_tail(bytes,probe_pe,probe_pe.image_base+0x1000,16,16,16,16);
+    (void)prts::probe_unity_globalgamemanagers(bytes,bytes.size());
+    (void)prts::probe_unityfs(bytes,bytes.size());
     // Consume results so an optimizing sanitizer build cannot discard parser calls.
     const unsigned observed = unsigned(pe.valid) + unsigned(elf.valid) + unsigned(wasm.valid) +
                               unsigned(hermes.valid) + unsigned(jvm.valid) + unsigned(dex.valid) +
