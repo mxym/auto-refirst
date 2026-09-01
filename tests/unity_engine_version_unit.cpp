@@ -21,6 +21,8 @@ int main(int argc,char**argv){
     if(argc==3&&std::string(argv[1])=="inspect"){std::filesystem::path p=argv[2];auto ev=prts::inspect_unity_engine_version_near(p);std::cout<<ev.state<<'\t'<<ev.version<<'\t'<<ev.source<<'\t'<<ev.detail<<'\n';return ev.state=="RESOLVED"?0:3;}
     if(argc!=1)return 2;
     std::string canonical;
+    prts::UnityEngineVersionValue parsed;
+    need(prts::parse_unity_engine_version_value("6000.6.0a6",parsed)&&parsed.major==6000&&parsed.minor==6&&parsed.patch==0&&parsed.channel=='a'&&parsed.channel_number==6,"structured Unity version parse");
     need(prts::parse_unity_engine_version_string("2019.4.34f1",canonical)&&canonical=="2019.4.34f1","version grammar 2019");
     need(prts::parse_unity_engine_version_string("6000.1.0b12",canonical),"version grammar Unity 6");
     need(!prts::parse_unity_engine_version_string("6000.1",canonical),"reject incomplete version");

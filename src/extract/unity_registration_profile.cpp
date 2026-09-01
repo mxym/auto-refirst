@@ -6,60 +6,107 @@
 #include <vector>
 
 namespace prts {
+namespace {
+int unity_channel_rank(char channel) {
+    switch(channel) {
+        case 'a': return 0; case 'b': return 1; case 'c': return 2;
+        case 'f': return 3; case 'p': return 4; case 'x': return 5;
+        default: return -1;
+    }
+}
+bool unity_version_at_least(const UnityEngineVersionValue&v,std::uint32_t major,std::uint32_t minor,
+                            std::uint32_t patch,char channel,std::uint32_t channel_number) {
+    const auto rank=unity_channel_rank(v.channel),target_rank=unity_channel_rank(channel);
+    if(rank<0||target_rank<0)return false;
+    if(v.major!=major)return v.major>major;
+    if(v.minor!=minor)return v.minor>minor;
+    if(v.patch!=patch)return v.patch>patch;
+    if(rank!=target_rank)return rank>target_rank;
+    return v.channel_number>=channel_number;
+}
+const char* engine_hint_name(UnityMetadataRegistrationEngineHint hint) {
+    switch(hint) {
+        case UnityMetadataRegistrationEngineHint::Traditional106:return "106";
+        case UnityMetadataRegistrationEngineHint::Extended1061:return "106.1";
+        case UnityMetadataRegistrationEngineHint::None:return "";
+    }
+    return "";
+}
+}
+
+UnityMetadataRegistrationEngineHint unity_metadata_registration_engine_hint(
+    int declared_version,const UnityEngineVersionValue&engine_version) {
+    if(declared_version==106)
+        return unity_version_at_least(engine_version,6000,6,0,'a',6)
+            ?UnityMetadataRegistrationEngineHint::Extended1061
+            :UnityMetadataRegistrationEngineHint::Traditional106;
+    if(declared_version==107)
+        return engine_version.major>6000||(engine_version.major==6000&&engine_version.minor>=6)
+            ?UnityMetadataRegistrationEngineHint::Extended1061
+            :UnityMetadataRegistrationEngineHint::Traditional106;
+    return UnityMetadataRegistrationEngineHint::None;
+}
+
 UnityMetadataRegistrationProfileDecision decide_unity_metadata_registration_profile(
-    int declared_version, UnityMetadataRegistrationTailEvidence tail_evidence) {
-    UnityMetadataRegistrationProfileDecision out;
+    int declared_version, UnityMetadataRegistrationTailEvidence tail_evidence,
+    UnityMetadataRegistrationEngineHint engine_hint) {
+    UnityMetadataRegistrationProfileDecision out;out.engine_hint=engine_hint_name(engine_hint);
     if (declared_version < 23 || declared_version > 108) {
         out.detail = "declared metadata version is outside the supported profile range";
         return out;
     }
     if (declared_version == 108) {
-        out.state = "RESOLVED";
-        out.profile = "v108 compact-7pair";
-        out.normalized_variant = "108";
-        out.role_count = 7;
+        out.state = "RESOLVED";out.profile = "v108 compact-7pair";out.normalized_variant = "108";out.role_count = 7;
         out.detail = "v108 removes genericMethodTable/methodSpecs from MetadataRegistration and retains always-init usages";
-        out.include_always_init = true;
-        return out;
+        out.include_always_init = true;return out;
     }
     if (declared_version != 106 && declared_version != 107) {
-        out.state = "RESOLVED";
-        out.profile = "traditional-8pair";
-        out.normalized_variant = std::to_string(declared_version);
-        out.role_count = 8;
-        out.detail = "declared metadata version has a single validated pre-v108 MetadataRegistration profile";
+        out.state = "RESOLVED";out.profile = "traditional-8pair";out.normalized_variant = std::to_string(declared_version);out.role_count = 8;
+        out.detail = "declared metadata version has a single validated pre-v108 MetadataRegistration profile";return out;
+    }
+
+    out.role_count = 8; // Safe common prefix shared by 106.0, 106.1, and both declared-v107 branches.
+    if(engine_hint==UnityMetadataRegistrationEngineHint::Traditional106) {
+        if(tail_evidence==UnityMetadataRegistrationTailEvidence::StrongExtended) {
+            out.state="CONFLICT";out.profile="common-8pair; structure-engine-conflict";out.normalized_variant="106|106.1";
+            out.detail="engine version maps to 106.0, but the ninth pair independently validates as a 106.1 always-init extension";return out;
+        }
+        out.state="RESOLVED";out.profile="traditional-8pair";out.normalized_variant="106";
+        out.detail=tail_evidence==UnityMetadataRegistrationTailEvidence::NotFileBacked
+            ?"engine version and ninth-pair file boundary independently support the traditional 106.0 layout"
+            :"engine version maps this declared metadata version to 106.0; bytes after the validated common 8-pair prefix are not part of MetadataRegistration";
+        return out;
+    }
+    if(engine_hint==UnityMetadataRegistrationEngineHint::Extended1061) {
+        if(tail_evidence==UnityMetadataRegistrationTailEvidence::StrongExtended) {
+            out.state="RESOLVED";out.profile="extended-9pair";out.normalized_variant="106.1";out.role_count=9;out.include_always_init=true;
+            out.detail="engine version and ninth always-init pair independently support the 106.1 layout";return out;
+        }
+        if(tail_evidence==UnityMetadataRegistrationTailEvidence::ZeroPair) {
+            out.state="RESOLVED";out.profile="extended-9pair; zero always-init extension";out.normalized_variant="106.1";out.role_count=9;out.include_always_init=true;
+            out.detail="engine version maps to 106.1 and disambiguates the structurally valid zero/zero ninth extension";return out;
+        }
+        out.state="INVALID";out.profile="common-8pair; required 106.1 extension invalid";out.normalized_variant="106|106.1";
+        out.detail=tail_evidence==UnityMetadataRegistrationTailEvidence::NotFileBacked
+            ?"engine version requires a 106.1 ninth pair, but the pair cannot fit in the file-backed MetadataRegistration span"
+            :"engine version requires a 106.1 ninth pair, but the extension is missing or fails pointer/slot/encoding validation";
         return out;
     }
 
-    out.role_count = 8; // Common prefix shared by 106.0, 106.1, and both declared-v107 branches.
     switch (tail_evidence) {
         case UnityMetadataRegistrationTailEvidence::NotFileBacked:
-            out.state = "RESOLVED";
-            out.profile = "traditional-8pair";
-            out.normalized_variant = "106";
-            out.detail = "a ninth count/pointer pair cannot fit in the file-backed MetadataRegistration span";
-            return out;
+            out.state = "RESOLVED";out.profile = "traditional-8pair";out.normalized_variant = "106";
+            out.detail = "a ninth count/pointer pair cannot fit in the file-backed MetadataRegistration span";return out;
         case UnityMetadataRegistrationTailEvidence::StrongExtended:
-            out.state = "RESOLVED";
-            out.profile = "extended-9pair";
-            out.normalized_variant = "106.1";
-            out.role_count = 9;
-            out.include_always_init = true;
-            out.detail = "ninth always-init metadata-usage pair has a fully validated pointer/slot/encoding contract";
-            return out;
+            out.state = "RESOLVED";out.profile = "extended-9pair";out.normalized_variant = "106.1";out.role_count = 9;out.include_always_init = true;
+            out.detail = "ninth always-init metadata-usage pair has a fully validated pointer/slot/encoding contract";return out;
         case UnityMetadataRegistrationTailEvidence::ZeroPair:
-            out.state = "AMBIGUOUS";
-            out.profile = "common-8pair; tail-zero-ambiguous";
-            out.normalized_variant = "106|106.1";
-            out.detail = "zero ninth pair is compatible with both a zero-valued 106.1 extension and unrelated zero bytes after a 106.0 struct";
-            return out;
+            out.state = "AMBIGUOUS";out.profile = "common-8pair; tail-zero-ambiguous";out.normalized_variant = "106|106.1";
+            out.detail = "zero ninth pair is compatible with both a zero-valued 106.1 extension and unrelated zero bytes after a 106.0 struct";return out;
         case UnityMetadataRegistrationTailEvidence::Unresolved:
         case UnityMetadataRegistrationTailEvidence::NotApplicable:
-            out.state = "AMBIGUOUS";
-            out.profile = "common-8pair; tail-unresolved";
-            out.normalized_variant = "106|106.1";
-            out.detail = "ninth pair is file-backed but lacks enough positive evidence to distinguish 106.0 from 106.1";
-            return out;
+            out.state = "AMBIGUOUS";out.profile = "common-8pair; tail-unresolved";out.normalized_variant = "106|106.1";
+            out.detail = "ninth pair is file-backed but lacks enough positive evidence to distinguish 106.0 from 106.1";return out;
     }
     return out;
 }
