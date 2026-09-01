@@ -7,8 +7,10 @@
 #include "prts/wasm.hpp"
 #include "unity_engine_version.hpp"
 #include "unity_metadata_usage_codec.hpp"
+#include "unity_method_dispatch_profile.hpp"
 #include "unity_rgctx_profile.hpp"
 #include "unity_registration_profile.hpp"
+#include <array>
 #include <cstdint>
 #include <fstream>
 #include <iterator>
@@ -49,6 +51,10 @@ bool unity_profile_sanitizer_contract() {
     const auto invalid_method=prts::decode_unity_encoded_method(7u,prts::UnityMetadataUsageKindProfile::Compact);
     const auto bad_invalid_method=prts::decode_unity_encoded_method(11u,prts::UnityMetadataUsageKindProfile::Compact);
     const auto rgctx_profile=prts::unity_module_rgctx_profile(106,"106.1");
+    const std::array<std::uint32_t,2> dispatch_tokens{0x06000001u,0x06000002u};
+    const std::array<std::int32_t,2> dispatch_invokers{0,-1};
+    const std::array<std::uint32_t,1> dispatch_adjustors{0x06000002u};
+    const auto dispatch_contract=prts::validate_unity_pre108_method_dispatch_tables(106,"106.1",dispatch_tokens,2,dispatch_invokers,1,dispatch_adjustors);
     return old_decision.state=="RESOLVED"&&old_decision.normalized_variant=="106"&&!old_decision.include_always_init&&
            conflict_decision.state=="CONFLICT"&&!conflict_decision.include_always_init&&
            new_decision.state=="INVALID"&&new_decision.normalized_variant=="106|106.1"&&!new_decision.include_always_init&&
@@ -58,7 +64,8 @@ bool unity_profile_sanitizer_contract() {
            rgctx_profile&&*rgctx_profile==prts::UnityModuleRgctxProfile::CompactInline8&&
            prts::unity_module_rgctx_record_size(*rgctx_profile)==8&&
            prts::unity_module_rgctx_kind_name(*rgctx_profile,5)[0]!=0&&
-           prts::unity_module_rgctx_kind_name(*rgctx_profile,4)[0]==0;
+           prts::unity_module_rgctx_kind_name(*rgctx_profile,4)[0]==0&&
+           dispatch_contract.valid&&dispatch_contract.invoker_resolved==1&&dispatch_contract.invoker_missing==1;
 }
 }
 

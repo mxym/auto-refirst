@@ -280,7 +280,7 @@ def target_path(build:pathlib.Path,config:str|None,name:str) -> pathlib.Path:
 
 
 def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
-    targets=["auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit","auto_refirst_public_nuitka_unit","auto_refirst_public_static_scan_unit","auto_refirst_public_pyinstaller_reference_unit","auto_refirst_public_unity_registration_profile_unit","auto_refirst_public_unity_metadata_usage_codec_unit","auto_refirst_public_unity_engine_version_unit"]
+    targets=["auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit","auto_refirst_public_nuitka_unit","auto_refirst_public_static_scan_unit","auto_refirst_public_pyinstaller_reference_unit","auto_refirst_public_unity_registration_profile_unit","auto_refirst_public_unity_metadata_usage_codec_unit","auto_refirst_public_unity_engine_version_unit","auto_refirst_public_unity_method_dispatch_profile_unit"]
     assert len(targets)==len(set(targets)),targets
     build,config=cmake_build(binary,targets);seen:set[str]=set()
     def unit(name:str) -> pathlib.Path:
@@ -309,8 +309,9 @@ def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
     unity_registration=unit("auto_refirst_public_unity_registration_profile_unit"); assert run([unity_registration]).stdout.strip()=="PASS"
     unity_usage_codec=unit("auto_refirst_public_unity_metadata_usage_codec_unit"); assert run([unity_usage_codec]).stdout.strip()=="PASS"
     unity_engine_version=unit("auto_refirst_public_unity_engine_version_unit"); assert run([unity_engine_version]).stdout.strip()=="PASS"
+    unity_method_dispatch=unit("auto_refirst_public_unity_method_dispatch_profile_unit"); assert run([unity_method_dispatch]).stdout.strip()=="PASS"
     assert seen==set(targets),(sorted(set(targets)-seen),sorted(seen-set(targets)))
-    log("[PASS P0] model-trust + generic-path/Nuitka/static-scan/PyInstaller-reference/Unity-registration-profile/Unity-metadata-usage-codec/Unity-engine-version synthetic units + direct CPython pyc trust ingress + Flutter codec")
+    log("[PASS P0] model-trust + generic-path/Nuitka/static-scan/PyInstaller-reference/Unity-registration-profile/Unity-metadata-usage-codec/Unity-engine-version/Unity-method-dispatch-profile synthetic units + direct CPython pyc trust ingress + Flutter codec")
 
 
 def p0_cli_exit_contract(binary:pathlib.Path) -> None:
@@ -527,7 +528,7 @@ def sanitizer_smoke(harness:pathlib.Path,td:pathlib.Path) -> None:
         p=td/name; p.write_bytes(data); cp=run([harness,p],check=False,timeout=30)
         assert cp.returncode == 0, (name,cp.returncode,cp.stderr)
         stderr=cp.stderr.lower(); assert "addresssanitizer" not in stderr and "runtime error:" not in stderr,(name,cp.stderr)
-    log("[PASS SAN] ASan+UBSan parser harness: PE/ELF/JVM/DEX/Wasm/Hermes/Lua + Unity registration/engine/encoded-method/RGCTX profile malformed/static contracts; static only")
+    log("[PASS SAN] ASan+UBSan parser harness: PE/ELF/JVM/DEX/Wasm/Hermes/Lua + Unity registration/engine/encoded-method/RGCTX/method-dispatch profile malformed/static contracts; static only")
 
 
 
