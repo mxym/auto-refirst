@@ -174,6 +174,7 @@ add_executable(auto_refirst
     src/extract/dart.cpp
     src/extract/flutter.cpp
     src/extract/unity.cpp
+    src/extract/unity_registration_profile.cpp
     src/extract/dotnet.cpp
     src/extract/dotnet_native.cpp
     src/extract/wxapkg.cpp
@@ -326,6 +327,12 @@ add_executable(auto_refirst_public_pyinstaller_reference_unit EXCLUDE_FROM_ALL
 )
 target_include_directories(auto_refirst_public_pyinstaller_reference_unit PRIVATE include)
 
+add_executable(auto_refirst_public_unity_registration_profile_unit EXCLUDE_FROM_ALL
+    tests/unity_registration_profile_unit.cpp
+    src/extract/unity_registration_profile.cpp
+)
+target_include_directories(auto_refirst_public_unity_registration_profile_unit PRIVATE include src/extract)
+
 add_executable(auto_refirst_public_fixture_ordinary EXCLUDE_FROM_ALL tests/public/ordinary.c)
 add_executable(auto_refirst_public_fixture_crypto EXCLUDE_FROM_ALL tests/public/crypto_tea.c)
 add_executable(auto_refirst_public_fixture_runtime_child EXCLUDE_FROM_ALL tests/public/runtime_child.c)
@@ -339,6 +346,7 @@ foreach(_public_target
         auto_refirst_public_nuitka_unit
         auto_refirst_public_static_scan_unit
         auto_refirst_public_pyinstaller_reference_unit
+        auto_refirst_public_unity_registration_profile_unit
         auto_refirst_public_fixture_ordinary
         auto_refirst_public_fixture_crypto
         auto_refirst_public_fixture_runtime_child
@@ -353,7 +361,8 @@ foreach(_public_target
         auto_refirst_public_path_utf8_unit
         auto_refirst_public_nuitka_unit
         auto_refirst_public_static_scan_unit
-        auto_refirst_public_pyinstaller_reference_unit)
+        auto_refirst_public_pyinstaller_reference_unit
+        auto_refirst_public_unity_registration_profile_unit)
     if(MSVC)
         target_compile_options(${_public_target} PRIVATE /W4 /permissive- /EHsc)
     else()
@@ -373,13 +382,14 @@ add_executable(auto_refirst_public_malformed_sanitizer EXCLUDE_FROM_ALL
     src/extract/jvm.cpp
     src/extract/android.cpp
     src/extract/lua.cpp
+    src/extract/unity_registration_profile.cpp
     src/core/sha1.cpp
     third_party/miniz/miniz_zip.c
     third_party/miniz/miniz_tinfl.c
     third_party/miniz/miniz_tdef.c
     third_party/miniz/miniz.c
 )
-target_include_directories(auto_refirst_public_malformed_sanitizer PRIVATE include)
+target_include_directories(auto_refirst_public_malformed_sanitizer PRIVATE include src/extract)
 target_include_directories(auto_refirst_public_malformed_sanitizer SYSTEM PRIVATE third_party/miniz)
 auto_refirst_enable_msvc_utf8(auto_refirst_public_malformed_sanitizer)
 if(MSVC)
