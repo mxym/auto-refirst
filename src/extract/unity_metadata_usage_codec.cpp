@@ -1,6 +1,11 @@
 #include "unity_metadata_usage_codec.hpp"
 
-namespace prts {
+namespace prts { namespace {
+std::uint32_t logical_usage_kind(std::uint32_t raw,UnityMetadataUsageKindProfile profile) {
+    if(profile==UnityMetadataUsageKindProfile::Compact&&raw>1)return raw+1;
+    return raw;
+}
+}
 std::optional<UnityMetadataUsageKindProfile> unity_metadata_usage_kind_profile(
     int metadata_version,std::string_view normalized_variant) {
     if(metadata_version==24||metadata_version==31)return UnityMetadataUsageKindProfile::Traditional;
@@ -23,8 +28,7 @@ UnityMetadataUsageDecoded decode_unity_metadata_usage(
     UnityMetadataUsageIndexProfile index_profile) {
     UnityMetadataUsageDecoded out;
     out.raw_kind=(encoded>>29)&7u;
-    out.kind=out.raw_kind;
-    if(kind_profile==UnityMetadataUsageKindProfile::Compact&&out.raw_kind>1)++out.kind;
+    out.kind=logical_usage_kind(out.raw_kind,kind_profile);
     out.low_bit_set=(encoded&1u)!=0;
     if(index_profile==UnityMetadataUsageIndexProfile::RuntimeToken) {
         if(!out.low_bit_set)return out;
@@ -34,6 +38,33 @@ UnityMetadataUsageDecoded decode_unity_metadata_usage(
     }
     out.valid=out.kind>=1&&out.kind<=7;
     return out;
+}
+
+UnityEncodedMethodDecoded decode_unity_encoded_method(
+    std::uint32_t encoded,UnityMetadataUsageKindProfile kind_profile) {
+    UnityEncodedMethodDecoded out;
+    out.raw_kind=(encoded>>29)&7u;
+    out.kind=logical_usage_kind(out.raw_kind,kind_profile);
+    out.source_index=(encoded&0x1ffffffeu)>>1;
+    out.low_bit_set=(encoded&1u)!=0;
+    if(out.kind==0) {
+        out.invalid_usage=true;
+        out.valid=out.source_index<=4; // Runtime recognizes InvalidMetadataUsageTokens 0..4.
+    } else {
+        out.valid=out.kind==3||out.kind==6;
+    }
+    return out;
+}
+
+const char* unity_encoded_method_invalid_name(std::uint32_t source_index) {
+    switch(source_index) {
+        case 0:return "NO_DATA";
+        case 1:return "AMBIGUOUS_METHOD";
+        case 2:return "AMBIGUOUS_STATIC_METHOD";
+        case 3:return "ENTRY_POINT_NOT_FOUND";
+        case 4:return "STATIC_ENTRY_POINT_NOT_FOUND";
+        default:return "";
+    }
 }
 
 const char* unity_metadata_usage_kind_name(std::uint32_t kind) {
