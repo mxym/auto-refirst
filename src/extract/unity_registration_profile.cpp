@@ -1,4 +1,5 @@
 #include "unity_registration_profile.hpp"
+#include "unity_metadata_usage_codec.hpp"
 #include <string>
 #include <algorithm>
 #include <limits>
@@ -118,25 +119,14 @@ std::string unity_code_registration_layout_profile(int declared_version) {
 }
 
 bool unity_validate_1061_always_init_encoded_slots(
-    std::span<const std::uint32_t> encoded_slots, std::uint64_t type_count,
-    std::uint64_t method_count, std::uint64_t string_count, std::uint64_t method_spec_count) {
+    std::span<const std::uint32_t> encoded_slots, std::uint64_t type_count) {
     if (encoded_slots.empty() || encoded_slots.size() > 1000000)
         return false;
     for (const auto encoded : encoded_slots) {
-        const auto raw = (encoded >> 29) & 7u;
-        const auto kind = raw > 1 ? raw + 1 : raw; // 106.1 removes the old enum value 2.
-        const auto source = (encoded & 0x1fffffffu) >> 1;
-        if (kind < 1 || kind > 7)
-            return false;
-        if ((kind == 1 || kind == 2) && source >= type_count)
-            return false;
-        if (kind == 3 && source >= method_count)
-            return false;
-        if (kind == 5 && source >= string_count)
-            return false;
-        if (kind == 6 && source >= method_spec_count)
-            return false;
-        if ((kind == 4 || kind == 7) && source > 2000000)
+        const auto decoded=decode_unity_metadata_usage(
+            encoded,UnityMetadataUsageKindProfile::Compact,UnityMetadataUsageIndexProfile::RuntimeToken);
+        // Runtime declares this table as Il2CppClass** const* and immediately Class::Init()s each entry.
+        if (!decoded.valid || decoded.kind != 1 || decoded.source_index >= type_count)
             return false;
     }
     return true;
@@ -196,8 +186,7 @@ const prts::PeSection* section_for_va(const prts::PeInfo& pe,std::uint64_t va) {
 namespace prts {
 UnityMetadataRegistrationTailProbe probe_unity_metadata_registration_tail(
     std::span<const std::uint8_t> image, const PeInfo& pe, std::uint64_t tail_va,
-    std::uint64_t type_count, std::uint64_t method_count,
-    std::uint64_t string_count, std::uint64_t method_spec_count) {
+    std::uint64_t type_count) {
     UnityMetadataRegistrationTailProbe out;
     if (!mapped_span_local(image,pe,tail_va,16)) {
         out.evidence=UnityMetadataRegistrationTailEvidence::NotFileBacked;
@@ -254,9 +243,9 @@ UnityMetadataRegistrationTailProbe probe_unity_metadata_registration_tail(
         }
         encoded.push_back(static_cast<std::uint32_t>(value));
     }
-    if (!unity_validate_1061_always_init_encoded_slots(encoded,type_count,method_count,string_count,method_spec_count)) {
+    if (!unity_validate_1061_always_init_encoded_slots(encoded,type_count)) {
         out.evidence=UnityMetadataRegistrationTailEvidence::Unresolved;
-        out.detail="always-init storage encodings fail 106.1 usage-kind/source bounds";
+        out.detail="always-init storage encodings fail the 106.1 TypeInfo runtime-token contract";
         return out;
     }
     out.evidence=UnityMetadataRegistrationTailEvidence::StrongExtended;

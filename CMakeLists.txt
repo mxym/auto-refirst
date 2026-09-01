@@ -174,6 +174,7 @@ add_executable(auto_refirst
     src/extract/dart.cpp
     src/extract/flutter.cpp
     src/extract/unity.cpp
+    src/extract/unity_metadata_usage_codec.cpp
     src/extract/unity_engine_version.cpp
     src/extract/unity_registration_profile.cpp
     src/extract/dotnet.cpp
@@ -331,8 +332,15 @@ target_include_directories(auto_refirst_public_pyinstaller_reference_unit PRIVAT
 add_executable(auto_refirst_public_unity_registration_profile_unit EXCLUDE_FROM_ALL
     tests/unity_registration_profile_unit.cpp
     src/extract/unity_registration_profile.cpp
+    src/extract/unity_metadata_usage_codec.cpp
 )
 target_include_directories(auto_refirst_public_unity_registration_profile_unit PRIVATE include src/extract)
+
+add_executable(auto_refirst_public_unity_metadata_usage_codec_unit EXCLUDE_FROM_ALL
+    tests/unity_metadata_usage_codec_unit.cpp
+    src/extract/unity_metadata_usage_codec.cpp
+)
+target_include_directories(auto_refirst_public_unity_metadata_usage_codec_unit PRIVATE include src/extract)
 
 add_executable(auto_refirst_public_unity_engine_version_unit EXCLUDE_FROM_ALL
     tests/unity_engine_version_unit.cpp
@@ -354,6 +362,7 @@ foreach(_public_target
         auto_refirst_public_static_scan_unit
         auto_refirst_public_pyinstaller_reference_unit
         auto_refirst_public_unity_registration_profile_unit
+        auto_refirst_public_unity_metadata_usage_codec_unit
         auto_refirst_public_unity_engine_version_unit
         auto_refirst_public_fixture_ordinary
         auto_refirst_public_fixture_crypto
@@ -371,6 +380,7 @@ foreach(_public_target
         auto_refirst_public_static_scan_unit
         auto_refirst_public_pyinstaller_reference_unit
         auto_refirst_public_unity_registration_profile_unit
+        auto_refirst_public_unity_metadata_usage_codec_unit
         auto_refirst_public_unity_engine_version_unit)
     if(MSVC)
         target_compile_options(${_public_target} PRIVATE /W4 /permissive- /EHsc)
@@ -393,6 +403,7 @@ add_executable(auto_refirst_public_malformed_sanitizer EXCLUDE_FROM_ALL
     src/extract/lua.cpp
     src/extract/unity_engine_version.cpp
     src/extract/unity_registration_profile.cpp
+    src/extract/unity_metadata_usage_codec.cpp
     src/core/sha1.cpp
     third_party/miniz/miniz_zip.c
     third_party/miniz/miniz_tinfl.c

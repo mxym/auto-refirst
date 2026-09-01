@@ -27,14 +27,14 @@ bool unity_profile_sanitizer_contract() {
     prts::PeSection sec;sec.name=".data";sec.rva=0x1000;sec.vsize=0x1000;sec.raw_offset=0x200;sec.raw_size=0x1000;sec.characteristics=0xC0000040u;pe.sections.push_back(sec);
     std::vector<std::uint8_t> image(0x1200);
     const auto tail=pe.image_base+0x1100,table=pe.image_base+0x1200,slot=pe.image_base+0x1300;
-    put64(image,unity_raw(pe,tail),1);put64(image,unity_raw(pe,tail)+8,table);put64(image,unity_raw(pe,table),slot);put64(image,unity_raw(pe,slot),(1u<<29));
-    auto strong=prts::probe_unity_metadata_registration_tail(image,pe,tail,4,4,4,4);
+    put64(image,unity_raw(pe,tail),1);put64(image,unity_raw(pe,tail)+8,table);put64(image,unity_raw(pe,table),slot);put64(image,unity_raw(pe,slot),(1u<<29)|1u);
+    auto strong=prts::probe_unity_metadata_registration_tail(image,pe,tail,4);
     if(strong.evidence!=prts::UnityMetadataRegistrationTailEvidence::StrongExtended)return false;
     put64(image,unity_raw(pe,slot),std::uint64_t(1)<<40);
-    auto malformed=prts::probe_unity_metadata_registration_tail(image,pe,tail,4,4,4,4);
+    auto malformed=prts::probe_unity_metadata_registration_tail(image,pe,tail,4);
     if(malformed.evidence!=prts::UnityMetadataRegistrationTailEvidence::Unresolved)return false;
     const auto edge=pe.image_base+0x1ff8;
-    auto truncated=prts::probe_unity_metadata_registration_tail(image,pe,edge,4,4,4,4);
+    auto truncated=prts::probe_unity_metadata_registration_tail(image,pe,edge,4);
     if(truncated.evidence!=prts::UnityMetadataRegistrationTailEvidence::NotFileBacked)return false;
     prts::UnityEngineVersionValue old_branch{6000,5,0,6,'a'},new_branch{6000,6,0,6,'a'};
     const auto old_hint=prts::unity_metadata_registration_engine_hint(106,old_branch);
@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
     // Small/truncated inputs should simply classify as non-file-backed or unresolved without UB/OOB.
     prts::PeInfo probe_pe;probe_pe.valid=true;probe_pe.pe64=true;probe_pe.machine=0x8664;probe_pe.image_base=0x180000000ull;
     prts::PeSection probe_sec;probe_sec.name=".data";probe_sec.rva=0x1000;probe_sec.vsize=static_cast<std::uint32_t>(std::min<std::size_t>(data.size(),std::numeric_limits<std::uint32_t>::max()));probe_sec.raw_size=probe_sec.vsize;probe_sec.characteristics=0xC0000040u;probe_pe.sections.push_back(probe_sec);
-    (void)prts::probe_unity_metadata_registration_tail(bytes,probe_pe,probe_pe.image_base+0x1000,16,16,16,16);
+    (void)prts::probe_unity_metadata_registration_tail(bytes,probe_pe,probe_pe.image_base+0x1000,16);
     (void)prts::probe_unity_globalgamemanagers(bytes,bytes.size());
     (void)prts::probe_unityfs(bytes,bytes.size());
     // Consume results so an optimizing sanitizer build cannot discard parser calls.
