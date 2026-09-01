@@ -22,7 +22,7 @@ struct UnityInterfaceOffsetInfo {
 struct UnityVtableEntryInfo {
     std::uint32_t global_index=0,slot=0,encoded=0,raw_kind=0,kind=0,source_index=0,method_definition_index=0xffffffffu,interface_type_index=0xffffffffu;
     std::int32_t interface_type_definition_index=-1,interface_offset=-1,interface_slot=-1;
-    bool null_entry=false,interface_mapped=false;
+    bool null_entry=false,invalid_usage=false,interface_mapped=false;
     std::string kind_name,resolved,interface_name;
 };
 struct UnityTypeInfo {
@@ -185,7 +185,7 @@ struct UnityInfo {
     std::uint32_t method_bound_count=0,method_unbound_count=0,native_body_count=0,native_alias_extra_count=0,native_max_alias_count=0;
     std::uint32_t pinvoke_method_count=0,pinvoke_resolved_count=0,pinvoke_unresolved_count=0;
     std::uint64_t pinvoke_resolver_va=0;
-    std::uint32_t nested_type_row_count=0,direct_interface_row_count=0,interface_offset_row_count=0,vtable_entry_count=0,vtable_methoddef_count=0,vtable_methodref_count=0,vtable_null_count=0,vtable_exact_slot_count=0,vtable_interface_mapped_count=0;
+    std::uint32_t nested_type_row_count=0,direct_interface_row_count=0,interface_offset_row_count=0,vtable_entry_count=0,vtable_methoddef_count=0,vtable_methodref_count=0,vtable_null_count=0,vtable_invalid_count=0,vtable_exact_slot_count=0,vtable_interface_mapped_count=0;
     std::uint32_t runtime_metadata_usage_count=0,always_init_metadata_usage_count=0,runtime_metadata_wrapper_count=0;
     std::uint64_t runtime_metadata_initializer_va=0,metadata_xref_relation_count=0,metadata_xref_instruction_count=0,metadata_xref_method_count=0,metadata_xref_slot_count=0;
     std::uint64_t default_data_offset=0,default_data_size=0;

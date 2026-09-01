@@ -301,8 +301,9 @@ def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
     static_scan=target_path(build,config,targets[5]); assert run([static_scan]).stdout.strip()=="PASS"
     pyinstaller_ref=target_path(build,config,targets[6]); assert run([pyinstaller_ref]).stdout.strip()=="PASS"
     unity_registration=target_path(build,config,targets[7]); assert run([unity_registration]).stdout.strip()=="PASS"
-    unity_engine_version=target_path(build,config,targets[8]); assert run([unity_engine_version]).stdout.strip()=="PASS"
-    log("[PASS P0] model-trust + generic-path/Nuitka/static-scan/PyInstaller-reference/Unity-registration-profile/Unity-engine-version synthetic units + direct CPython pyc trust ingress + Flutter codec")
+    unity_usage_codec=target_path(build,config,targets[8]); assert run([unity_usage_codec]).stdout.strip()=="PASS"
+    unity_engine_version=target_path(build,config,targets[9]); assert run([unity_engine_version]).stdout.strip()=="PASS"
+    log("[PASS P0] model-trust + generic-path/Nuitka/static-scan/PyInstaller-reference/Unity-registration-profile/Unity-metadata-usage-codec/Unity-engine-version synthetic units + direct CPython pyc trust ingress + Flutter codec")
 
 
 def p0_cli_exit_contract(binary:pathlib.Path) -> None:
@@ -519,7 +520,7 @@ def sanitizer_smoke(harness:pathlib.Path,td:pathlib.Path) -> None:
         p=td/name; p.write_bytes(data); cp=run([harness,p],check=False,timeout=30)
         assert cp.returncode == 0, (name,cp.returncode,cp.stderr)
         stderr=cp.stderr.lower(); assert "addresssanitizer" not in stderr and "runtime error:" not in stderr,(name,cp.stderr)
-    log("[PASS SAN] ASan+UBSan parser harness: PE/ELF/JVM/DEX/Wasm/Hermes/Lua + Unity registration-profile/engine-version malformed/static corpus; static only")
+    log("[PASS SAN] ASan+UBSan parser harness: PE/ELF/JVM/DEX/Wasm/Hermes/Lua + Unity registration/engine/encoded-method/RGCTX profile malformed/static contracts; static only")
 
 
 

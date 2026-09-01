@@ -6,6 +6,8 @@
 #include "prts/pe.hpp"
 #include "prts/wasm.hpp"
 #include "unity_engine_version.hpp"
+#include "unity_metadata_usage_codec.hpp"
+#include "unity_rgctx_profile.hpp"
 #include "unity_registration_profile.hpp"
 #include <cstdint>
 #include <fstream>
@@ -43,9 +45,20 @@ bool unity_profile_sanitizer_contract() {
     const auto old_decision=prts::decide_unity_metadata_registration_profile(106,prts::UnityMetadataRegistrationTailEvidence::Unresolved,old_hint);
     const auto conflict_decision=prts::decide_unity_metadata_registration_profile(106,prts::UnityMetadataRegistrationTailEvidence::StrongExtended,old_hint);
     const auto new_decision=prts::decide_unity_metadata_registration_profile(106,prts::UnityMetadataRegistrationTailEvidence::Unresolved,new_hint);
+    const auto compact_method=prts::decode_unity_encoded_method((2u<<29)|(17u<<1)|1u,prts::UnityMetadataUsageKindProfile::Compact);
+    const auto invalid_method=prts::decode_unity_encoded_method(7u,prts::UnityMetadataUsageKindProfile::Compact);
+    const auto bad_invalid_method=prts::decode_unity_encoded_method(11u,prts::UnityMetadataUsageKindProfile::Compact);
+    const auto rgctx_profile=prts::unity_module_rgctx_profile(106,"106.1");
     return old_decision.state=="RESOLVED"&&old_decision.normalized_variant=="106"&&!old_decision.include_always_init&&
            conflict_decision.state=="CONFLICT"&&!conflict_decision.include_always_init&&
-           new_decision.state=="INVALID"&&new_decision.normalized_variant=="106|106.1"&&!new_decision.include_always_init;
+           new_decision.state=="INVALID"&&new_decision.normalized_variant=="106|106.1"&&!new_decision.include_always_init&&
+           compact_method.valid&&!compact_method.invalid_usage&&compact_method.kind==3&&compact_method.source_index==17&&
+           invalid_method.valid&&invalid_method.invalid_usage&&invalid_method.source_index==3&&
+           !bad_invalid_method.valid&&bad_invalid_method.invalid_usage&&
+           rgctx_profile&&*rgctx_profile==prts::UnityModuleRgctxProfile::CompactInline8&&
+           prts::unity_module_rgctx_record_size(*rgctx_profile)==8&&
+           prts::unity_module_rgctx_kind_name(*rgctx_profile,5)[0]!=0&&
+           prts::unity_module_rgctx_kind_name(*rgctx_profile,4)[0]==0;
 }
 }
 
