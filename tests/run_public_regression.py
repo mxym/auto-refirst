@@ -280,7 +280,7 @@ def target_path(build:pathlib.Path,config:str|None,name:str) -> pathlib.Path:
 
 
 def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
-    targets=["auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit","auto_refirst_public_nuitka_unit","auto_refirst_public_static_scan_unit","auto_refirst_public_pyinstaller_reference_unit","auto_refirst_public_unity_registration_profile_unit","auto_refirst_public_unity_engine_version_unit"]
+    targets=["auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit","auto_refirst_public_nuitka_unit","auto_refirst_public_static_scan_unit","auto_refirst_public_pyinstaller_reference_unit","auto_refirst_public_unity_registration_profile_unit","auto_refirst_public_unity_metadata_usage_codec_unit","auto_refirst_public_unity_engine_version_unit"]
     build,config=cmake_build(binary,targets)
     model=target_path(build,config,targets[0]); assert run([model]).stdout.strip()=="PASS"
     pyunit=target_path(build,config,targets[1]); p=td/"public.pyc"; p.write_bytes(pyc310())

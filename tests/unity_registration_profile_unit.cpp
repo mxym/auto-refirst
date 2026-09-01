@@ -76,43 +76,43 @@ int main() {
     }
     {
         auto pe=synthetic_pe();std::vector<std::uint8_t> image(0x1200);const auto tail_va=pe.image_base+0x1100;
-        auto probe=prts::probe_unity_metadata_registration_tail(image,pe,tail_va,5,5,5,5);
+        auto probe=prts::probe_unity_metadata_registration_tail(image,pe,tail_va,5);
         need(probe.evidence==E::ZeroPair,"PE probe zero pair ambiguity evidence");
         const auto table_va=pe.image_base+0x1200,slot0=pe.image_base+0x1300,slot1=pe.image_base+0x1308;
         put64(image,raw(pe,tail_va),2);put64(image,raw(pe,tail_va)+8,table_va);
         put64(image,raw(pe,table_va),slot0);put64(image,raw(pe,table_va)+8,slot1);
-        put64(image,raw(pe,slot0),(1u<<29)|(0u<<1));
-        put64(image,raw(pe,slot1),(4u<<29)|(1u<<1));
-        probe=prts::probe_unity_metadata_registration_tail(image,pe,tail_va,5,5,5,5);
+        put64(image,raw(pe,slot0),(1u<<29)|(0u<<1)|1u);
+        put64(image,raw(pe,slot1),(1u<<29)|(1u<<1)|1u);
+        probe=prts::probe_unity_metadata_registration_tail(image,pe,tail_va,5);
         need(probe.evidence==E::StrongExtended && probe.count==2 && probe.pointer_va==table_va,"PE probe strong 106.1 extended evidence");
-        put64(image,raw(pe,slot1),(4u<<29)|(5u<<1));
-        probe=prts::probe_unity_metadata_registration_tail(image,pe,tail_va,5,5,5,5);
+        put64(image,raw(pe,slot1),(1u<<29)|(5u<<1)|1u);
+        probe=prts::probe_unity_metadata_registration_tail(image,pe,tail_va,5);
         need(probe.evidence==E::Unresolved,"PE probe rejects out-of-range always-init source");
-        put64(image,raw(pe,slot1),(4u<<29)|(1u<<1));
+        put64(image,raw(pe,slot1),(1u<<29)|(1u<<1)|1u);
         pe.sections[0].characteristics&=~0x80000000u;
-        probe=prts::probe_unity_metadata_registration_tail(image,pe,tail_va,5,5,5,5);
+        probe=prts::probe_unity_metadata_registration_tail(image,pe,tail_va,5);
         need(probe.evidence==E::Unresolved,"PE probe requires writable always-init slots");
         pe.sections[0].characteristics|=0x80000000u;
         const auto boundary_va=pe.image_base+0x1ff8;
-        probe=prts::probe_unity_metadata_registration_tail(image,pe,boundary_va,5,5,5,5);
+        probe=prts::probe_unity_metadata_registration_tail(image,pe,boundary_va,5);
         need(probe.evidence==E::NotFileBacked,"PE probe recognizes ninth-pair file-backed boundary");
     }
     need(prts::decide_unity_metadata_registration_profile(109, E::NotApplicable).state == "UNSUPPORTED", "future version unsupported");
     need(prts::unity_code_registration_layout_profile(106) == "106-compatible", "v106 CodeRegistration not overclaimed as 106.1");
     need(prts::unity_code_registration_layout_profile(107) == "106-compatible", "v107 CodeRegistration normalized to source-compatible layout");
     need(prts::unity_code_registration_layout_profile(108) == "108", "v108 CodeRegistration label");
-    auto enc=[](std::uint32_t raw,std::uint32_t source){return (raw<<29)|(source<<1);};
+    auto enc=[](std::uint32_t raw,std::uint32_t source,bool low=true){return (raw<<29)|(source<<1)|(low?1u:0u);};
     {
-        const std::uint32_t slots[]={enc(1,0),enc(2,1),enc(4,2),enc(5,3),enc(6,4)};
-        need(prts::unity_validate_1061_always_init_encoded_slots(slots,5,5,5,5),"106.1 shifted usage kinds and source bounds");
+        const std::uint32_t slots[]={enc(1,0),enc(1,4)};
+        need(prts::unity_validate_1061_always_init_encoded_slots(slots,5),"106.1 always-init TypeInfo runtime tokens");
     }
     {
-        const std::uint32_t bad_kind[]={enc(7,0)};
-        need(!prts::unity_validate_1061_always_init_encoded_slots(bad_kind,5,5,5,5),"106.1 removed-kind overflow rejected");
-        const std::uint32_t bad_method[]={enc(2,5)};
-        need(!prts::unity_validate_1061_always_init_encoded_slots(bad_method,5,5,5,5),"106.1 method source bound rejected");
-        const std::uint32_t bad_string[]={enc(4,5)};
-        need(!prts::unity_validate_1061_always_init_encoded_slots(bad_string,5,5,5,5),"106.1 string source bound rejected");
+        const std::uint32_t bad_kind[]={enc(2,0)};
+        need(!prts::unity_validate_1061_always_init_encoded_slots(bad_kind,5),"106.1 always-init rejects non-TypeInfo kind");
+        const std::uint32_t bad_source[]={enc(1,5)};
+        need(!prts::unity_validate_1061_always_init_encoded_slots(bad_source,5),"106.1 always-init TypeInfo source bound rejected");
+        const std::uint32_t bad_lowbit[]={enc(1,1,false)};
+        need(!prts::unity_validate_1061_always_init_encoded_slots(bad_lowbit,5),"106.1 always-init requires uninitialized runtime-token low bit");
     }
     std::cout << "PASS\n";
     return 0;

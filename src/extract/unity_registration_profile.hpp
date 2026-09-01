@@ -35,10 +35,8 @@ UnityMetadataRegistrationProfileDecision decide_unity_metadata_registration_prof
     UnityMetadataRegistrationEngineHint engine_hint=UnityMetadataRegistrationEngineHint::None);
 std::string unity_code_registration_layout_profile(int declared_version);
 bool unity_validate_1061_always_init_encoded_slots(
-    std::span<const std::uint32_t> encoded_slots, std::uint64_t type_count,
-    std::uint64_t method_count, std::uint64_t string_count, std::uint64_t method_spec_count);
+    std::span<const std::uint32_t> encoded_slots, std::uint64_t type_count);
 UnityMetadataRegistrationTailProbe probe_unity_metadata_registration_tail(
     std::span<const std::uint8_t> image, const PeInfo& pe, std::uint64_t tail_va,
-    std::uint64_t type_count, std::uint64_t method_count,
-    std::uint64_t string_count, std::uint64_t method_spec_count);
+    std::uint64_t type_count);
 }
