@@ -6,6 +6,7 @@
 #include "prts/pe.hpp"
 #include "prts/wasm.hpp"
 #include "unity_engine_version.hpp"
+#include "unity_generic_class_profile.hpp"
 #include "unity_metadata_usage_codec.hpp"
 #include "unity_method_dispatch_profile.hpp"
 #include "unity_rgctx_profile.hpp"
@@ -51,6 +52,10 @@ bool unity_profile_sanitizer_contract() {
     const auto invalid_method=prts::decode_unity_encoded_method(7u,prts::UnityMetadataUsageKindProfile::Compact);
     const auto bad_invalid_method=prts::decode_unity_encoded_method(11u,prts::UnityMetadataUsageKindProfile::Compact);
     const auto rgctx_profile=prts::unity_module_rgctx_profile(106,"106.1");
+    const auto gclass_old=prts::unity_generic_class_layout_profile(106,"106");
+    const auto gclass_new=prts::unity_generic_class_layout_profile(106,"106.1");
+    const auto gclass_v108=prts::unity_generic_class_layout_profile(108,"108");
+    const auto gclass_ambiguous=prts::unity_generic_class_layout_profile(106,"106|106.1");
     const std::array<std::uint32_t,2> dispatch_tokens{0x06000001u,0x06000002u};
     const std::array<std::int32_t,2> dispatch_invokers{0,-1};
     const std::array<std::uint32_t,1> dispatch_adjustors{0x06000002u};
@@ -65,6 +70,11 @@ bool unity_profile_sanitizer_contract() {
            prts::unity_module_rgctx_record_size(*rgctx_profile)==8&&
            prts::unity_module_rgctx_kind_name(*rgctx_profile,5)[0]!=0&&
            prts::unity_module_rgctx_kind_name(*rgctx_profile,4)[0]==0&&
+           gclass_old&&*gclass_old==prts::UnityGenericClassLayoutProfile::Context32&&
+           prts::unity_generic_class_record_size(*gclass_old)==32&&prts::unity_generic_class_cached_class_offset(*gclass_old)==24&&prts::unity_generic_class_has_method_inst(*gclass_old)&&
+           gclass_new&&*gclass_new==prts::UnityGenericClassLayoutProfile::Compact24&&
+           prts::unity_generic_class_record_size(*gclass_new)==24&&prts::unity_generic_class_cached_class_offset(*gclass_new)==16&&!prts::unity_generic_class_has_method_inst(*gclass_new)&&
+           gclass_v108&&*gclass_v108==prts::UnityGenericClassLayoutProfile::Compact24&&!gclass_ambiguous&&
            dispatch_contract.valid&&dispatch_contract.invoker_resolved==1&&dispatch_contract.invoker_missing==1;
 }
 }
