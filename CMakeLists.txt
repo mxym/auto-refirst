@@ -354,6 +354,11 @@ add_executable(auto_refirst_public_unity_method_dispatch_profile_unit EXCLUDE_FR
 )
 target_include_directories(auto_refirst_public_unity_method_dispatch_profile_unit PRIVATE include src/extract)
 
+add_executable(auto_refirst_public_unity_generic_class_profile_unit EXCLUDE_FROM_ALL
+    tests/unity_generic_class_profile_unit.cpp
+)
+target_include_directories(auto_refirst_public_unity_generic_class_profile_unit PRIVATE include src/extract)
+
 add_executable(auto_refirst_public_fixture_ordinary EXCLUDE_FROM_ALL tests/public/ordinary.c)
 add_executable(auto_refirst_public_fixture_crypto EXCLUDE_FROM_ALL tests/public/crypto_tea.c)
 add_executable(auto_refirst_public_fixture_runtime_child EXCLUDE_FROM_ALL tests/public/runtime_child.c)
@@ -371,6 +376,7 @@ foreach(_public_target
         auto_refirst_public_unity_metadata_usage_codec_unit
         auto_refirst_public_unity_engine_version_unit
         auto_refirst_public_unity_method_dispatch_profile_unit
+        auto_refirst_public_unity_generic_class_profile_unit
         auto_refirst_public_fixture_ordinary
         auto_refirst_public_fixture_crypto
         auto_refirst_public_fixture_runtime_child
@@ -389,7 +395,8 @@ foreach(_public_target
         auto_refirst_public_unity_registration_profile_unit
         auto_refirst_public_unity_metadata_usage_codec_unit
         auto_refirst_public_unity_engine_version_unit
-        auto_refirst_public_unity_method_dispatch_profile_unit)
+        auto_refirst_public_unity_method_dispatch_profile_unit
+        auto_refirst_public_unity_generic_class_profile_unit)
     if(MSVC)
         target_compile_options(${_public_target} PRIVATE /W4 /permissive- /EHsc)
     else()
