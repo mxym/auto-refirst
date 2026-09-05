@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json,pathlib,struct,subprocess,sys,tempfile
+import json,os,pathlib,struct,subprocess,sys,tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 AR=pathlib.Path(sys.argv[1]) if len(sys.argv)>1 else ROOT/'build/auto-refirst'
 WASM=(ROOT/'tests/corpus/wasm/check_flag.o').read_bytes()
@@ -27,7 +27,7 @@ def make_fat_macho():
     return bytes(out)
 
 def load_json(p,*args):
-    return json.loads(subprocess.check_output([str(AR),str(p),*args,'--json'],text=True))
+    return json.loads(subprocess.check_output([str(AR),str(p),*args,'--json'],text=True,encoding='utf-8'))
 
 def normalize_reports(j):
     if isinstance(j,dict) and 'reports' in j: return j['reports']
@@ -95,16 +95,26 @@ def main():
 
         # Directory traversal does not follow symlinked files. The explicitly real file is analyzed once.
         dcase=td/'dircase';dcase.mkdir();real=dcase/'real.wasm';real.write_bytes(WASM);outside=td/'outside.wasm';outside.write_bytes(WASM)
-        (dcase/'alias.wasm').symlink_to(outside)
+        try:
+            (dcase/'alias.wasm').symlink_to(outside)
+        except OSError as exc:
+            if os.name!='nt' or getattr(exc,'winerror',None)!=1314:
+                raise
+            # Unprivileged Windows accounts can create directory junctions.
+            # Exercise the same no-follow contract instead of skipping it or
+            # requiring a machine-wide Developer Mode change.
+            outside_dir=td/'outside-dir';outside_dir.mkdir()
+            outside=outside_dir/'outside.wasm';outside.write_bytes(WASM)
+            subprocess.run(['cmd','/c','mklink','/J',str(dcase/'alias'),str(outside_dir)],check=True,capture_output=True)
         rs=reports(dcase,'--recursive')
         assert len(rs)==1 and pathlib.Path(rs[0]['input']).name=='real.wasm' and rs[0]['wasm']['valid']
         # Search must honor the same file-symlink/reparse boundary and never read outside via alias.wasm.
         outside.write_bytes(b'OUTSIDE_ONLY_SEARCH_SENTINEL')
-        cp=subprocess.run([str(AR),str(dcase),'--search=OUTSIDE_ONLY_SEARCH_SENTINEL'],text=True,capture_output=True)
+        cp=subprocess.run([str(AR),str(dcase),'--search=OUTSIDE_ONLY_SEARCH_SENTINEL'],text=True,encoding='utf-8',capture_output=True)
         assert cp.returncode==1 and 'matches=0' in cp.stdout
 
         # Recursive artifact mode is intentionally static-only.
-        cp=subprocess.run([str(AR),str(root),'--extract','--recursive','--run=trace'],text=True,capture_output=True)
+        cp=subprocess.run([str(AR),str(root),'--extract','--recursive','--run=trace'],text=True,encoding='utf-8',capture_output=True)
         assert cp.returncode==2 and 'static-only' in cp.stderr
     print('[PASS] Recursive artifact graph / SHA dedup / budgets / nested offset-basis provenance')
 if __name__=='__main__': main()

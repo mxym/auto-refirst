@@ -545,6 +545,10 @@ def sanitizer_smoke(harness:pathlib.Path,td:pathlib.Path) -> None:
 
 
 def main() -> int:
+    # Python helper diagnostics and their own text subprocess decoding must
+    # follow the same UTF-8 transport as the product on legacy Windows locales.
+    os.environ["PYTHONUTF8"]="1"
+    os.environ["PYTHONIOENCODING"]="utf-8"
     ap=argparse.ArgumentParser()
     ap.add_argument("--binary",type=pathlib.Path,default=ROOT/"build"/("auto-refirst.exe" if os.name=="nt" else "auto-refirst"))
     ap.add_argument("--tier",choices=("P0","P1","all"),default="all")
