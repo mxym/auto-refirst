@@ -292,6 +292,9 @@ add_executable(auto_refirst_public_directory_report_spool_unit EXCLUDE_FROM_ALL
     tests/directory_report_spool_unit.cpp
 )
 target_include_directories(auto_refirst_public_directory_report_spool_unit PRIVATE include)
+if(WIN32)
+  target_compile_definitions(auto_refirst_public_directory_report_spool_unit PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
 
 add_executable(auto_refirst_public_model_trust_unit EXCLUDE_FROM_ALL
     tests/model_trust_unit.cpp

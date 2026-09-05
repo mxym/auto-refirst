@@ -48,6 +48,7 @@
 - 新增 `directory_report_spool_unit.cpp` 与 `test_preprocessing_contract.py` 已纳入公开 P0；它们不运行被分析文件。
 - `test_bounded_directory_output.py` 使用 1031 个普通生成输入检查优先接纳、1024 个状态、报告/工件预算及 UTF-8 输出。
 - `check_workflow_contract.py --self-test` 验证当前三个 workflow，包括在 Linux GCC job 内严格限定非 PR 事件的运行时测试步骤。
+- 源码归档身份测试的三个场景复用一个构建目录，减少重复编译器探测和 try-compile，同时检查重新配置能否清除旧身份；不增加重复的独立 CI 构建任务。
 - 本地 Windows MinGW 使用严格告警和静态链接验证；MSVC、Linux GCC/Clang 与 ASan/UBSan 由对应 hosted CI 验证，不能相互替代。
 - 不将 sanitizer smoke 当作全解析器安全证明；当前 sanitizer 链接的格式范围以 CMake target 为准。
 - 搜索大小写折叠限于 ASCII；POSIX 非 UTF-8 原始文件名字节的通用 JSON 表示、遍历过程中并发修改的完整快照语义，以及权限拒绝被文件系统静默跳过的计数仍需独立合同。
