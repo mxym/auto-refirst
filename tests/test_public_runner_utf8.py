@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import os
+import pathlib
 import sys
+import tempfile
+from unittest.mock import patch
 
 import run_public_regression as public_runner
 
@@ -60,6 +63,13 @@ def main() -> int:
     tool = public_runner.run_toolchain(emit(stdout=localized), encoding="cp936")
     assert tool.stdout == localized.decode("cp936")
     expect_toolchain_decode_failure(emit(stderr=b"bad:\x81"), "stderr", "cp936")
+    with tempfile.TemporaryDirectory(prefix="ar-runner-identity-") as raw:
+        root=pathlib.Path(raw)
+        with patch.object(public_runner,"run",side_effect=AssertionError("archive consulted ancestor Git")):
+            for fallback,expected in (("", "archive-or-unknown"),("short", "archive-or-unknown"),("a"*40,"a"*40),("b"*64,"b"*64)):
+                with patch.dict(os.environ,{"AUTO_REFIRST_SOURCE_COMMIT":fallback}):
+                    identity=public_runner.git_source_identity(root)
+                    assert identity["commit"]==expected and identity["tree_state"]=="UNKNOWN",identity
     print("[PASS] public runner decoding: product/helper UTF-8 strict; localized toolchain diagnostics separated and strict")
     return 0
 

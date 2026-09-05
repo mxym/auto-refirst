@@ -10,6 +10,7 @@ struct SearchOptions {
     bool recursive=true;
     bool json_lines=false;
     std::size_t context=48;
+    std::uint32_t max_depth=0xffffffffu;
 };
 struct SearchStats { std::uint64_t files=0,bytes=0,matches=0; };
 SearchStats search_tree_streaming(const std::filesystem::path&root,const SearchOptions&opt);

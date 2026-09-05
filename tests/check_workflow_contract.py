@@ -145,21 +145,32 @@ def assert_job_boundaries(name: str, jobs: dict) -> None:
         run_text = joined_runs(job)
         contains_runtime = any(token in run_text for token in RUNTIME_TOKENS)
         declared_runtime = "runtime" in job_name.lower() or "runtime" in str(job.get("name", "")).lower()
-        if contains_runtime and not declared_runtime:
-            fail(f"{name}.{job_name} mixes --run/--apply coverage into a non-runtime job")
         if declared_runtime:
             if job.get("if") != "github.event_name != 'pull_request'":
                 fail(f"{name}.{job_name} runtime job must be disabled for pull_request events")
             if not contains_runtime:
                 fail(f"{name}.{job_name} is labelled runtime but exercises no runtime contract")
-        if ("P0/P1" in str(job.get("name", "")) or "run_public_regression.py" in run_text) and contains_runtime:
-            fail(f"{name}.{job_name} violates the static-only P0/P1 boundary")
+        for step in as_steps(job, f"{name}.{job_name}"):
+            command = str(step.get("run", "")).strip()
+            if not any(token in command for token in RUNTIME_TOKENS):
+                continue
+            if "run_public_regression.py" in command:
+                fail(f"{name}.{job_name} violates the static-only P0/P1 boundary")
+            if declared_runtime:
+                continue
+            approved_commands = {
+                "python3 tests/test_directory_orchestration.py build/auto-refirst",
+                "python3 tests/test_runtime_authorization.py build/auto-refirst",
+            }
+            if (name != "ci-linux.yml" or job_name != "public-static"
+                    or command not in approved_commands
+                    or step.get("if") != "github.event_name != 'pull_request' && matrix.compiler == 'gcc-13'"):
+                fail(f"{name}.{job_name} runtime step lacks the exact non-PR GCC gate")
 
 
 def assert_linux(document: dict) -> None:
     jobs = as_mapping(document.get("jobs"), "ci-linux.yml.jobs")
     static = as_mapping(jobs.get("public-static"), "ci-linux.yml.public-static")
-    runtime = as_mapping(jobs.get("authorized-runtime"), "ci-linux.yml.authorized-runtime")
     matrix = as_mapping(as_mapping(static.get("strategy"), "linux.static.strategy").get("matrix"), "linux.static.matrix")
     include = matrix.get("include")
     if not isinstance(include, list):
@@ -186,7 +197,7 @@ def assert_linux(document: dict) -> None:
     ):
         if token not in static_runs:
             fail(f"Linux static job is missing {token!r}")
-    runtime_runs = joined_runs(runtime)
+    runtime_runs = static_runs
     for token in ("test_directory_orchestration.py", "test_runtime_authorization.py"):
         if token not in runtime_runs:
             fail(f"Linux runtime job is missing {token!r}")
@@ -279,7 +290,7 @@ def self_test(texts: dict[str, str]) -> int:
         ("missing HEAD assertion", mutate(texts, "ci-linux.yml", "git rev-parse --verify HEAD", "git show -s --format=%H HEAD")),
         ("status failure accepted as clean", mutate(texts, "ci-linux.yml", 'source_status="$(git status --porcelain=v1 --untracked-files=all)"\n          test -z "$source_status"', 'test -z "$(git status --porcelain=v1 --untracked-files=all)"')),
         ("missing final clean gate", mutate(texts, "ci-linux.yml", "      - name: Assert source remains clean\n", "      - name: Source residue not checked\n")),
-        ("PR runtime enabled", mutate(texts, "ci-linux.yml", "    if: github.event_name != 'pull_request'\n", "")),
+        ("PR runtime enabled", mutate(texts, "ci-linux.yml", "        if: github.event_name != 'pull_request' && matrix.compiler == 'gcc-13'\n", "")),
         ("runtime in static job", mutate(texts, "ci-linux.yml", "test_bounded_directory_output.py build/auto-refirst", "test_bounded_directory_output.py build/auto-refirst --run")),
         ("missing Clang 18", mutate(texts, "ci-linux.yml", "compiler: clang-18", "compiler: clang-17")),
         ("missing public hygiene", mutate(texts, "ci-linux.yml", "python3 tests/check_public_source_hygiene.py --require-clean", "python3 --version")),

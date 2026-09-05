@@ -5,6 +5,7 @@
 #include "prts/pyinstaller.hpp"
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cctype>
 #include <fstream>
 #include <map>
@@ -52,7 +53,7 @@ bool run_child(const std::filesystem::path&dll,const std::filesystem::path&stdli
     BOOL ok=CreateProcessW(self.c_str(),buf.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW|CREATE_UNICODE_ENVIRONMENT,nullptr,dll.parent_path().empty()?nullptr:dll.parent_path().c_str(),&si,&pi);CloseHandle(nul);if(!ok){if(job)CloseHandle(job);error="compiler-probe CreateProcessW failed: "+std::to_string(GetLastError());return false;}if(job)AssignProcessToJobObject(job,pi.hProcess);CloseHandle(pi.hThread);
     DWORD wr=WaitForSingleObject(pi.hProcess,std::max<std::uint32_t>(timeout_ms,1000u));if(wr==WAIT_TIMEOUT){if(job)TerminateJobObject(job,0x50595054);else TerminateProcess(pi.hProcess,0x50595054);WaitForSingleObject(pi.hProcess,1000);CloseHandle(pi.hProcess);if(job)CloseHandle(job);error="compiler-probe child timed out";return false;}if(wr!=WAIT_OBJECT_0){CloseHandle(pi.hProcess);if(job)CloseHandle(job);error="compiler-probe child wait failed";return false;}GetExitCodeProcess(pi.hProcess,&exit_code);CloseHandle(pi.hProcess);if(job)CloseHandle(job);return true;
 }
-template<class T>T proc(HMODULE h,const char*n){return reinterpret_cast<T>(GetProcAddress(h,n));}
+template<class T>T proc(HMODULE h,const char*n){return std::bit_cast<T>(GetProcAddress(h,n));}
 using PyObject=void;using Py_ssize_t=std::intptr_t;
 struct ChildApi {
     void(*Py_SetPath)(const wchar_t*)=nullptr;void(*Py_Initialize)()=nullptr;int(*Py_IsInitialized)()=nullptr;PyObject*(*Py_CompileString)(const char*,const char*,int)=nullptr;PyObject*(*PyObject_GetAttrString)(PyObject*,const char*)=nullptr;Py_ssize_t(*PyTuple_Size)(PyObject*)=nullptr;PyObject*(*PyTuple_GetItem)(PyObject*,Py_ssize_t)=nullptr;int(*PyBytes_AsStringAndSize)(PyObject*,char**,Py_ssize_t*)=nullptr;void(*Py_DecRef)(PyObject*)=nullptr;void(*PyErr_Clear)()=nullptr;int(*Py_FinalizeEx)()=nullptr;const char*(*Py_GetVersion)()=nullptr;

@@ -280,7 +280,7 @@ def target_path(build:pathlib.Path,config:str|None,name:str) -> pathlib.Path:
 
 
 def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
-    targets=["auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit","auto_refirst_public_nuitka_unit","auto_refirst_public_static_scan_unit","auto_refirst_public_pyinstaller_reference_unit","auto_refirst_public_unity_registration_profile_unit","auto_refirst_public_unity_metadata_usage_codec_unit","auto_refirst_public_unity_engine_version_unit","auto_refirst_public_unity_method_dispatch_profile_unit","auto_refirst_public_unity_generic_class_profile_unit"]
+    targets=["auto_refirst_public_directory_report_spool_unit","auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit","auto_refirst_public_nuitka_unit","auto_refirst_public_static_scan_unit","auto_refirst_public_pyinstaller_reference_unit","auto_refirst_public_unity_registration_profile_unit","auto_refirst_public_unity_metadata_usage_codec_unit","auto_refirst_public_unity_engine_version_unit","auto_refirst_public_unity_method_dispatch_profile_unit","auto_refirst_public_unity_generic_class_profile_unit"]
     assert len(targets)==len(set(targets)),targets
     build,config=cmake_build(binary,targets);seen:set[str]=set()
     def unit(name:str) -> pathlib.Path:
@@ -288,6 +288,7 @@ def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
         assert name not in seen,name
         seen.add(name)
         return target_path(build,config,name)
+    spool=unit("auto_refirst_public_directory_report_spool_unit"); assert run([spool]).stdout.strip()=="PASS"
     model=unit("auto_refirst_public_model_trust_unit"); assert run([model]).stdout.strip()=="PASS"
     pyunit=unit("auto_refirst_public_python_bytecode_unit"); p=td/"public.pyc"; p.write_bytes(pyc310())
     out=run([pyunit,"inspect",p,"1"]).stdout.strip().split("\t",7)
@@ -320,6 +321,9 @@ def p0_cli_exit_contract(binary:pathlib.Path) -> None:
     cp=run([sys.executable,ROOT/"tests/test_cli_exit_contract.py",binary],env=env,timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log("[PASS P0] CLI exit taxonomy + source-generated root/open and mixed-directory failures")
+    cp=run([sys.executable,ROOT/"tests/test_preprocessing_contract.py",binary],env=env,timeout=180)
+    assert "[PASS]" in cp.stdout,cp.stdout
+    log(cp.stdout.strip())
 
 
 def p0_windows_reparse(binary:pathlib.Path) -> None:
@@ -439,9 +443,16 @@ def p1_generated(binary:pathlib.Path,td:pathlib.Path) -> None:
 
 
 def git_source_identity(root:pathlib.Path) -> dict:
+    # Match CMake: a source archive nested inside another checkout must never
+    # inherit that checkout's commit. Worktrees have a regular .git marker file.
+    if not (root/".git").exists():
+        fallback=os.environ.get("AUTO_REFIRST_SOURCE_COMMIT","")
+        if re.fullmatch(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})",fallback) is None:
+            fallback="archive-or-unknown"
+        return {"commit":fallback,"tree_state":"UNKNOWN","dirty_entry_count":None,"porcelain_sha256":""}
     commit_cp=run(["git","-C",root,"rev-parse","HEAD"],check=False)
     if commit_cp.returncode!=0:
-        return {"commit":os.environ.get("AUTO_REFIRST_SOURCE_COMMIT","archive-or-unknown"),"tree_state":"UNKNOWN","dirty_entry_count":None,"porcelain_sha256":""}
+        return {"commit":"archive-or-unknown","tree_state":"UNKNOWN","dirty_entry_count":None,"porcelain_sha256":""}
     status_cp=run(["git","-C",root,"status","--porcelain=v1","--untracked-files=all"],check=False)
     if status_cp.returncode!=0:
         return {"commit":commit_cp.stdout.strip(),"tree_state":"UNKNOWN","dirty_entry_count":None,"porcelain_sha256":""}
@@ -534,6 +545,10 @@ def sanitizer_smoke(harness:pathlib.Path,td:pathlib.Path) -> None:
 
 
 def main() -> int:
+    # Python helper diagnostics and their own text subprocess decoding must
+    # follow the same UTF-8 transport as the product on legacy Windows locales.
+    os.environ["PYTHONUTF8"]="1"
+    os.environ["PYTHONIOENCODING"]="utf-8"
     ap=argparse.ArgumentParser()
     ap.add_argument("--binary",type=pathlib.Path,default=ROOT/"build"/("auto-refirst.exe" if os.name=="nt" else "auto-refirst"))
     ap.add_argument("--tier",choices=("P0","P1","all"),default="all")

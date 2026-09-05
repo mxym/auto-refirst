@@ -16,6 +16,7 @@ def run(*args):
     return subprocess.run(
         [str(AR), *map(str, args)],
         text=True,
+        encoding="utf-8",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=90,
@@ -112,6 +113,7 @@ def main():
             summary = directory["directory_summary"]
             assert summary["total_files"] == 2, summary
             assert summary["analyzed_files"] == 1 and summary["skipped_files"] == 1, summary
+            assert summary["partial"] is True and summary["partial_reasons"], summary
 
             only_blocked = td / "only-blocked"
             only_blocked.mkdir()

@@ -10,7 +10,7 @@
 
 namespace {
 void append_text(std::vector<std::uint8_t>& out, std::string_view s) {
-    out.insert(out.end(), s.begin(), s.end());
+    for(unsigned char c:s)out.push_back(c);
 }
 void append_u16(std::vector<std::uint8_t>& out, std::uint16_t v) {
     for (unsigned i=0;i<2;++i) out.push_back(static_cast<std::uint8_t>(v>>(i*8)));
@@ -26,6 +26,7 @@ void append_name(std::vector<std::uint8_t>& out, std::string_view s) {
 }
 std::vector<std::uint8_t> constant_directory_with_main(const std::vector<std::uint8_t>& main) {
     std::vector<std::uint8_t> bytecode;
+    bytecode.reserve(1025);
     append_u16(bytecode,1);
     bytecode.push_back('B');
     append_u32(bytecode,1017);

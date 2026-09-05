@@ -113,6 +113,9 @@ struct DirectoryPlan {
     std::vector<DirectoryCandidate> candidates;
     std::vector<DirectoryRelationship> relationships;
     std::vector<DirectoryTraversalSkip> traversal_skips;
+    std::uint64_t traversal_skips_total=0;
+    std::uint64_t traversal_error_count=0;
+    std::uint64_t depth_limited_directories=0;
 };
 
 struct DirectoryPeImportFact {

@@ -1,5 +1,6 @@
 #include "prts/search.hpp"
 #include "prts/mapped_file.hpp"
+#include "prts/path_utf8.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -21,7 +22,7 @@
 namespace prts { namespace {
 std::string lower(std::string s){for(auto&c:s)c=char(std::tolower(static_cast<unsigned char>(c)));return s;}
 int priority(const std::filesystem::path&p){
-    auto e=lower(p.extension().string());
+    auto e=lower(path_utf8(p.extension()));
     static const std::array<const char*,23> hi={".dat",".bin",".data",".pak",".pck",".rpa",".rpyc",".pyc",".pyz",".luac",".lua",".json",".txt",".xml",".yaml",".yml",".ini",".cfg",".db",".sqlite",".assets",".res",".resource"};
     static const std::array<const char*,14> mid={".js",".ts",".html",".css",".wasm",".dll",".so",".dylib",".class",".dex",".jar",".zip",".wxapkg",".asset"};
     if(std::find(hi.begin(),hi.end(),e)!=hi.end())return 0;
@@ -72,19 +73,19 @@ bool link_or_reparse(const std::filesystem::path&p){std::error_code ec;auto st=s
 #endif
     return false;}
 void add_candidate(std::vector<Candidate>&files,const std::filesystem::path&p){std::error_code ec;auto sz=std::filesystem::file_size(p,ec);files.push_back({p,priority(p),ec?0:sz,!ec});}
-void emit(const std::filesystem::path&p,std::size_t at,std::string_view enc,std::string_view needle,std::span<const std::uint8_t>d,const SearchOptions&o){auto ctx=context_ascii(d,at,enc=="utf16le"?needle.size()*2:needle.size(),o.context);if(o.json_lines){std::cout<<"{\"file\":\""<<json_escape(p.string())<<"\",\"offset\":"<<at<<",\"encoding\":\""<<enc<<"\",\"needle\":\""<<json_escape(needle)<<"\",\"context\":\""<<json_escape(ctx)<<"\"}\n";}else{std::cout<<"[HIT] "<<p.string()<<"  off=0x"<<std::hex<<at<<std::dec<<"  "<<enc<<"  "<<ctx<<"\n";}std::cout.flush();}
+void emit(const std::filesystem::path&p,std::size_t at,std::string_view enc,std::string_view needle,std::span<const std::uint8_t>d,const SearchOptions&o){auto ctx=context_ascii(d,at,enc=="utf16le"?needle.size()*2:needle.size(),o.context);if(o.json_lines){std::cout<<"{\"file\":\""<<json_escape(path_utf8(p))<<"\",\"offset\":"<<at<<",\"encoding\":\""<<enc<<"\",\"needle\":\""<<json_escape(needle)<<"\",\"context\":\""<<json_escape(ctx)<<"\"}\n";}else{std::cout<<"[HIT] "<<path_utf8(p)<<"  off=0x"<<std::hex<<at<<std::dec<<"  "<<enc<<"  "<<ctx<<"\n";}std::cout.flush();}
 }
 SearchStats search_tree_streaming(const std::filesystem::path&root,const SearchOptions&o){
     SearchStats st;if(o.needle.empty())return st;std::vector<Candidate>files;std::error_code ec;
     if(link_or_reparse(root))return st;
     if(std::filesystem::is_regular_file(root,ec))add_candidate(files,root);
     else if(std::filesystem::is_directory(root,ec)){
-        if(o.recursive){for(std::filesystem::recursive_directory_iterator it(root,std::filesystem::directory_options::skip_permission_denied,ec),end;it!=end;it.increment(ec)){if(ec){ec.clear();continue;}if(link_or_reparse(it->path())){it.disable_recursion_pending();continue;}if(it->is_regular_file(ec))add_candidate(files,it->path());}}
+        if(o.recursive){for(std::filesystem::recursive_directory_iterator it(root,std::filesystem::directory_options::skip_permission_denied,ec),end;it!=end;it.increment(ec)){if(ec){ec.clear();continue;}if(link_or_reparse(it->path())){it.disable_recursion_pending();continue;}if(static_cast<std::uint32_t>(it.depth())>=o.max_depth)it.disable_recursion_pending();if(it->is_regular_file(ec))add_candidate(files,it->path());}}
         else{for(std::filesystem::directory_iterator it(root,std::filesystem::directory_options::skip_permission_denied,ec),end;it!=end;it.increment(ec)){if(ec){ec.clear();continue;}if(link_or_reparse(it->path()))continue;if(it->is_regular_file(ec))add_candidate(files,it->path());}}
     }
     // Cache size once during enumeration instead of issuing file_size()/stat() from
     // every O(n log n) sort comparison. Small likely-data files still surface first.
-    std::stable_sort(files.begin(),files.end(),[](const Candidate&a,const Candidate&b){if(a.rank!=b.rank)return a.rank<b.rank;if(a.size_known&&b.size_known&&a.size!=b.size)return a.size<b.size;return a.path.string()<b.path.string();});
+    std::stable_sort(files.begin(),files.end(),[](const Candidate&a,const Candidate&b){if(a.rank!=b.rank)return a.rank<b.rank;if(a.size_known!=b.size_known)return a.size_known;if(a.size_known&&a.size!=b.size)return a.size<b.size;return path_utf8(a.path)<path_utf8(b.path);});
     const FastPattern ascii(o.needle,o.ignore_case,false),utf16(o.needle,o.ignore_case,true);
     for(const auto&f:files){
         try{

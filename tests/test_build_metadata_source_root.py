@@ -58,9 +58,13 @@ def main():
                 tf.extractall(source)
 
         assert not (source / ".git").exists()
-        assert configured_build_id(source, work / "build-full", FALLBACK) == FALLBACK
-        assert configured_build_id(source, work / "build-short", "abc1234") == "unknown"
-        assert configured_build_id(source, work / "build-none") == "unknown"
+        # The source and toolchain are identical across these cases. Reconfigure
+        # one build tree to test identity refresh without repeating compiler
+        # discovery and CMake's try-compile work three times.
+        build = work / "build"
+        assert configured_build_id(source, build, FALLBACK) == FALLBACK
+        assert configured_build_id(source, build, "abc1234") == "unknown"
+        assert configured_build_id(source, build) == "unknown"
     print("[PASS] source-root Git marker isolates archive build identity from ancestor repositories")
 
 

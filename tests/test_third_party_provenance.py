@@ -91,8 +91,8 @@ def mutate_legacy_noassertion(root: pathlib.Path) -> None:
     replace_once(
         root,
         "docs/THIRD_PARTY_PROVENANCE.csv",
-        '"NOASSERTION","","","src/reference/pyinstaller_loader_refs.inc',
-        '"NOASSERTION_REFERENCE_ONLY","","","src/reference/pyinstaller_loader_refs.inc',
+        '"NOASSERTION","","","src/reference/pyinstaller_loader_generations.inc',
+        '"NOASSERTION_REFERENCE_ONLY","","","src/reference/pyinstaller_loader_generations.inc',
     )
     commit_all(root, "mutation: legacy NOASSERTION sentinel")
 

@@ -103,6 +103,11 @@ else()
       third_party/miniz/miniz.c
       PROPERTIES COMPILE_OPTIONS "-Wno-unused-function")
 endif()
+if(MINGW AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+  # Windows uses 32-bit unsigned long even on x64; miniz retains portable
+  # >32-bit checks that are constant-false on this ABI. Keep vendor bytes intact.
+  set_property(SOURCE third_party/miniz/miniz.c APPEND PROPERTY COMPILE_OPTIONS "-Wno-type-limits")
+endif()
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
   set_source_files_properties(
       third_party/rustc_demangle/demangle.c
@@ -283,6 +288,14 @@ if(Python3_Interpreter_FOUND)
 endif()
 
 # Self-contained public CI helpers. These are built on demand by the public regression runner.
+add_executable(auto_refirst_public_directory_report_spool_unit EXCLUDE_FROM_ALL
+    tests/directory_report_spool_unit.cpp
+)
+target_include_directories(auto_refirst_public_directory_report_spool_unit PRIVATE include)
+if(WIN32)
+  target_compile_definitions(auto_refirst_public_directory_report_spool_unit PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 add_executable(auto_refirst_public_model_trust_unit EXCLUDE_FROM_ALL
     tests/model_trust_unit.cpp
     src/reference/model_trust.cpp
@@ -365,6 +378,7 @@ add_executable(auto_refirst_public_fixture_runtime_child EXCLUDE_FROM_ALL tests/
 add_executable(auto_refirst_public_fixture_runtime_parent EXCLUDE_FROM_ALL tests/public/runtime_parent.c)
 
 foreach(_public_target
+        auto_refirst_public_directory_report_spool_unit
         auto_refirst_public_model_trust_unit
         auto_refirst_public_python_bytecode_unit
         auto_refirst_public_flutter_codec_unit
@@ -385,6 +399,7 @@ foreach(_public_target
 endforeach()
 
 foreach(_public_target
+        auto_refirst_public_directory_report_spool_unit
         auto_refirst_public_model_trust_unit
         auto_refirst_public_python_bytecode_unit
         auto_refirst_public_flutter_codec_unit
