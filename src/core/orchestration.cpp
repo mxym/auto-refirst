@@ -236,7 +236,7 @@ DirectoryCandidate preflight_directory_candidate(const std::filesystem::path& pa
     constexpr std::size_t cap=64*1024;std::vector<unsigned char>b(static_cast<std::size_t>(std::min<std::uint64_t>(c.size,cap)));if(!b.empty())f.read(reinterpret_cast<char*>(b.data()),static_cast<std::streamsize>(b.size()));b.resize(static_cast<std::size_t>(std::max<std::streamsize>(0,f.gcount())));
     auto starts=[&](std::initializer_list<unsigned char>x){return b.size()>=x.size()&&std::equal(x.begin(),x.end(),b.begin());};
     if(b.size()>=64&&b[0]=='M'&&b[1]=='Z'){
-        auto peoff=u32le(b,0x3c);if(peoff+24<=b.size()&&b[peoff]=='P'&&b[peoff+1]=='E'&&b[peoff+2]==0&&b[peoff+3]==0){auto ch=u16le(b,peoff+22);bool dll=(ch&0x2000)!=0;c.type_hint=dll?"PE DLL":"PE executable";c.structural_confidence="high";c.role=dll?"shared_library":"executable_root";add_reason(c,dll?60:100,"bounded PE/COFF header validates in preflight");
+        const auto peoff=static_cast<std::size_t>(u32le(b,0x3c));if(peoff<=b.size()&&b.size()-peoff>=24&&b[peoff]=='P'&&b[peoff+1]=='E'&&b[peoff+2]==0&&b[peoff+3]==0){auto ch=u16le(b,peoff+22);bool dll=(ch&0x2000)!=0;c.type_hint=dll?"PE DLL":"PE executable";c.structural_confidence="high";c.role=dll?"shared_library":"executable_root";add_reason(c,dll?60:100,"bounded PE/COFF header validates in preflight");
 #ifdef _WIN32
             c.runtime_eligible=!dll;c.runtime_eligibility_reason=dll?"PE DLL is a sidecar/loadable image, not a direct execution root":"PE executable header is directly runnable by the Windows backend";
 #else
