@@ -60,7 +60,9 @@ auto-refirst directory --search=TEXT
 auto-refirst directory --search=TEXT --search-ignore-case --json
 ```
 
-搜索支持 ASCII / UTF-16LE 路径，遵守目录 symlink/reparse 边界。
+搜索查找 ASCII 文本及其 UTF-16LE 表示，输出路径统一使用 UTF-8；`--search-ignore-case` 仅折叠 ASCII 字母。`--max-depth=N` 同样约束搜索的目录递归深度，`0` 只读取根目录文件。搜索遵守目录 symlink/reparse 边界。
+
+目录分析的预筛选信息仅用于候选接纳。完整解析会刷新格式、置信度和运行资格；被否定的结构路由不再保留可执行根角色和临时优先级。`directory_plan.depth_limited_directories` 记录因深度限制未展开的目录数量，`traversal_error_count` 记录可观察的遍历错误。深度截断、遍历错误或不可读候选都会让目录摘要的 `partial` 为 `true`，进程仍遵循既有退出码契约。跳过路径仅保留最多 128 条明细、JSON 展示最多 64 条；`traversal_skips_total` 保留真实总数，不代表被跳过的后代文件数。
 
 ## 运行时
 

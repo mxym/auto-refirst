@@ -55,6 +55,7 @@
 #include "prts/path_utf8.hpp"
 #include "prts/build_metadata.hpp"
 #include "prts/report_schema.hpp"
+#include "prts/directory_report_spool.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -203,7 +204,8 @@ void print_help(std::ostream& o){
 
 #ifdef _WIN32
 std::string utf8_from_wide(const wchar_t* w){
-    if(!w)return {};int n=WideCharToMultiByte(CP_UTF8,0,w,-1,nullptr,0,nullptr,nullptr);if(n<=1)return {};std::string s(static_cast<std::size_t>(n),'\0');WideCharToMultiByte(CP_UTF8,0,w,-1,s.data(),n,nullptr,nullptr);s.resize(static_cast<std::size_t>(n-1));return s;
+    if(!w)return {};
+    int n=WideCharToMultiByte(CP_UTF8,0,w,-1,nullptr,0,nullptr,nullptr);if(n<=1)return {};std::string s(static_cast<std::size_t>(n),'\0');WideCharToMultiByte(CP_UTF8,0,w,-1,s.data(),n,nullptr,nullptr);s.resize(static_cast<std::size_t>(n-1));return s;
 }
 std::vector<std::string> windows_utf8_args(){
     int n=0;LPWSTR* w=CommandLineToArgvW(GetCommandLineW(),&n);std::vector<std::string> out;if(!w)return out;out.reserve(static_cast<std::size_t>(n));for(int i=0;i<n;++i)out.push_back(utf8_from_wide(w[i]));LocalFree(w);return out;
@@ -1830,44 +1832,8 @@ void integrate_directory_godot_semantics(prts::DirectoryPlan&plan,std::vector<pr
 
 std::string directory_report_key(const std::filesystem::path&p);
 
-constexpr std::uint64_t kDirectoryInlineReportBytes=16ull*1024*1024;
-constexpr std::uint64_t kDirectoryPerReportBytes=8ull*1024*1024;
-constexpr std::uint64_t kDirectoryReportSpoolHardBytes=kDirectoryInlineReportBytes+kDirectoryPerReportBytes;
-
-struct DirectorySpoolRecord {
-    std::filesystem::path input;
-    std::filesystem::path payload;
-    std::uint64_t full_bytes=0;
-    std::int64_t detail_priority=0;
-    bool selected=false;
-    std::string deferred_reason;
-};
-
-class CappedSpoolStreambuf final:public std::streambuf {
-    std::ofstream&out_;
-    std::uint64_t cap_=0,total_=0,written_=0;
-    bool failed_=false;
-protected:
-    std::streamsize xsputn(const char*s,std::streamsize n)override{
-        if(n<=0)return n;
-        const auto add=static_cast<std::uint64_t>(n);total_=sat_add(total_,add);
-        if(written_<cap_){
-            const auto room=cap_-written_;const auto take=static_cast<std::streamsize>(std::min<std::uint64_t>(room,add));
-            if(take>0){out_.write(s,take);if(!out_){failed_=true;return 0;}written_=sat_add(written_,static_cast<std::uint64_t>(take));}
-        }
-        return n;
-    }
-    int_type overflow(int_type ch)override{
-        if(traits_type::eq_int_type(ch,traits_type::eof()))return traits_type::not_eof(ch);
-        const char c=traits_type::to_char_type(ch);return xsputn(&c,1)==1?ch:traits_type::eof();
-    }
-    int sync()override{out_.flush();if(!out_){failed_=true;return -1;}return 0;}
-public:
-    CappedSpoolStreambuf(std::ofstream&out,std::uint64_t cap):out_(out),cap_(cap){}
-    std::uint64_t total()const{return total_;}
-    std::uint64_t written()const{return written_;}
-    bool failed()const{return failed_;}
-};
+using prts::DirectorySpoolRecord;
+using prts::DirectoryReportSpool;
 
 std::int64_t directory_report_detail_priority(const prts::DirectoryCandidate&c,const prts::DirectoryReportIndex&idx){
     std::int64_t score=static_cast<std::int64_t>(c.priority_score)*1000;
@@ -1881,94 +1847,6 @@ std::int64_t directory_report_detail_priority(const prts::DirectoryCandidate&c,c
     return score;
 }
 
-class DirectoryReportSpool {
-    std::filesystem::path root_;
-    bool json_=false;
-    prts::ReportLanguage language_=prts::ReportLanguage::English;
-    std::vector<DirectorySpoolRecord> records_;
-    std::string error_;
-    std::uint64_t selected_bytes_=0;
-    std::uint64_t peak_bytes_=0;
-    std::uint64_t known_full_bytes_=0;
-
-    bool record_better(const DirectorySpoolRecord&a,const DirectorySpoolRecord&b)const{
-        if(a.detail_priority!=b.detail_priority)return a.detail_priority>b.detail_priority;
-        if(a.full_bytes!=b.full_bytes)return a.full_bytes<b.full_bytes;
-        return directory_report_key(a.input)<directory_report_key(b.input);
-    }
-    void drop_record(std::size_t i,const char*reason){
-        if(i>=records_.size()||!records_[i].selected)return;
-        auto&r=records_[i];r.selected=false;r.deferred_reason=reason;selected_bytes_=r.full_bytes>selected_bytes_?0:selected_bytes_-r.full_bytes;
-        std::error_code ec;std::filesystem::remove(r.payload,ec);r.payload.clear();
-    }
-    void enforce_inline_budget(){
-        while(selected_bytes_>kDirectoryInlineReportBytes){
-            std::optional<std::size_t>worst;
-            for(std::size_t i=0;i<records_.size();++i)if(records_[i].selected&&(!worst||record_better(records_[*worst],records_[i])))worst=i;
-            if(!worst)break;
-            drop_record(*worst,"DIRECTORY_INLINE_REPORT_BUDGET");
-        }
-    }
-public:
-    DirectoryReportSpool(bool json,prts::ReportLanguage language):json_(json),language_(language){
-        std::error_code ec;auto base=std::filesystem::temp_directory_path(ec);if(ec){error_="cannot locate temporary directory for report spool: "+prts::error_message_utf8(ec);return;}
-        const auto nonce=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
-        for(unsigned attempt=0;attempt<128;++attempt){
-            auto name="auto-refirst-report-spool-"+std::to_string(nonce)+"-"+std::to_string(attempt);auto candidate=base/prts::path_from_utf8(name);ec.clear();
-            if(std::filesystem::create_directory(candidate,ec)){root_=std::move(candidate);break;}
-            if(ec){error_="cannot create temporary report spool: "+prts::error_message_utf8(ec);return;}
-        }
-        if(root_.empty()){error_="cannot create unique temporary report spool";return;}
-#ifndef _WIN32
-        ec.clear();std::filesystem::permissions(root_,std::filesystem::perms::owner_all,std::filesystem::perm_options::replace,ec);if(ec){error_="cannot restrict temporary report spool permissions: "+prts::error_message_utf8(ec);std::filesystem::remove_all(root_,ec);root_.clear();return;}
-#endif
-    }
-    ~DirectoryReportSpool(){if(root_.empty())return;std::error_code ec;std::filesystem::remove_all(root_,ec);}
-    DirectoryReportSpool(const DirectoryReportSpool&)=delete;
-    DirectoryReportSpool& operator=(const DirectoryReportSpool&)=delete;
-    bool ready()const{return !root_.empty()&&error_.empty();}
-    const std::string& error()const{return error_;}
-    std::vector<DirectorySpoolRecord>& records(){return records_;}
-    const std::vector<DirectorySpoolRecord>& records()const{return records_;}
-    bool add(const prts::AnalysisReport&report,std::int64_t detail_priority,std::string&error){
-        if(!ready()){error=error_;return false;}
-        auto payload=root_/prts::path_from_utf8(std::to_string(records_.size())+(json_?".json":".txt"));
-        std::ofstream out(payload,std::ios::binary|std::ios::trunc);if(!out){error="cannot create temporary directory report spool file";return false;}
-        std::uint64_t full_bytes=0,staged_bytes=0;
-        if(json_){
-            CappedSpoolStreambuf buf(out,kDirectoryPerReportBytes);std::ostream bounded(&buf);prts::render_json(bounded,report);bounded.flush();full_bytes=buf.total();staged_bytes=buf.written();if(buf.failed()){error="temporary directory report spool write failed";return false;}
-        }else{
-            auto text=prts::render_text(report,language_);full_bytes=text.size();staged_bytes=std::min<std::uint64_t>(full_bytes,kDirectoryPerReportBytes);if(staged_bytes)out.write(text.data(),static_cast<std::streamsize>(staged_bytes));
-        }
-        out.flush();if(!out){error="temporary directory report spool write failed";return false;}
-        peak_bytes_=std::max(peak_bytes_,sat_add(selected_bytes_,staged_bytes));
-        if(peak_bytes_>kDirectoryReportSpoolHardBytes){error="internal directory report spool hard-budget invariant failed";return false;}
-        known_full_bytes_=sat_add(known_full_bytes_,full_bytes);
-        DirectorySpoolRecord rec;rec.input=report.input;rec.payload=payload;rec.full_bytes=full_bytes;rec.detail_priority=detail_priority;
-        if(full_bytes>kDirectoryPerReportBytes){
-            rec.deferred_reason="PER_REPORT_BYTE_BUDGET";std::error_code ec;std::filesystem::remove(payload,ec);rec.payload.clear();records_.push_back(std::move(rec));return true;
-        }
-        rec.selected=true;selected_bytes_=sat_add(selected_bytes_,full_bytes);records_.push_back(std::move(rec));enforce_inline_budget();return true;
-    }
-    bool validate(std::string&error)const{
-        std::uint64_t on_disk=0;
-        for(const auto&r:records_)if(r.selected){
-            std::error_code ec;auto st=std::filesystem::symlink_status(r.payload,ec);if(ec||st.type()!=std::filesystem::file_type::regular){error="temporary directory report spool is unavailable or non-regular";return false;}
-            auto n=std::filesystem::file_size(r.payload,ec);if(ec||n!=r.full_bytes){error="temporary directory report spool size changed after bounded selection";return false;}on_disk=sat_add(on_disk,n);
-            std::ifstream in(r.payload,std::ios::binary);if(!in){error="cannot reopen temporary directory report spool";return false;}
-        }
-        if(on_disk!=selected_bytes_||on_disk>kDirectoryInlineReportBytes||peak_bytes_>kDirectoryReportSpoolHardBytes){error="internal directory report spool accounting invariant failed";return false;}
-        return true;
-    }
-    void annotate_plan(prts::DirectoryPlan&plan)const{
-        std::map<std::string,const DirectorySpoolRecord*>by_input;for(const auto&r:records_)by_input[directory_report_key(r.input)]=&r;
-        for(auto&c:plan.candidates){auto it=by_input.find(directory_report_key(c.path));if(it==by_input.end()){c.report_detail_state=c.analysis_state=="ANALYZED"?"DEFERRED":"NOT_ANALYZED";c.report_detail_reason=c.analysis_state=="ANALYZED"?"REPORT_METADATA_UNAVAILABLE":"file was not analyzed";continue;}const auto&r=*it->second;c.report_full_bytes=r.full_bytes;c.report_detail_state=r.selected?"INLINE_FULL":"DEFERRED";c.report_detail_reason=r.selected?"selected by semantic priority within bounded default directory detail budget":r.deferred_reason;}
-    }
-    std::vector<std::filesystem::path> selected_paths()const{std::vector<std::filesystem::path>out;for(const auto&r:records_)if(r.selected)out.push_back(r.payload);return out;}
-    prts::DirectoryReportRendering rendering()const{
-        prts::DirectoryReportRendering x;x.profile="bounded_default";x.full_report_count=records_.size();for(const auto&r:records_)if(r.selected)++x.full_reports_rendered;x.full_reports_deferred=x.full_report_count-x.full_reports_rendered;x.partial=x.full_reports_deferred!=0;x.truncated=x.partial;x.known_full_report_bytes=known_full_bytes_;x.inline_report_bytes=selected_bytes_;x.known_deferred_report_bytes=known_full_bytes_>=selected_bytes_?known_full_bytes_-selected_bytes_:0;x.inline_report_budget_bytes=kDirectoryInlineReportBytes;x.per_report_max_bytes=kDirectoryPerReportBytes;x.spool_hard_budget_bytes=kDirectoryReportSpoolHardBytes;x.spool_peak_bytes=peak_bytes_;x.selection_policy="semantic priority: Tier 1/2 and decisive application roles, high-priority evidence, failures/partials, then candidate score; per-report and aggregate byte budgets are hard";x.reason=x.partial?"one or more complete per-file reports were deferred by the default bounded directory rendering budget":"all complete per-file reports fit the bounded default directory rendering budget";x.detail_retrieval_mode="reanalyze_file";x.detail_retrieval_command="auto-refirst <file-from-directory_plan.file_states> --json";return x;
-    }
-};
 
 std::string directory_report_key(const std::filesystem::path&p){return prts::path_utf8(p.lexically_normal());}
 
@@ -1986,12 +1864,18 @@ void render_directory_modality_text(const prts::RuntimeModalityGuidance&m){
     }
 }
 
+void render_directory_plan_text(const prts::DirectoryPlan&plan){
+    std::cout<<"Directory plan: max_depth="<<plan.max_depth<<" runtime_targets="<<plan.max_runtime_targets<<" total_runtime_budget_ms="<<plan.total_runtime_budget_ms<<" per_target_timeout_ms="<<plan.per_target_timeout_ms<<(plan.run_all?" run_all":"")<<"\n";constexpr std::size_t cap=128;for(std::size_t i=0;i<plan.candidates.size()&&i<cap;++i){const auto&c=plan.candidates[i];std::cout<<"  ["<<c.priority_tier<<" score="<<c.priority_score<<"] "<<prts::path_utf8(c.path)<<" type="<<c.type_hint<<" role="<<c.role<<" runtime="<<c.runtime_state<<"\n";for(std::size_t z=0;z<c.priority_reasons.size()&&z<4;++z)std::cout<<"    reason: "<<c.priority_reasons[z]<<"\n";if(!c.runtime_skip_reason.empty())std::cout<<"    runtime_skip: "<<c.runtime_skip_reason<<"\n";}if(plan.candidates.size()>cap)std::cout<<"  ... "<<(plan.candidates.size()-cap)<<" more candidates; use --json for the complete structured report\n";for(std::size_t i=0;i<plan.relationships.size()&&i<64;++i){const auto&r=plan.relationships[i];std::cout<<"  relationship["<<r.state<<"] "<<r.kind<<": "<<prts::path_utf8(r.first)<<" <-> "<<prts::path_utf8(r.second)<<" -- "<<r.reason<<"\n";}for(std::size_t i=0;i<plan.traversal_skips.size()&&i<32;++i)std::cout<<"  traversal_skip: "<<prts::path_utf8(plan.traversal_skips[i].path)<<" -- "<<plan.traversal_skips[i].reason<<"\n";
+    std::cout<<"  traversal: skipped="<<plan.traversal_skips_total<<" depth_limited_directories="<<plan.depth_limited_directories<<" errors="<<plan.traversal_error_count<<"\n";
+}
+
 void render_directory_text(const prts::DirectoryPlan&plan,const prts::DirectorySummary&summary,const std::vector<prts::AnalysisReport>&reports,prts::ReportLanguage lang){
-    std::cout<<"Directory summary: files="<<summary.total_files<<" analyzed="<<summary.analyzed_files<<" skipped="<<summary.skipped_files<<" bytes="<<summary.total_bytes<<" relationships="<<summary.artifact_relationship_count<<" failures="<<summary.failures<<" partials="<<summary.partials<<" elapsed_ms="<<summary.elapsed_ms<<"\n";
+    std::cout<<"Directory summary: files="<<summary.total_files<<" discovered_regular_files="<<summary.discovered_regular_files<<" omitted_candidates="<<summary.candidate_omitted_count<<" partial="<<(summary.partial?"true":"false")<<" analyzed="<<summary.analyzed_files<<" skipped="<<summary.skipped_files<<" bytes="<<summary.total_bytes<<" relationships="<<summary.artifact_relationship_count<<" failures="<<summary.failures<<" partials="<<summary.partials<<" elapsed_ms="<<summary.elapsed_ms<<"\n";
+    for(const auto&reason:summary.partial_reasons)std::cout<<"  partial_reason: "<<reason<<"\n";
     if(!summary.type_counts.empty()){std::cout<<"  types:";for(const auto&kv:summary.type_counts)std::cout<<' '<<kv.first<<'='<<kv.second;std::cout<<"\n";}if(!summary.confirmed_ecosystems.empty()){std::cout<<"  ecosystems:";for(const auto&x:summary.confirmed_ecosystems)std::cout<<' '<<x;std::cout<<"\n";}
     render_directory_modality_text(summary.runtime_modality);
     if(summary.unity_engine_state!="ABSENT"){std::cout<<"  Unity: engine="<<summary.unity_engine_state<<" backend="<<summary.unity_backend_state<<" mono_relationships="<<summary.unity_mono_relationship_count<<" il2cpp_relationships="<<summary.unity_il2cpp_relationship_count<<"\n";if(!summary.unity_next_priority.empty())std::cout<<"  next priority: "<<summary.unity_next_priority<<"\n";}
-    std::cout<<"Directory plan: max_depth="<<plan.max_depth<<" runtime_targets="<<plan.max_runtime_targets<<" total_runtime_budget_ms="<<plan.total_runtime_budget_ms<<" per_target_timeout_ms="<<plan.per_target_timeout_ms<<(plan.run_all?" run_all":"")<<"\n";constexpr std::size_t cap=128;for(std::size_t i=0;i<plan.candidates.size()&&i<cap;++i){const auto&c=plan.candidates[i];std::cout<<"  ["<<c.priority_tier<<" score="<<c.priority_score<<"] "<<prts::path_utf8(c.path)<<" type="<<c.type_hint<<" role="<<c.role<<" runtime="<<c.runtime_state<<"\n";for(std::size_t z=0;z<c.priority_reasons.size()&&z<4;++z)std::cout<<"    reason: "<<c.priority_reasons[z]<<"\n";if(!c.runtime_skip_reason.empty())std::cout<<"    runtime_skip: "<<c.runtime_skip_reason<<"\n";}if(plan.candidates.size()>cap)std::cout<<"  ... "<<(plan.candidates.size()-cap)<<" more candidates; use --json for the complete structured report\n";for(std::size_t i=0;i<plan.relationships.size()&&i<64;++i){const auto&r=plan.relationships[i];std::cout<<"  relationship["<<r.state<<"] "<<r.kind<<": "<<prts::path_utf8(r.first)<<" <-> "<<prts::path_utf8(r.second)<<" -- "<<r.reason<<"\n";}for(std::size_t i=0;i<plan.traversal_skips.size()&&i<32;++i)std::cout<<"  traversal_skip: "<<prts::path_utf8(plan.traversal_skips[i].path)<<" -- "<<plan.traversal_skips[i].reason<<"\n";
+    render_directory_plan_text(plan);
     std::size_t shown=0;for(const auto&c:plan.candidates){if(c.priority_tier=="Tier 3")continue;auto it=std::find_if(reports.begin(),reports.end(),[&](const auto&r){return r.input==c.path;});if(it==reports.end())continue;if(shown++>=32)break;std::cout<<"\n============================================================\n\n"<<prts::render_text(*it,lang);}if(shown==0&&!reports.empty())std::cout<<"\nNo Tier 1/2 detailed report was selected for text output; --json contains every analyzed file.\n";else if(shown>=32)std::cout<<"\nDetailed text reports capped at 32 prioritized files; --json contains every analyzed file.\n";
 }
 
@@ -2003,7 +1887,7 @@ bool render_directory_text_spooled(const prts::DirectoryPlan&plan,const prts::Di
     if(!summary.type_counts.empty()){std::cout<<"  types:";for(const auto&kv:summary.type_counts)std::cout<<' '<<kv.first<<'='<<kv.second;std::cout<<"\n";}if(!summary.confirmed_ecosystems.empty()){std::cout<<"  ecosystems:";for(const auto&x:summary.confirmed_ecosystems)std::cout<<' '<<x;std::cout<<"\n";}
     render_directory_modality_text(summary.runtime_modality);
     if(summary.unity_engine_state!="ABSENT"){std::cout<<"  Unity: engine="<<summary.unity_engine_state<<" backend="<<summary.unity_backend_state<<" mono_relationships="<<summary.unity_mono_relationship_count<<" il2cpp_relationships="<<summary.unity_il2cpp_relationship_count<<"\n";if(!summary.unity_next_priority.empty())std::cout<<"  next priority: "<<summary.unity_next_priority<<"\n";}
-    std::cout<<"Directory plan: max_depth="<<plan.max_depth<<" runtime_targets="<<plan.max_runtime_targets<<" total_runtime_budget_ms="<<plan.total_runtime_budget_ms<<" per_target_timeout_ms="<<plan.per_target_timeout_ms<<(plan.run_all?" run_all":"")<<"\n";constexpr std::size_t cap=128;for(std::size_t i=0;i<plan.candidates.size()&&i<cap;++i){const auto&c=plan.candidates[i];std::cout<<"  ["<<c.priority_tier<<" score="<<c.priority_score<<"] "<<prts::path_utf8(c.path)<<" type="<<c.type_hint<<" role="<<c.role<<" runtime="<<c.runtime_state<<"\n";for(std::size_t z=0;z<c.priority_reasons.size()&&z<4;++z)std::cout<<"    reason: "<<c.priority_reasons[z]<<"\n";if(!c.runtime_skip_reason.empty())std::cout<<"    runtime_skip: "<<c.runtime_skip_reason<<"\n";}if(plan.candidates.size()>cap)std::cout<<"  ... "<<(plan.candidates.size()-cap)<<" more candidates; use --json for the complete structured report\n";for(std::size_t i=0;i<plan.relationships.size()&&i<64;++i){const auto&r=plan.relationships[i];std::cout<<"  relationship["<<r.state<<"] "<<r.kind<<": "<<prts::path_utf8(r.first)<<" <-> "<<prts::path_utf8(r.second)<<" -- "<<r.reason<<"\n";}for(std::size_t i=0;i<plan.traversal_skips.size()&&i<32;++i)std::cout<<"  traversal_skip: "<<prts::path_utf8(plan.traversal_skips[i].path)<<" -- "<<plan.traversal_skips[i].reason<<"\n";
+    render_directory_plan_text(plan);
     std::map<std::string,std::filesystem::path> payload_by_input;for(const auto&r:records)if(r.selected)payload_by_input[directory_report_key(r.input)]=r.payload;
     std::size_t shown=0;for(const auto&c:plan.candidates){if(c.priority_tier=="Tier 3")continue;auto it=payload_by_input.find(directory_report_key(c.path));if(it==payload_by_input.end())continue;if(shown++>=32)break;std::cout<<"\n============================================================\n\n";std::ifstream in(it->second,std::ios::binary);if(!in){error="cannot reopen temporary directory text report spool";return false;}std::cout<<in.rdbuf();if(!std::cout){error="directory text report output write failed";return false;}}
     if(shown==0&&!records.empty())std::cout<<"\nNo Tier 1/2 full detail fit the bounded default directory report budget; rerun a file directly for complete detail.\n";else if(shown>=32)std::cout<<"\nDetailed text reports capped at 32 prioritized files; rerun a file directly for complete detail.\n";
@@ -2013,7 +1897,7 @@ bool render_directory_text_spooled(const prts::DirectoryPlan&plan,const prts::Di
 int analyze_directory_static_spooled(const std::filesystem::path&input,const Options&opt){
     const auto begin=std::chrono::steady_clock::now();auto plan=prts::inventory_directory(input,opt.directory_max_depth);plan.max_runtime_targets=opt.max_runtime_targets;plan.total_runtime_budget_ms=opt.total_runtime_budget_ms;plan.per_target_timeout_ms=opt.timeout_ms;plan.run_all=opt.run_all;
     if(plan.candidates.empty()){for(const auto&s:plan.traversal_skips)std::cerr<<prts::path_utf8(s.path)<<": "<<s.reason<<"\n";std::cerr<<"no regular input files found\n";return exit_code(ExitCode::Input);}
-    DirectoryReportSpool spool(opt.json,opt.report_language);if(!spool.ready()){std::cerr<<spool.error()<<"\n";return exit_code(ExitCode::Internal);}
+    DirectoryReportSpool spool;if(!spool.ready()){std::cerr<<spool.error()<<"\n";return exit_code(ExitCode::Internal);}
     Options static_opt=opt;static_opt.run_requested=false;static_opt.run_mode.clear();static_opt.apply=false;static_opt.run_all=false;static_opt.recursive=false;
     const bool bounded_artifacts=!opt.extract;
     prts::DirectoryArtifactRendering artifact_rendering;
@@ -2029,7 +1913,7 @@ int analyze_directory_static_spooled(const std::filesystem::path&input,const Opt
     artifact_rendering.detail_retrieval_command="auto-refirst <file-from-directory_plan.file_states> --json";
     std::uint64_t artifact_bytes_used=0,artifact_files_used=0;
     std::vector<prts::DirectoryReportIndex> compact;compact.reserve(plan.candidates.size());std::vector<prts::AnalysisReport> retained;std::uint64_t spool_elapsed_ms=0;std::size_t successful_inputs=0;
-    auto spool_report=[&](const prts::AnalysisReport&r,const prts::DirectoryCandidate&c,const prts::DirectoryReportIndex&idx){std::string why;auto st=std::chrono::steady_clock::now();const bool ok=spool.add(r,directory_report_detail_priority(c,idx),why);spool_elapsed_ms=sat_add(spool_elapsed_ms,static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-st).count()));if(!ok)std::cerr<<why<<"\n";return ok;};
+    auto spool_report=[&](const prts::AnalysisReport&r,const prts::DirectoryCandidate&c,const prts::DirectoryReportIndex&idx){std::string why;auto st=std::chrono::steady_clock::now();const bool ok=spool.add(r.input,directory_report_detail_priority(c,idx),[&](std::ostream&out){if(opt.json)prts::render_json(out,r);else out<<prts::render_text(r,opt.report_language);},why);spool_elapsed_ms=sat_add(spool_elapsed_ms,static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-st).count()));if(!ok)std::cerr<<why<<"\n";return ok;};
     for(auto&c:plan.candidates){
         if(!c.readable)continue;
         auto st=std::chrono::steady_clock::now();Options candidate_opt=static_opt;bool forced_deferred=false,unsafe_prior_root=false;
@@ -2138,7 +2022,8 @@ int analyze_directory_default(const std::filesystem::path&input,const Options&op
 int main(int argc,char**argv){
 #ifdef _WIN32
     DWORD cm=0;const bool stdout_console=GetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE),&cm)!=0;const bool stderr_console=GetConsoleMode(GetStdHandle(STD_ERROR_HANDLE),&cm)!=0;const bool stdin_console=GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE),&cm)!=0;
-    if(stdout_console||stderr_console)SetConsoleOutputCP(CP_UTF8);if(stdin_console)SetConsoleCP(CP_UTF8);
+    if(stdout_console||stderr_console)SetConsoleOutputCP(CP_UTF8);
+    if(stdin_console)SetConsoleCP(CP_UTF8);
     auto utf8_storage=windows_utf8_args();std::vector<char*> utf8_argv;if(!utf8_storage.empty()){utf8_argv.reserve(utf8_storage.size()+1);for(auto&x:utf8_storage)utf8_argv.push_back(x.data());utf8_argv.push_back(nullptr);argc=static_cast<int>(utf8_storage.size());argv=utf8_argv.data();}
 #endif
     if(argc>=2&&std::string(argv[1])=="--internal-cpython-probe")return prts::cpython_probe_child_main();
@@ -2158,7 +2043,7 @@ int main(int argc,char**argv){
     if(opt.run_mode=="trace")std::cerr<<"warning: --run=trace is DEPRECATED; prefer bare --run for automatic deep non-destructive analysis\n";
     else if(opt.run_mode=="unpack")std::cerr<<"warning: --run=unpack is DEPRECATED and is non-destructive; prefer bare --run, and add --apply only when you explicitly authorize validated installation\n";
     else if(opt.run_mode=="python-probe")std::cerr<<"warning: --run=python-probe is a DEPRECATED forced-debug compatibility mode; bare --run routes the probe automatically when it can answer an unresolved question\n";
-    if(!opt.search.empty()){prts::SearchOptions so;so.needle=opt.search;so.ignore_case=opt.search_ignore_case;so.recursive=true;so.json_lines=opt.json;auto st=prts::search_tree_streaming(input,so);if(!opt.json)std::cout<<"Search complete: files="<<st.files<<" bytes="<<st.bytes<<" matches="<<st.matches<<"\n";if(!st.files){std::cerr<<"no readable regular input files found\n";return finish_standard_output(ExitCode::Input);}return finish_standard_output(st.matches?ExitCode::Success:ExitCode::SearchNoMatch);}
+    if(!opt.search.empty()){prts::SearchOptions so;so.needle=opt.search;so.ignore_case=opt.search_ignore_case;so.recursive=true;so.max_depth=opt.directory_max_depth;so.json_lines=opt.json;auto st=prts::search_tree_streaming(input,so);if(!opt.json)std::cout<<"Search complete: files="<<st.files<<" bytes="<<st.bytes<<" matches="<<st.matches<<"\n";if(!st.files){std::cerr<<"no readable regular input files found\n";return finish_standard_output(ExitCode::Input);}return finish_standard_output(st.matches?ExitCode::Success:ExitCode::SearchNoMatch);}
     if(opt.recursive&&opt.extract&&opt.run_requested){std::cerr<<"recursive extracted-artifact analysis remains static-only; run root inputs without --extract --recursive so extracted children are never executed automatically\n";return exit_code(ExitCode::Usage);}
     if(is_dir&&opt.run_mode=="unpack"){std::cerr<<"deprecated --run=unpack is single-file compatibility only; for a directory use --run or --run --apply explicitly\n";return exit_code(ExitCode::Usage);}
     if(is_dir&&!(opt.recursive&&opt.extract))return analyze_directory_default(input,opt);

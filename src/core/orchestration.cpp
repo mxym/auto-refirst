@@ -194,34 +194,44 @@ const RuntimePlanStep* runtime_plan_step(const RuntimePlan& plan,const std::stri
 
 DirectoryPlan inventory_directory(const std::filesystem::path& root,std::uint32_t max_depth){
     DirectoryPlan plan;plan.root=root;plan.max_depth=max_depth;std::error_code ec;
-    if(directory_link_or_reparse(root)){plan.traversal_skips.push_back({root,"input directory is a symlink/reparse point; following it is disabled by default"});return plan;}
-    if(!std::filesystem::is_directory(root,ec)){plan.traversal_skips.push_back({root,ec?"directory status failed: "+ec.message():"input is not a directory"});return plan;}
+    auto skip=[&](const std::filesystem::path&path,std::string reason,bool failed=false){
+        ++plan.traversal_skips_total;
+        if(failed)++plan.traversal_error_count;
+        if(plan.traversal_skips.size()<128)plan.traversal_skips.push_back({path,std::move(reason)});
+    };
+    if(directory_link_or_reparse(root)){skip(root,"input directory is a symlink/reparse point; following it is disabled by default");return plan;}
+    if(!std::filesystem::is_directory(root,ec)){skip(root,ec?"directory status failed: "+error_message_utf8(ec):"input is not a directory",true);return plan;}
     std::filesystem::recursive_directory_iterator it(root,std::filesystem::directory_options::skip_permission_denied,ec),end;
-    if(ec){plan.traversal_skips.push_back({root,"cannot enumerate directory: "+ec.message()});return plan;}
+    if(ec){skip(root,"cannot enumerate directory: "+error_message_utf8(ec),true);return plan;}
     while(it!=end){
         const auto path=it->path();const auto depth=static_cast<std::uint32_t>(it.depth());std::error_code sec;auto st=it->symlink_status(sec);
-        if(sec){plan.traversal_skips.push_back({path,"symlink/status query failed: "+sec.message()});}
-        else if(directory_link_or_reparse(path)){plan.traversal_skips.push_back({path,"file/directory symlink or reparse point skipped"});it.disable_recursion_pending();}
+        if(sec){skip(path,"symlink/status query failed: "+error_message_utf8(sec),true);it.disable_recursion_pending();}
+        else if(directory_link_or_reparse(path)){skip(path,"file/directory symlink or reparse point skipped");it.disable_recursion_pending();}
         else if(st.type()==std::filesystem::file_type::directory){
-            if(auto_refirst_artifact_directory(path)){plan.traversal_skips.push_back({path,"auto-refirst generated artifact directory skipped from user-input inventory"});it.disable_recursion_pending();}
-            else if(depth>=max_depth)it.disable_recursion_pending();
+            if(auto_refirst_artifact_directory(path)){skip(path,"auto-refirst generated artifact directory skipped from user-input inventory");it.disable_recursion_pending();}
+            else if(depth>=max_depth){++plan.depth_limited_directories;skip(path,"directory depth limit reached; descendants were not inventoried");it.disable_recursion_pending();}
         }else if(st.type()==std::filesystem::file_type::regular){
             ++plan.regular_files_seen;auto candidate=preflight_directory_candidate(path);
-            if(plan.candidates.size()<plan.max_candidates)plan.candidates.push_back(std::move(candidate));
+            if(plan.candidates.size()<plan.max_candidates){plan.candidates.push_back(std::move(candidate));std::push_heap(plan.candidates.begin(),plan.candidates.end(),directory_candidate_better);}
             else{
                 plan.candidate_admission_budget_exhausted=true;++plan.candidate_omitted_count;
-                auto worst=std::max_element(plan.candidates.begin(),plan.candidates.end(),directory_candidate_better);
-                if(worst!=plan.candidates.end()&&directory_candidate_better(candidate,*worst))*worst=std::move(candidate);
+                // A bounded heap keeps the worst admitted candidate at the
+                // front: excess-file admission costs O(log max_candidates).
+                if(!plan.candidates.empty()&&directory_candidate_better(candidate,plan.candidates.front())){
+                    std::pop_heap(plan.candidates.begin(),plan.candidates.end(),directory_candidate_better);
+                    plan.candidates.back()=std::move(candidate);
+                    std::push_heap(plan.candidates.begin(),plan.candidates.end(),directory_candidate_better);
+                }
             }
         }
-        auto before=path;it.increment(ec);if(ec){plan.traversal_skips.push_back({before,"directory iteration failed: "+ec.message()});ec.clear();}
+        auto before=path;it.increment(ec);if(ec){skip(before,"directory iteration failed: "+error_message_utf8(ec),true);ec.clear();}
     }
     sort_directory_candidates(plan);return plan;
 }
 
 DirectoryCandidate preflight_directory_candidate(const std::filesystem::path& path){
     DirectoryCandidate c;c.path=path;c.priority_score=5;c.priority_reasons.push_back("regular files are eligible for bounded priority admission; extension never filters analysis");
-    std::error_code ec;c.size=std::filesystem::file_size(path,ec);if(ec){c.readable=false;c.analysis_state="SKIPPED";c.skipped_reason="file size/stat failed: "+ec.message();return c;}
+    std::error_code ec;c.size=std::filesystem::file_size(path,ec);if(ec){c.size=0;c.readable=false;c.analysis_state="SKIPPED";c.skipped_reason="file size/stat failed: "+error_message_utf8(ec);return c;}
     std::ifstream f(path,std::ios::binary);if(!f){c.readable=false;c.analysis_state="SKIPPED";c.skipped_reason="file cannot be opened for bounded preflight";return c;}
     constexpr std::size_t cap=64*1024;std::vector<unsigned char>b(static_cast<std::size_t>(std::min<std::uint64_t>(c.size,cap)));if(!b.empty())f.read(reinterpret_cast<char*>(b.data()),static_cast<std::streamsize>(b.size()));b.resize(static_cast<std::size_t>(std::max<std::streamsize>(0,f.gcount())));
     auto starts=[&](std::initializer_list<unsigned char>x){return b.size()>=x.size()&&std::equal(x.begin(),x.end(),b.begin());};
@@ -255,16 +265,42 @@ DirectoryCandidate preflight_directory_candidate(const std::filesystem::path& pa
 
 void refine_directory_candidate(DirectoryCandidate& c,const AnalysisReport& r){
     if(!c.readable)return;
-    c.analysis_state="ANALYZED";
-    if(r.pe.valid){c.type_hint=r.pe.dll?"PE DLL":"PE executable";c.structural_confidence="validated";c.role=r.pe.dll?"shared_library":"executable_root";
-#ifdef _WIN32
-        c.runtime_eligible=!r.pe.dll;c.runtime_eligibility_reason=r.pe.dll?"validated PE DLL is not a direct runtime root":"validated PE executable is supported by the Windows runtime backend";
-#endif
+    // Admission hints are provisional. Reuse the execution planner's gate so
+    // a rejected native header cannot leave a runnable compact file state.
+    c.runtime_eligible=platform_runtime_eligible(r,c.runtime_eligibility_reason);
+    for(const auto&f:r.findings)if(f.kind=="input"&&f.state=="FAILED"){
+        c.analysis_state="SKIPPED";c.readable=false;c.runtime_eligible=false;
+        c.skipped_reason="input became unavailable during full static analysis";
+        c.runtime_eligibility_reason=c.skipped_reason;
+        return;
     }
-    if(r.elf.valid){c.type_hint="ELF";c.structural_confidence="validated";const bool exec_mode=file_has_execute_permission(c.path);bool direct=r.elf.type==2||(r.elf.type==3&&(!r.elf.interpreter.empty()||(r.elf.entry!=0&&exec_mode)));c.role=direct?"executable_root":"shared_library";if(direct)add_reason(c,40,"full ELF validation confirms a directly executable root (ET_EXEC, interpreter-backed PIE, or executable nonzero-entry static/packed PIE)");
-#ifdef __linux__
-        c.runtime_eligible=direct;c.runtime_eligibility_reason=direct?(r.elf.type==3&&r.elf.interpreter.empty()?"validated executable ET_DYN has nonzero entry plus executable file mode":"validated ELF executable/interpreter relationship is supported by the Linux runtime backend"):"validated ELF has no direct executable-root semantics";
-#endif
+    c.analysis_state="ANALYZED";
+    const bool rejected=((c.type_hint=="PE executable"||c.type_hint=="PE DLL")&&!r.pe.valid)
+        ||(c.type_hint=="ELF"&&!r.elf.valid)||(c.type_hint=="WebAssembly"&&!r.wasm.valid)
+        ||(c.type_hint=="DEX"&&!r.dex.valid)||(c.type_hint=="Godot PCK"&&!r.godot.valid)
+        ||(c.type_hint=="Unreal IoStore TOC"&&!r.unreal.iostore.toc_valid);
+    if(rejected){
+        c.structural_confidence="rejected";c.role="unvalidated_candidate";
+        c.priority_score=5;
+        add_reason(c,0,"full structural validation rejected the preflight route; provisional priority was withdrawn");
+    }
+    if(r.pe.valid){c.type_hint=r.pe.dll?"PE DLL":"PE executable";c.structural_confidence="validated";c.role=r.pe.dll?"shared_library":"executable_root";
+    }
+    if(r.elf.valid){c.type_hint="ELF";c.structural_confidence="validated";const bool exec_mode=file_has_execute_permission(c.path);bool direct=r.elf.type==2||(r.elf.type==3&&(!r.elf.interpreter.empty()||(r.elf.entry!=0&&exec_mode)));c.role=direct?"executable_root":(r.elf.type==1?"object":"shared_library");if(direct)add_reason(c,40,"full ELF validation confirms a directly executable root (ET_EXEC, interpreter-backed PIE, or executable nonzero-entry static/packed PIE)");
+    }
+    auto validated_format=[&](bool valid,const char*kind,const char*role){if(valid){c.type_hint=kind;c.structural_confidence="validated";c.role=role;}};
+    if(r.macho.valid){validated_format(true,"Mach-O","native_image");add_reason(c,55,"validated Mach-O native image structure");}
+    // Containers may also be embedded in native inputs; preserve native roles.
+    if(!r.pe.valid&&!r.elf.valid&&!r.macho.valid){
+        validated_format(r.wasm.valid,"WebAssembly","bytecode_module");
+        validated_format(r.dex.valid,"DEX","bytecode_module");
+        validated_format(r.jvm_class.valid,"JVM Class","bytecode_module");
+        validated_format(r.lua.valid,"Lua","bytecode_module");
+        validated_format(r.hermes.valid,"Hermes HBC","bytecode_module");
+        validated_format(r.python_bytecode.valid,"CPython bytecode","bytecode_payload");
+        validated_format(r.apk.valid,"Android APK","container");
+        validated_format(r.jar.valid,"JAR/JVM","container");
+        validated_format(r.godot.valid,"Godot PCK","container");
     }
     if(r.pyinstaller.valid){add_reason(c,35,"validated PyInstaller CArchive/embedded-runtime relationship");c.role="executable_root";}
     if(r.python_bytecode.valid){add_reason(c,35,"authenticated direct CPython .pyc with structurally validated root code object");c.role="bytecode_payload";}
@@ -632,6 +668,9 @@ DirectorySummary summarize_directory(const DirectoryPlan& plan,const std::vector
     if(plan.candidate_admission_budget_exhausted){s.partial=true;s.partial_reasons.push_back("directory regular-file admission exceeded the 1024-candidate default priority budget; lower-priority files are deferred and counted");}
     if(plan.relationship_budget_exhausted){s.partial=true;s.partial_reasons.push_back("directory relationship construction hit its explicit relationship budget; omitted relations are counted");}
     for(const auto&c:plan.candidates){s.total_bytes+=c.size;++s.type_counts[c.type_hint];if(c.analysis_state=="ANALYZED")++s.analyzed_files;else if(c.analysis_state=="SKIPPED")++s.skipped_files;}
+    if(s.skipped_files){s.partial=true;s.partial_reasons.push_back("one or more admitted input files could not be read for full static analysis");}
+    if(plan.depth_limited_directories){s.partial=true;s.partial_reasons.push_back("directory depth limit omitted descendants; discovered file counts cover only the traversed scope");}
+    if(plan.traversal_error_count){s.partial=true;s.partial_reasons.push_back("directory traversal errors left part of the input scope unavailable");}
     std::set<std::string> eco;bool unity_seen=false,unity_engine_confirmed=false,il2cpp_confirmed=false,il2cpp_likely=false,mono_confirmed=false;
     for(const auto&r:reports){
         s.high_priority_evidence_count+=r.implicit_high_priority_count;if(r.pyinstaller_valid)eco.insert("PyInstaller");
@@ -796,8 +835,9 @@ static bool render_directory_json_impl(std::ostream& o,const DirectoryPlan& plan
     o<<"],\"runtime_selected\":[";first=true;for(const auto&c:plan.candidates)if(c.runtime_selected){if(!first)o<<',';first=false;o<<"{\"path\":\""<<q(path_utf8(c.path))<<"\",\"score\":"<<c.priority_score<<",\"tier\":\""<<q(c.priority_tier)<<"\",\"state\":\""<<q(c.runtime_state)<<"\",\"elapsed_ms\":"<<c.runtime_elapsed_ms<<"}";}
     o<<"],\"runtime_skipped\":[";first=true;std::size_t sk=0;for(const auto&c:plan.candidates)if(!c.runtime_selected&&(!c.runtime_skip_reason.empty()||c.runtime_eligible)){if(sk++>=skip_cap)break;if(!first)o<<',';first=false;o<<"{\"path\":\""<<q(path_utf8(c.path))<<"\",\"runtime_eligible\":"<<(c.runtime_eligible?"true":"false")<<",\"state\":\""<<q(c.runtime_state)<<"\",\"reason\":\""<<q(c.runtime_skip_reason.empty()?c.runtime_eligibility_reason:c.runtime_skip_reason)<<"\"}";}
     o<<"],\"relationships\":[";for(std::size_t i=0;i<rendered_relationships.size()&&i<relation_cap;++i){if(i)o<<',';render_relation(o,*rendered_relationships[i]);}
-    o<<"],\"traversal_skips_total\":"<<plan.traversal_skips.size()<<",\"traversal_skips_rendered\":"<<std::min<std::size_t>(plan.traversal_skips.size(),skip_cap)
-     <<",\"traversal_skips_truncated\":"<<(plan.traversal_skips.size()>skip_cap?"true":"false")<<",\"traversal_skips\":[";for(std::size_t i=0;i<plan.traversal_skips.size()&&i<skip_cap;++i){if(i)o<<',';o<<"{\"path\":\""<<q(path_utf8(plan.traversal_skips[i].path))<<"\",\"reason\":\""<<q(plan.traversal_skips[i].reason)<<"\"}";}
+    o<<"],\"traversal_skips_total\":"<<plan.traversal_skips_total<<",\"traversal_skips_rendered\":"<<std::min<std::size_t>(plan.traversal_skips.size(),skip_cap)
+     <<",\"depth_limited_directories\":"<<plan.depth_limited_directories<<",\"traversal_error_count\":"<<plan.traversal_error_count
+     <<",\"traversal_skips_truncated\":"<<(plan.traversal_skips_total>std::min<std::size_t>(plan.traversal_skips.size(),skip_cap)?"true":"false")<<",\"traversal_skips\":[";for(std::size_t i=0;i<plan.traversal_skips.size()&&i<skip_cap;++i){if(i)o<<',';o<<"{\"path\":\""<<q(path_utf8(plan.traversal_skips[i].path))<<"\",\"reason\":\""<<q(plan.traversal_skips[i].reason)<<"\"}";}
     o<<"]},\n";
     if(rendering){
         o<<"  \"report_rendering\": {\"profile\":\""<<q(rendering->profile)<<"\",\"partial\":"<<(rendering->partial?"true":"false")

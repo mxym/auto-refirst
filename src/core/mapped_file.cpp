@@ -45,9 +45,12 @@ MappedFile& MappedFile::operator=(MappedFile&& o) noexcept {
 }
 void MappedFile::reset() noexcept {
 #ifdef _WIN32
-    if(data_)UnmapViewOfFile(data_); data_=nullptr;
-    if(mapping_)CloseHandle(static_cast<HANDLE>(mapping_)); mapping_=nullptr;
-    if(file_!=reinterpret_cast<void*>(-1))CloseHandle(static_cast<HANDLE>(file_)); file_=reinterpret_cast<void*>(-1);
+    if(data_)UnmapViewOfFile(data_);
+    data_=nullptr;
+    if(mapping_)CloseHandle(static_cast<HANDLE>(mapping_));
+    mapping_=nullptr;
+    if(file_!=reinterpret_cast<void*>(-1))CloseHandle(static_cast<HANDLE>(file_));
+    file_=reinterpret_cast<void*>(-1);
 #else
     if(data_&&size_) munmap(const_cast<std::uint8_t*>(data_),size_);
     data_=nullptr;
