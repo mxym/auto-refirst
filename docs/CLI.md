@@ -64,6 +64,10 @@ auto-refirst directory --search=TEXT --search-ignore-case --json
 
 目录分析的预筛选信息仅用于候选接纳。完整解析会刷新格式、置信度和运行资格；被否定的结构路由不再保留可执行根角色和临时优先级。`directory_plan.depth_limited_directories` 记录因深度限制未展开的目录数量，`traversal_error_count` 记录可观察的遍历错误。深度截断、遍历错误或不可读候选都会让目录摘要的 `partial` 为 `true`，进程仍遵循既有退出码契约。跳过路径仅保留最多 128 条明细、JSON 展示最多 64 条；`traversal_skips_total` 保留真实总数，不代表被跳过的后代文件数。
 
+目录的静态分析和 `--run` 共用报告预算：内联完整详情最多 16 MiB、单份最多 8 MiB、暂存总量最多 24 MiB（含延迟缓存与当前写入）。关系确认后会按最终优先级重新选择仍在缓存中的报告；`reports_reselected` 记录重新入选数量，`cache_evicted_reports` 记录为维持上限而删除的缓存。每个已接纳文件的紧凑状态仍保留。
+
+默认 64 MiB / 512 文件工件预算只统计自动静态准备；静态准备保留之前的 `runtime/` 观测工件及 ownership marker。运行时产物由后端另行约束，显式 `--extract` 继续使用原有逐文件提取合同。`runtime_detail_deferred=true` 表示某个已运行目标的详情被延迟，应检查保留的运行时工件；再次显式 `--run` 会产生新的观测，不能还原上一次运行。
+
 ## 运行时
 
 ```sh

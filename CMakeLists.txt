@@ -288,6 +288,17 @@ if(Python3_Interpreter_FOUND)
 endif()
 
 # Self-contained public CI helpers. These are built on demand by the public regression runner.
+add_executable(auto_refirst_public_mapped_file_snapshot_unit EXCLUDE_FROM_ALL
+    tests/mapped_file_snapshot_unit.cpp
+    src/core/mapped_file.cpp
+    src/core/file_snapshot.cpp
+    src/core/sha256.cpp
+)
+target_include_directories(auto_refirst_public_mapped_file_snapshot_unit PRIVATE include)
+if(WIN32)
+  target_compile_definitions(auto_refirst_public_mapped_file_snapshot_unit PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 add_executable(auto_refirst_public_directory_report_spool_unit EXCLUDE_FROM_ALL
     tests/directory_report_spool_unit.cpp
 )
@@ -378,6 +389,7 @@ add_executable(auto_refirst_public_fixture_runtime_child EXCLUDE_FROM_ALL tests/
 add_executable(auto_refirst_public_fixture_runtime_parent EXCLUDE_FROM_ALL tests/public/runtime_parent.c)
 
 foreach(_public_target
+        auto_refirst_public_mapped_file_snapshot_unit
         auto_refirst_public_directory_report_spool_unit
         auto_refirst_public_model_trust_unit
         auto_refirst_public_python_bytecode_unit
@@ -399,6 +411,7 @@ foreach(_public_target
 endforeach()
 
 foreach(_public_target
+        auto_refirst_public_mapped_file_snapshot_unit
         auto_refirst_public_directory_report_spool_unit
         auto_refirst_public_model_trust_unit
         auto_refirst_public_python_bytecode_unit

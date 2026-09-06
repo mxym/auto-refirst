@@ -847,11 +847,16 @@ static bool render_directory_json_impl(std::ostream& o,const DirectoryPlan& plan
          <<",\"known_deferred_report_bytes\":"<<rendering->known_deferred_report_bytes
          <<",\"inline_report_budget_bytes\":"<<rendering->inline_report_budget_bytes<<",\"per_report_max_bytes\":"<<rendering->per_report_max_bytes
          <<",\"spool_hard_budget_bytes\":"<<rendering->spool_hard_budget_bytes<<",\"spool_peak_bytes\":"<<rendering->spool_peak_bytes
+         <<",\"spool_resident_bytes\":"<<rendering->spool_resident_bytes<<",\"cache_evicted_reports\":"<<rendering->cache_evicted_reports
+         <<",\"reports_reselected\":"<<rendering->reports_reselected<<",\"priorities_finalized\":"<<(rendering->priorities_finalized?"true":"false")
+         <<",\"runtime_detail_deferred\":"<<(rendering->runtime_detail_deferred?"true":"false")
+         <<",\"retained_full_reports_peak\":"<<rendering->retained_full_reports_peak<<",\"model_retention_policy\":\""<<q(rendering->model_retention_policy)<<'"'
          <<",\"selection_policy\":\""<<q(rendering->selection_policy)<<"\",\"reason\":\""<<q(rendering->reason)
          <<"\",\"detail_retrieval\":{\"mode\":\""<<q(rendering->detail_retrieval_mode)<<"\",\"command\":\""<<q(rendering->detail_retrieval_command)<<"\"}},\n";
     }
     if(artifact_rendering){
         o<<"  \"artifact_materialization\": {\"profile\":\""<<q(artifact_rendering->profile)<<"\",\"partial\":"<<(artifact_rendering->partial?"true":"false")
+         <<",\"scope\":\""<<q(artifact_rendering->scope)<<'"'
          <<",\"max_bytes\":"<<artifact_rendering->max_bytes<<",\"max_files\":"<<artifact_rendering->max_files
          <<",\"pre_relationship_max_bytes\":"<<artifact_rendering->pre_relationship_max_bytes<<",\"pre_relationship_max_files\":"<<artifact_rendering->pre_relationship_max_files
          <<",\"post_relationship_reserve_bytes\":"<<artifact_rendering->post_relationship_reserve_bytes<<",\"post_relationship_reserve_files\":"<<artifact_rendering->post_relationship_reserve_files

@@ -37,6 +37,8 @@ def assert_common_bounds(j:dict):
     assert rr['spool_hard_budget_bytes']==24*MIB,rr
     assert 0<=rr['inline_report_bytes']<=rr['inline_report_budget_bytes'],rr
     assert 0<=rr['spool_peak_bytes']<=rr['spool_hard_budget_bytes'],rr
+    assert rr['priorities_finalized'] is True,rr
+    assert rr['inline_report_bytes']<=rr['spool_resident_bytes']<=rr['spool_hard_budget_bytes'],rr
     assert rr['full_reports_rendered']+rr['full_reports_deferred']==rr['full_report_count'],rr
     assert rr['inline_report_bytes']+rr['known_deferred_report_bytes']==rr['known_full_report_bytes'],rr
     assert rr['detail_retrieval']['mode']=='reanalyze_file' and '--json' in rr['detail_retrieval']['command']
@@ -57,7 +59,11 @@ def main():
     # treating filesystem traversal order as product priority.
     with tempfile.TemporaryDirectory(prefix='ar-bb-admission-') as raw:
         d=pathlib.Path(raw)
-        for i in range(1030):(d/f'a{i:04d}.txt').write_text('low priority text payload\n',encoding='utf-8')
+        for i in range(1030):
+            if i==0:
+                (d/'a0000.py').write_text('obj=open("a1022.txt","rb").read()\n',encoding='utf-8')
+            else:
+                (d/f'a{i:04d}.txt').write_text('low priority text payload\n',encoding='utf-8')
         (d/'zzzz-decisive.bin').write_bytes(minimal_pe())
         j,n=runj(d); assert_common_bounds(j)
         s,p,rr=j['directory_summary'],j['directory_plan'],j['report_rendering']; fs=p['file_states']
@@ -70,6 +76,14 @@ def main():
         decisive=next(x for x in fs if pathlib.Path(x['path']).name=='zzzz-decisive.bin')
         assert decisive['rank']==1 and decisive['tier']=='Tier 1' and decisive['role']=='executable_root',decisive
         assert not any(pathlib.Path(x['path']).name=='a1029.txt' for x in fs)
+        # The late payload is admitted but falls outside the provisional inline
+        # budget. Its exact cross-file reference is resolved only afterwards.
+        payload=next(x for x in fs if pathlib.Path(x['path']).name=='a1022.txt')
+        assert payload['report_detail_state']=='INLINE_FULL',payload
+        assert rr['reports_reselected']>0,rr
+        assert rr['cache_evicted_reports']==sum(x['report_detail_reason']=='DIRECTORY_SPOOL_CACHE_BUDGET' for x in fs),rr
+        assert any(pathlib.Path(r['input']).name=='a1022.txt' for r in j['reports'])
+        assert any(r['kind']=='script_literal_data_dependency' and pathlib.Path(r['second']).name=='a1022.txt' for r in p['relationships']),p['relationships']
         # This generated corpus drives the report selection right against the
         # aggregate boundary: at least one whole record must be deferred and the
         # remaining gap must be smaller than every aggregate-budget-deferred record.

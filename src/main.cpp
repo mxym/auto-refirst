@@ -488,7 +488,7 @@ struct DirectoryArtifactTreeStats {
     std::uint64_t files=0;
 };
 
-bool inspect_directory_artifact_tree(const std::filesystem::path&root,DirectoryArtifactTreeStats&stats,std::string&error){
+bool inspect_directory_artifact_tree(const std::filesystem::path&root,DirectoryArtifactTreeStats&stats,std::string&error,bool static_only=false){
     stats={};error.clear();std::error_code ec;auto st=std::filesystem::symlink_status(root,ec);
     if(ec==std::errc::no_such_file_or_directory){ec.clear();return true;}
     if(ec){error="cannot inspect directory artifact root: "+prts::error_message_utf8(ec);return false;}
@@ -500,6 +500,10 @@ bool inspect_directory_artifact_tree(const std::filesystem::path&root,DirectoryA
     while(it!=end){
         auto path=it->path();auto est=it->symlink_status(ec);if(ec){error="cannot stat directory artifact output: "+prts::error_message_utf8(ec);return false;}
         if(artifact_path_link_or_reparse(path)){if(est.type()==std::filesystem::file_type::directory)it.disable_recursion_pending();error="directory artifact output contains a symlink/reparse point: "+prts::path_utf8(path);return false;}
+        if(static_only&&path.parent_path()==root&&(path.filename()=="runtime"||path.filename()==".auto-refirst-owner")){
+            if(est.type()==std::filesystem::file_type::directory)it.disable_recursion_pending();
+            it.increment(ec);if(ec){error="directory artifact iteration failed: "+prts::error_message_utf8(ec);return false;}continue;
+        }
         if(est.type()==std::filesystem::file_type::regular){auto n=std::filesystem::file_size(path,ec);if(ec){error="cannot size directory artifact output: "+prts::error_message_utf8(ec);return false;}stats.bytes=sat_add(stats.bytes,n);stats.files=sat_add(stats.files,1);}
         it.increment(ec);if(ec){error="directory artifact iteration failed: "+prts::error_message_utf8(ec);return false;}
     }
@@ -513,10 +517,19 @@ bool reset_directory_artifact_root(const std::filesystem::path&root,std::string&
     if(st.type()==std::filesystem::file_type::not_found)return true;
     if(artifact_path_link_or_reparse(root)){error="prior directory artifact root is a symlink/reparse point; refusing removal: "+prts::path_utf8(root);return false;}
     if(st.type()!=std::filesystem::file_type::directory){error="prior directory artifact root is not a directory; refusing removal: "+prts::path_utf8(root);return false;}
-    // The root is product-owned (`<input>.auto-refirst`) and has just been proven
-    // to be a real directory.  Refuse any nested link/reparse before remove_all.
+    // Validate the entire owned tree before removing static derivatives. Prior
+    // runtime observations and an explicit ownership marker survive preparation.
     DirectoryArtifactTreeStats ignored;if(!inspect_directory_artifact_tree(root,ignored,error))return false;
-    std::filesystem::remove_all(root,ec);if(ec){error="cannot reset prior product-owned directory artifact root: "+prts::error_message_utf8(ec);return false;}return true;
+    std::filesystem::directory_iterator it(root,ec),end;
+    if(ec){error="cannot enumerate prior artifact root: "+prts::error_message_utf8(ec);return false;}
+    while(it!=end){
+        const auto path=it->path();
+        it.increment(ec);if(ec){error="cannot enumerate prior artifact root: "+prts::error_message_utf8(ec);return false;}
+        if(path.filename()=="runtime"||path.filename()==".auto-refirst-owner")continue;
+        std::filesystem::remove_all(path,ec);
+        if(ec){error="cannot reset prior static artifact output: "+prts::error_message_utf8(ec);return false;}
+    }
+    return true;
 }
 
 void note_directory_artifact_deferred(prts::AnalysisReport&report,std::uint64_t files,std::uint64_t bytes,const std::string&reason){
@@ -1299,8 +1312,12 @@ void update_runtime_step_results(prts::AnalysisReport&report,bool runtime_ok,con
     if(auto*s=prts::runtime_plan_step(report.runtime_plan,"validated_transactional_install");s&&s->selected){s->elapsed_ms=elapsed_ms;if(!runtime_ok){s->state="FAILED";s->refusal=error;}else if(report.replacement.performed){s->state="COMPLETED";s->result="validated candidate transactionally installed; backup/rollback contract retained";}else{s->state="SKIPPED";s->result="no candidate reached the strict final installation gate";}}
 }
 
+prts::RuntimePlanningRequest runtime_planning_request(const Options&opt){
+    prts::RuntimePlanningRequest req;req.requested=opt.run_requested;req.apply_requested=opt.apply;req.legacy_trace=opt.run_mode=="trace";req.legacy_unpack=opt.run_mode=="unpack";req.forced_python_probe=opt.run_mode=="python-probe";req.timeout_ms=opt.timeout_ms;return req;
+}
+
 void execute_runtime_plan(prts::AnalysisReport&report,const std::filesystem::path&input,const Options&opt){
-    prts::RuntimePlanningRequest req;req.requested=opt.run_requested;req.apply_requested=opt.apply;req.legacy_trace=opt.run_mode=="trace";req.legacy_unpack=opt.run_mode=="unpack";req.forced_python_probe=opt.run_mode=="python-probe";req.timeout_ms=opt.timeout_ms;
+    auto req=runtime_planning_request(opt);
     report.runtime_plan=prts::build_runtime_plan(report,req);if(!opt.run_requested)return;
     auto*trace=prts::runtime_plan_step(report.runtime_plan,"generic_runtime_trace");
     if(trace&&trace->selected){
@@ -1330,10 +1347,7 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
     report.input=input;
     report.materialization.root=opt.artifact_root_override.empty()?artifact_root_for_input(input):opt.artifact_root_override;
     report.artifact.root_input=input;report.artifact.offset_basis=input;
-    report.input_snapshot=prts::snapshot_file(input);
-    if(!report.input_snapshot.exists){
-        prts::Finding f;f.kind="input";f.family="file";f.state="FAILED";f.evidence.push_back("input is not a regular file");report.findings.push_back(std::move(f));return report;
-    }
+    report.input_snapshot.path=input;
 
     std::uint64_t extract_bytes_left=opt.extract_budget_bytes;
     std::uint32_t extract_files_left=opt.extract_budget_files;
@@ -1353,6 +1367,7 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
         if(!mapped.valid()){
             prts::Finding f;f.kind="input";f.family="mapping";f.state="FAILED";f.evidence.push_back(mapped.error());report.findings.push_back(std::move(f));return report;
         }
+        report.input_snapshot=mapped.snapshot();
         report.pe=prts::parse_pe(mapped.bytes());
         if(report.pe.valid){report.authenticode=prts::analyze_authenticode(mapped.bytes(),report.pe);if(report.authenticode.present||report.authenticode.state=="FAILED")report.findings.push_back(prts::authenticode_finding(report.authenticode));}
         if(!report.pe.valid){report.elf=prts::parse_elf(mapped.bytes());if(!report.elf.valid)report.macho=prts::parse_macho(mapped.bytes());}
@@ -1844,6 +1859,7 @@ std::int64_t directory_report_detail_priority(const prts::DirectoryCandidate&c,c
     if(idx.failure_count)score+=300000;
     if(idx.partial_count)score+=200000;
     if(idx.post_relationship_mutated)score+=600000;
+    if(c.runtime_selected)score+=2000000;
     return score;
 }
 
@@ -1869,21 +1885,12 @@ void render_directory_plan_text(const prts::DirectoryPlan&plan){
     std::cout<<"  traversal: skipped="<<plan.traversal_skips_total<<" depth_limited_directories="<<plan.depth_limited_directories<<" errors="<<plan.traversal_error_count<<"\n";
 }
 
-void render_directory_text(const prts::DirectoryPlan&plan,const prts::DirectorySummary&summary,const std::vector<prts::AnalysisReport>&reports,prts::ReportLanguage lang){
-    std::cout<<"Directory summary: files="<<summary.total_files<<" discovered_regular_files="<<summary.discovered_regular_files<<" omitted_candidates="<<summary.candidate_omitted_count<<" partial="<<(summary.partial?"true":"false")<<" analyzed="<<summary.analyzed_files<<" skipped="<<summary.skipped_files<<" bytes="<<summary.total_bytes<<" relationships="<<summary.artifact_relationship_count<<" failures="<<summary.failures<<" partials="<<summary.partials<<" elapsed_ms="<<summary.elapsed_ms<<"\n";
-    for(const auto&reason:summary.partial_reasons)std::cout<<"  partial_reason: "<<reason<<"\n";
-    if(!summary.type_counts.empty()){std::cout<<"  types:";for(const auto&kv:summary.type_counts)std::cout<<' '<<kv.first<<'='<<kv.second;std::cout<<"\n";}if(!summary.confirmed_ecosystems.empty()){std::cout<<"  ecosystems:";for(const auto&x:summary.confirmed_ecosystems)std::cout<<' '<<x;std::cout<<"\n";}
-    render_directory_modality_text(summary.runtime_modality);
-    if(summary.unity_engine_state!="ABSENT"){std::cout<<"  Unity: engine="<<summary.unity_engine_state<<" backend="<<summary.unity_backend_state<<" mono_relationships="<<summary.unity_mono_relationship_count<<" il2cpp_relationships="<<summary.unity_il2cpp_relationship_count<<"\n";if(!summary.unity_next_priority.empty())std::cout<<"  next priority: "<<summary.unity_next_priority<<"\n";}
-    render_directory_plan_text(plan);
-    std::size_t shown=0;for(const auto&c:plan.candidates){if(c.priority_tier=="Tier 3")continue;auto it=std::find_if(reports.begin(),reports.end(),[&](const auto&r){return r.input==c.path;});if(it==reports.end())continue;if(shown++>=32)break;std::cout<<"\n============================================================\n\n"<<prts::render_text(*it,lang);}if(shown==0&&!reports.empty())std::cout<<"\nNo Tier 1/2 detailed report was selected for text output; --json contains every analyzed file.\n";else if(shown>=32)std::cout<<"\nDetailed text reports capped at 32 prioritized files; --json contains every analyzed file.\n";
-}
-
 bool render_directory_text_spooled(const prts::DirectoryPlan&plan,const prts::DirectorySummary&summary,const std::vector<DirectorySpoolRecord>&records,const prts::DirectoryReportRendering&rendering,const prts::DirectoryArtifactRendering&artifact_rendering,std::string&error){
     std::cout<<"Directory summary: files="<<summary.total_files<<" discovered_regular_files="<<summary.discovered_regular_files<<" omitted_candidates="<<summary.candidate_omitted_count<<" partial="<<(summary.partial?"true":"false")<<" analyzed="<<summary.analyzed_files<<" skipped="<<summary.skipped_files<<" bytes="<<summary.total_bytes<<" relationships="<<summary.artifact_relationship_count<<" failures="<<summary.failures<<" partials="<<summary.partials<<" elapsed_ms="<<summary.elapsed_ms<<"\n";
     for(const auto&reason:summary.partial_reasons)std::cout<<"  partial_reason: "<<reason<<"\n";
     std::cout<<"  report_detail: rendered="<<rendering.full_reports_rendered<<" deferred="<<rendering.full_reports_deferred<<" inline_bytes="<<rendering.inline_report_bytes<<"/"<<rendering.inline_report_budget_bytes<<" spool_peak_bytes="<<rendering.spool_peak_bytes<<"/"<<rendering.spool_hard_budget_bytes<<" partial="<<(rendering.partial?"true":"false")<<"\n";
-    std::cout<<"  artifact_output: bytes="<<artifact_rendering.materialized_bytes<<"/"<<artifact_rendering.max_bytes<<" files="<<artifact_rendering.materialized_files<<"/"<<artifact_rendering.max_files<<" deferred_candidates="<<artifact_rendering.deferred_candidate_count<<" partial="<<(artifact_rendering.partial?"true":"false")<<"\n";
+    std::cout<<"  report_cache: resident_bytes="<<rendering.spool_resident_bytes<<" evicted="<<rendering.cache_evicted_reports<<" reselected="<<rendering.reports_reselected<<" retained_models_peak="<<rendering.retained_full_reports_peak<<"\n";
+    std::cout<<"  artifact_output: scope="<<artifact_rendering.scope<<" bytes="<<artifact_rendering.materialized_bytes<<"/"<<artifact_rendering.max_bytes<<" files="<<artifact_rendering.materialized_files<<"/"<<artifact_rendering.max_files<<" deferred_candidates="<<artifact_rendering.deferred_candidate_count<<" partial="<<(artifact_rendering.partial?"true":"false")<<"\n";
     if(!summary.type_counts.empty()){std::cout<<"  types:";for(const auto&kv:summary.type_counts)std::cout<<' '<<kv.first<<'='<<kv.second;std::cout<<"\n";}if(!summary.confirmed_ecosystems.empty()){std::cout<<"  ecosystems:";for(const auto&x:summary.confirmed_ecosystems)std::cout<<' '<<x;std::cout<<"\n";}
     render_directory_modality_text(summary.runtime_modality);
     if(summary.unity_engine_state!="ABSENT"){std::cout<<"  Unity: engine="<<summary.unity_engine_state<<" backend="<<summary.unity_backend_state<<" mono_relationships="<<summary.unity_mono_relationship_count<<" il2cpp_relationships="<<summary.unity_il2cpp_relationship_count<<"\n";if(!summary.unity_next_priority.empty())std::cout<<"  next priority: "<<summary.unity_next_priority<<"\n";}
@@ -1894,14 +1901,48 @@ bool render_directory_text_spooled(const prts::DirectoryPlan&plan,const prts::Di
     if(!std::cout){error="directory text report output write failed";return false;}return true;
 }
 
-int analyze_directory_static_spooled(const std::filesystem::path&input,const Options&opt){
+bool retain_directory_runtime_report(const prts::AnalysisReport&report,prts::DirectoryCandidate&candidate,const Options&opt){
+    if(!opt.run_requested)return false;
+    const auto preview=prts::build_runtime_plan(report,runtime_planning_request(opt));
+    const auto*generic=prts::runtime_plan_step(preview,"generic_runtime_trace");
+    const auto*probe=prts::runtime_plan_step(preview,"cpython_compiler_probe");
+    if((generic&&generic->selected)||(probe&&probe->selected))return true;
+    candidate.runtime_state="SKIPPED_STATIC_NOT_EXECUTABLE";
+    candidate.runtime_skip_reason=preview.runtime_eligibility_reason;
+    if(probe&&!probe->reason.empty()&&probe->reason!=candidate.runtime_skip_reason)candidate.runtime_skip_reason+="; "+probe->reason;
+    return false;
+}
+
+void execute_directory_runtime(prts::DirectoryPlan&plan,std::vector<prts::AnalysisReport>&reports,const Options&opt){
+    if(opt.run_requested){
+        std::uint64_t used=0;std::uint32_t targets=0;
+        for(auto&c:plan.candidates){
+            auto ri=std::find_if(reports.begin(),reports.end(),[&](const auto&r){return r.input==c.path;});
+            if(ri==reports.end()){if(c.runtime_state=="SKIPPED_STATIC_NOT_EXECUTABLE")continue;c.runtime_state="SKIPPED_NO_STATIC_REPORT";c.runtime_skip_reason="static report unavailable";continue;}
+            auto preq=runtime_planning_request(opt);
+            auto preview=prts::build_runtime_plan(*ri,preq);const auto*g=prts::runtime_plan_step(preview,"generic_runtime_trace");const auto*pstep=prts::runtime_plan_step(preview,"cpython_compiler_probe");const bool generic_selected=g&&g->selected,probe_selected=pstep&&pstep->selected;
+            if(!generic_selected&&!probe_selected){c.runtime_state="SKIPPED_STATIC_NOT_EXECUTABLE";c.runtime_skip_reason=preview.runtime_eligibility_reason;if(pstep&&!pstep->reason.empty()&&pstep->reason!=c.runtime_skip_reason)c.runtime_skip_reason += "; "+pstep->reason;continue;}
+            if(probe_selected&&!c.runtime_eligible){c.runtime_eligible=true;c.runtime_eligibility_reason="auxiliary CPython compiler probe can answer an unresolved static semantic question";}
+            if(!opt.run_all&&c.priority_tier=="Tier 3"){c.runtime_state="SKIPPED_PRIORITY";c.runtime_skip_reason="Tier 3 is static-only under the conservative directory runtime policy; use --run-all to override";continue;}
+            if(!opt.run_all&&targets>=plan.max_runtime_targets){c.runtime_state="SKIPPED_TARGET_LIMIT";c.runtime_skip_reason="directory runtime target limit reached";continue;}
+            if(used>=plan.total_runtime_budget_ms){c.runtime_state="SKIPPED_RUNTIME_BUDGET";c.runtime_skip_reason="directory total runtime budget exhausted";continue;}
+            Options ropt=opt;auto remain=plan.total_runtime_budget_ms-used;ropt.timeout_ms=static_cast<std::uint32_t>(std::min<std::uint64_t>(opt.timeout_ms,std::min<std::uint64_t>(remain,std::numeric_limits<std::uint32_t>::max())));c.runtime_selected=true;auto rt=std::chrono::steady_clock::now();execute_runtime_plan(*ri,c.path,ropt);analyze_runtime_children(*ri,c.path,ropt);c.runtime_elapsed_ms=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-rt).count());used=std::min(plan.total_runtime_budget_ms,sat_add(used,ropt.timeout_ms));++targets;
+            if(ri->replacement.performed)c.runtime_state="UNPACKED_VALIDATED_APPLIED";
+            else if(ri->runtime.requested)c.runtime_state=ri->runtime.timed_out?"TIMED_OUT":"COMPLETED";
+            else if(const auto*ps=prts::runtime_plan_step(ri->runtime_plan,"cpython_compiler_probe");ps&&ps->selected)c.runtime_state="COMPLETED_AUXILIARY_PROBE";
+            else{c.runtime_state="SKIPPED_BY_RUNTIME_PLAN";c.runtime_skip_reason=ri->runtime_plan.runtime_eligibility_reason;}
+        }
+    }
+}
+
+int analyze_directory_spooled(const std::filesystem::path&input,const Options&opt){
     const auto begin=std::chrono::steady_clock::now();auto plan=prts::inventory_directory(input,opt.directory_max_depth);plan.max_runtime_targets=opt.max_runtime_targets;plan.total_runtime_budget_ms=opt.total_runtime_budget_ms;plan.per_target_timeout_ms=opt.timeout_ms;plan.run_all=opt.run_all;
     if(plan.candidates.empty()){for(const auto&s:plan.traversal_skips)std::cerr<<prts::path_utf8(s.path)<<": "<<s.reason<<"\n";std::cerr<<"no regular input files found\n";return exit_code(ExitCode::Input);}
     DirectoryReportSpool spool;if(!spool.ready()){std::cerr<<spool.error()<<"\n";return exit_code(ExitCode::Internal);}
     Options static_opt=opt;static_opt.run_requested=false;static_opt.run_mode.clear();static_opt.apply=false;static_opt.run_all=false;static_opt.recursive=false;
     const bool bounded_artifacts=!opt.extract;
     prts::DirectoryArtifactRendering artifact_rendering;
-    artifact_rendering.profile=bounded_artifacts?"bounded_default":"explicit_extract_per_file";
+    artifact_rendering.profile=bounded_artifacts?(opt.run_requested?"bounded_static_preparation":"bounded_default"):"explicit_extract_per_file";
     artifact_rendering.max_bytes=bounded_artifacts?kDirectoryArtifactBytes:0;
     artifact_rendering.max_files=bounded_artifacts?kDirectoryArtifactFiles:0;
     artifact_rendering.pre_relationship_max_bytes=bounded_artifacts?kDirectoryPreRelationshipArtifactBytes:0;
@@ -1930,7 +1971,7 @@ int analyze_directory_static_spooled(const std::filesystem::path&input,const Opt
         if(bounded_artifacts){
             if(unsafe_prior_root){artifact_rendering.partial=true;++artifact_rendering.deferred_candidate_count;++artifact_rendering.unknown_omitted_candidate_count;note_directory_artifact_deferred(r,0,0,"automatic directory materialization was refused because the pre-existing product artifact root was unsafe to reset");}
             else{
-                DirectoryArtifactTreeStats stats;std::string artifact_error;if(!inspect_directory_artifact_tree(artifact_root,stats,artifact_error)){std::cerr<<artifact_error<<"\n";return exit_code(ExitCode::Internal);}
+                DirectoryArtifactTreeStats stats;std::string artifact_error;if(!inspect_directory_artifact_tree(artifact_root,stats,artifact_error,true)){std::cerr<<artifact_error<<"\n";return exit_code(ExitCode::Internal);}
                 if(forced_deferred){
                     if(stats.files||stats.bytes){std::cerr<<"internal directory artifact invariant failed: suppressed candidate still materialized output\n";return exit_code(ExitCode::Internal);}
                     std::string cleanup_error;if(!reset_directory_artifact_root(artifact_root,cleanup_error)){std::cerr<<cleanup_error<<"\n";return exit_code(ExitCode::Internal);}
@@ -1939,7 +1980,7 @@ int analyze_directory_static_spooled(const std::filesystem::path&input,const Opt
                     artifact_rendering.partial=true;++artifact_rendering.deferred_candidate_count;artifact_rendering.known_omitted_bytes=sat_add(artifact_rendering.known_omitted_bytes,stats.bytes);artifact_rendering.known_omitted_files=sat_add(artifact_rendering.known_omitted_files,stats.files);
                     std::string cleanup_error;if(!reset_directory_artifact_root(artifact_root,cleanup_error)){std::cerr<<cleanup_error<<"\n";return exit_code(ExitCode::Internal);}
                     Options retry_opt=static_opt;retry_opt.suppress_auto_materialization=true;retry_opt.suppress_auto_child_analysis=true;retry_opt.extract_budget_bytes=0;retry_opt.extract_budget_files=0;retry_opt.artifact_max_bytes=0;retry_opt.artifact_max_nodes=0;
-                    r=analyze_file(c.path,retry_opt);DirectoryArtifactTreeStats retry_stats;if(!inspect_directory_artifact_tree(artifact_root,retry_stats,artifact_error)){std::cerr<<artifact_error<<"\n";return exit_code(ExitCode::Internal);}if(retry_stats.files||retry_stats.bytes){std::cerr<<"internal directory artifact invariant failed: rollback reanalysis still materialized output\n";return exit_code(ExitCode::Internal);}if(!reset_directory_artifact_root(artifact_root,cleanup_error)){std::cerr<<cleanup_error<<"\n";return exit_code(ExitCode::Internal);}
+                    r=analyze_file(c.path,retry_opt);DirectoryArtifactTreeStats retry_stats;if(!inspect_directory_artifact_tree(artifact_root,retry_stats,artifact_error,true)){std::cerr<<artifact_error<<"\n";return exit_code(ExitCode::Internal);}if(retry_stats.files||retry_stats.bytes){std::cerr<<"internal directory artifact invariant failed: rollback reanalysis still materialized output\n";return exit_code(ExitCode::Internal);}if(!reset_directory_artifact_root(artifact_root,cleanup_error)){std::cerr<<cleanup_error<<"\n";return exit_code(ExitCode::Internal);}
                     c.artifact_materialization_state="DEFERRED";c.artifact_materialization_reason="candidate automatic output exceeded the remaining directory aggregate byte/file allowance and was atomically rolled back";note_directory_artifact_deferred(r,stats.files,stats.bytes,c.artifact_materialization_reason);
                 }else{
                     artifact_bytes_used=sat_add(artifact_bytes_used,stats.bytes);artifact_files_used=sat_add(artifact_files_used,stats.files);c.artifact_materialized_bytes=stats.bytes;c.artifact_materialized_files=stats.files;
@@ -1958,7 +1999,8 @@ int analyze_directory_static_spooled(const std::filesystem::path&input,const Opt
         }
         if(!root_input_analysis_failed(r))++successful_inputs;
         c.analysis_elapsed_ms=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-st).count());prts::refine_directory_candidate(c,r);compact.push_back(prts::make_directory_report_index(r));auto&idx=compact.back();
-        if(prts::directory_report_requires_post_relationship_retention(r))retained.push_back(std::move(r));else if(!spool_report(r,c,idx))return exit_code(ExitCode::Internal);
+        const bool runtime_retention=retain_directory_runtime_report(r,c,opt);
+        if(prts::directory_report_requires_post_relationship_retention(r)||runtime_retention)retained.push_back(std::move(r));else if(!spool_report(r,c,idx))return exit_code(ExitCode::Internal);
     }
     if(!successful_inputs){std::cerr<<"no readable regular input files found\n";return exit_code(ExitCode::Input);}
     prts::build_directory_relationships(plan,compact);
@@ -1969,14 +2011,49 @@ int analyze_directory_static_spooled(const std::filesystem::path&input,const Opt
     std::map<std::string,std::size_t> compact_by_input;for(std::size_t i=0;i<compact.size();++i)compact_by_input[directory_report_key(compact[i].input)]=i;std::set<std::string> retained_inputs;for(const auto&r:retained)retained_inputs.insert(directory_report_key(r.input));
     for(const auto&r:compact)if(r.post_relationship_mutated&&!retained_inputs.count(directory_report_key(r.input))){std::cerr<<"internal directory retention invariant failed: relationship-mutated report was not retained: "<<prts::path_utf8(r.input)<<"\n";return exit_code(ExitCode::Internal);}
     for(auto&r:retained){
-        auto ci=compact_by_input.find(directory_report_key(r.input));if(ci==compact_by_input.end()){std::cerr<<"internal directory retention invariant failed: retained report has no compact index\n";return exit_code(ExitCode::Internal);}auto&idx=compact[ci->second];prts::apply_directory_report_index_mutations(r,idx);r.analysis_guidance=prts::build_analysis_guidance(r);
-        if(idx.post_relationship_mutated){auto refreshed=prts::make_directory_report_index(r);refreshed.post_relationship_mutated=true;idx=std::move(refreshed);}auto pc=std::find_if(plan.candidates.begin(),plan.candidates.end(),[&](const auto&c){return directory_report_key(c.path)==directory_report_key(r.input);});if(pc==plan.candidates.end()){std::cerr<<"internal directory retention invariant failed: retained report has no candidate\n";return exit_code(ExitCode::Internal);}if(!spool_report(r,*pc,idx))return exit_code(ExitCode::Internal);
+        const auto it=compact_by_input.find(directory_report_key(r.input));
+        if(it==compact_by_input.end()){std::cerr<<"retained report has no compact index\n";return exit_code(ExitCode::Internal);}
+        prts::apply_directory_report_index_mutations(r,compact[it->second]);
+        r.analysis_guidance=prts::build_analysis_guidance(r);
+    }
+    prts::sort_directory_candidates(plan);
+    execute_directory_runtime(plan,retained,opt);
+    const auto retained_report_peak=retained.size();
+    for(auto&r:retained){
+        const auto key=directory_report_key(r.input);
+        auto&idx=compact[compact_by_input.at(key)];
+        const bool mutated=idx.post_relationship_mutated;
+        const auto candidate=std::find_if(plan.candidates.begin(),plan.candidates.end(),[&](const auto&c){return directory_report_key(c.path)==key;});
+        if(candidate==plan.candidates.end()){std::cerr<<"retained report has no candidate\n";return exit_code(ExitCode::Internal);}
+        if(mutated||candidate->runtime_selected){idx=prts::make_directory_report_index(r);idx.post_relationship_mutated=mutated;}
+        if(!spool_report(r,*candidate,idx))return exit_code(ExitCode::Internal);
+        r=prts::AnalysisReport{};
     }
     std::vector<prts::AnalysisReport>().swap(retained);prts::sort_directory_candidates(plan);
+    std::map<std::string,std::int64_t> final_priorities;
+    for(const auto&c:plan.candidates){
+        const auto key=directory_report_key(c.path);auto it=compact_by_input.find(key);
+        if(it!=compact_by_input.end())final_priorities[key]=directory_report_detail_priority(c,compact[it->second]);
+    }
+    std::string selection_error;
+    if(!spool.finalize_selection(final_priorities,selection_error)){std::cerr<<selection_error<<"\n";return exit_code(ExitCode::Internal);}
+
     std::map<std::string,std::size_t> rank;for(std::size_t i=0;i<plan.candidates.size();++i)rank[directory_report_key(plan.candidates[i].path)]=i;
     std::stable_sort(spool.records().begin(),spool.records().end(),[&](const auto&a,const auto&b){auto ai=rank.find(directory_report_key(a.input)),bi=rank.find(directory_report_key(b.input));auto av=ai==rank.end()?std::numeric_limits<std::size_t>::max():ai->second,bv=bi==rank.end()?std::numeric_limits<std::size_t>::max():bi->second;return av<bv;});
     if(spool.records().size()!=compact.size()){std::cerr<<"internal directory retention invariant failed: report spool/index cardinality mismatch\n";return exit_code(ExitCode::Internal);}std::string spool_error;if(!spool.validate(spool_error)){std::cerr<<spool_error<<"\n";return exit_code(ExitCode::Internal);}spool.annotate_plan(plan);
     const auto raw_elapsed=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count());const auto elapsed=raw_elapsed>spool_elapsed_ms?raw_elapsed-spool_elapsed_ms:0;auto summary=prts::summarize_directory(plan,compact,elapsed);auto rendering=spool.rendering();
+    rendering.retained_full_reports_peak=retained_report_peak;
+    rendering.model_retention_policy=opt.run_requested?"runtime-eligible and relationship-dependent reports; no aggregate model-byte cap is claimed":"relationship-dependent reports only";
+    for(const auto&record:spool.records())if(!record.selected){
+        const auto it=rank.find(directory_report_key(record.input));
+        if(it!=rank.end()&&plan.candidates[it->second].runtime_selected)rendering.runtime_detail_deferred=true;
+    }
+    if(rendering.runtime_detail_deferred){
+        rendering.detail_retrieval_mode="runtime_artifacts_or_explicit_rerun";
+        rendering.detail_retrieval_command="auto-refirst <file-from-directory_plan.file_states> --run --json";
+        if(rendering.partial)rendering.reason+="; an explicit rerun cannot reproduce prior runtime observations";
+    }
+
     if(rendering.partial){summary.partial=true;summary.partial_reasons.push_back("bounded default report rendering deferred "+std::to_string(rendering.full_reports_deferred)+" of "+std::to_string(rendering.full_report_count)+" complete per-file reports; compact state remains present for every admitted file");}
     if(artifact_rendering.partial){summary.partial=true;summary.partial_reasons.push_back("bounded default artifact materialization deferred or refused one or more automatic outputs under the shared directory aggregate byte/file budget");}
     if(opt.json){auto paths=spool.selected_paths();if(!prts::render_directory_json_spooled(std::cout,plan,summary,paths,rendering,artifact_rendering,spool_error)){std::cerr<<spool_error<<"\n";return exit_code(ExitCode::Internal);}}
@@ -1984,37 +2061,8 @@ int analyze_directory_static_spooled(const std::filesystem::path&input,const Opt
     return finish_standard_output(ExitCode::Success);
 }
 
-int analyze_directory_retained(const std::filesystem::path&input,const Options&opt){
-    const auto begin=std::chrono::steady_clock::now();auto plan=prts::inventory_directory(input,opt.directory_max_depth);plan.max_runtime_targets=opt.max_runtime_targets;plan.total_runtime_budget_ms=opt.total_runtime_budget_ms;plan.per_target_timeout_ms=opt.timeout_ms;plan.run_all=opt.run_all;if(plan.candidates.empty()){for(const auto&s:plan.traversal_skips)std::cerr<<prts::path_utf8(s.path)<<": "<<s.reason<<"\n";std::cerr<<"no regular input files found\n";return exit_code(ExitCode::Input);}
-    Options static_opt=opt;static_opt.run_requested=false;static_opt.run_mode.clear();static_opt.apply=false;static_opt.run_all=false;static_opt.recursive=false;std::vector<prts::AnalysisReport>reports;reports.reserve(plan.candidates.size());std::size_t successful_inputs=0;
-    for(auto&c:plan.candidates){if(!c.readable)continue;auto st=std::chrono::steady_clock::now();auto r=analyze_file(c.path,static_opt);if(!root_input_analysis_failed(r))++successful_inputs;c.analysis_elapsed_ms=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-st).count());prts::refine_directory_candidate(c,r);reports.push_back(std::move(r));}
-    if(!successful_inputs){std::cerr<<"no readable regular input files found\n";return exit_code(ExitCode::Input);}
-    prts::build_directory_relationships(plan,reports);{std::vector<prts::DirectoryReportIndex> compact;compact.reserve(reports.size());for(const auto&r:reports)compact.push_back(prts::make_directory_report_index(r));integrate_directory_godot_semantics(plan,compact,reports,static_opt);}for(auto&r:reports)r.analysis_guidance=prts::build_analysis_guidance(r);prts::sort_directory_candidates(plan);
-    if(opt.run_requested){
-        std::uint64_t used=0;std::uint32_t targets=0;
-        for(auto&c:plan.candidates){
-            auto ri=std::find_if(reports.begin(),reports.end(),[&](const auto&r){return r.input==c.path;});
-            if(ri==reports.end()){c.runtime_state="SKIPPED_NO_STATIC_REPORT";c.runtime_skip_reason="static report unavailable";continue;}
-            prts::RuntimePlanningRequest preq;preq.requested=true;preq.apply_requested=opt.apply;preq.legacy_trace=opt.run_mode=="trace";preq.legacy_unpack=opt.run_mode=="unpack";preq.forced_python_probe=opt.run_mode=="python-probe";preq.timeout_ms=opt.timeout_ms;
-            auto preview=prts::build_runtime_plan(*ri,preq);const auto*g=prts::runtime_plan_step(preview,"generic_runtime_trace");const auto*pstep=prts::runtime_plan_step(preview,"cpython_compiler_probe");const bool generic_selected=g&&g->selected,probe_selected=pstep&&pstep->selected;
-            if(!generic_selected&&!probe_selected){c.runtime_state="SKIPPED_STATIC_NOT_EXECUTABLE";c.runtime_skip_reason=preview.runtime_eligibility_reason;if(pstep&&!pstep->reason.empty()&&pstep->reason!=c.runtime_skip_reason)c.runtime_skip_reason += "; "+pstep->reason;continue;}
-            if(probe_selected&&!c.runtime_eligible){c.runtime_eligible=true;c.runtime_eligibility_reason="auxiliary CPython compiler probe can answer an unresolved static semantic question";}
-            if(!opt.run_all&&c.priority_tier=="Tier 3"){c.runtime_state="SKIPPED_PRIORITY";c.runtime_skip_reason="Tier 3 is static-only under the conservative directory runtime policy; use --run-all to override";continue;}
-            if(!opt.run_all&&targets>=plan.max_runtime_targets){c.runtime_state="SKIPPED_TARGET_LIMIT";c.runtime_skip_reason="directory runtime target limit reached";continue;}
-            if(used>=plan.total_runtime_budget_ms){c.runtime_state="SKIPPED_RUNTIME_BUDGET";c.runtime_skip_reason="directory total runtime budget exhausted";continue;}
-            Options ropt=opt;auto remain=plan.total_runtime_budget_ms-used;ropt.timeout_ms=static_cast<std::uint32_t>(std::min<std::uint64_t>(opt.timeout_ms,std::min<std::uint64_t>(remain,std::numeric_limits<std::uint32_t>::max())));c.runtime_selected=true;auto rt=std::chrono::steady_clock::now();execute_runtime_plan(*ri,c.path,ropt);analyze_runtime_children(*ri,c.path,ropt);c.runtime_elapsed_ms=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-rt).count());used=std::min(plan.total_runtime_budget_ms,sat_add(used,ropt.timeout_ms));++targets;
-            if(ri->replacement.performed)c.runtime_state="UNPACKED_VALIDATED_APPLIED";
-            else if(ri->runtime.requested)c.runtime_state=ri->runtime.timed_out?"TIMED_OUT":"COMPLETED";
-            else if(const auto*ps=prts::runtime_plan_step(ri->runtime_plan,"cpython_compiler_probe");ps&&ps->selected)c.runtime_state="COMPLETED_AUXILIARY_PROBE";
-            else{c.runtime_state="SKIPPED_BY_RUNTIME_PLAN";c.runtime_skip_reason=ri->runtime_plan.runtime_eligibility_reason;}
-        }
-    }
-    std::map<std::string,std::size_t> rank;for(std::size_t i=0;i<plan.candidates.size();++i)rank[prts::path_utf8(plan.candidates[i].path.lexically_normal())]=i;
-    std::stable_sort(reports.begin(),reports.end(),[&](const auto&a,const auto&b){auto ai=rank.find(prts::path_utf8(a.input.lexically_normal())),bi=rank.find(prts::path_utf8(b.input.lexically_normal()));auto av=ai==rank.end()?std::numeric_limits<std::size_t>::max():ai->second,bv=bi==rank.end()?std::numeric_limits<std::size_t>::max():bi->second;return av<bv;});
-    auto elapsed=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count());auto summary=prts::summarize_directory(plan,reports,elapsed);if(opt.json){std::string output_error;if(!prts::render_directory_json(std::cout,plan,summary,reports,output_error)){std::cerr<<output_error<<"\n";return exit_code(ExitCode::Internal);}}else render_directory_text(plan,summary,reports,opt.report_language);return finish_standard_output(ExitCode::Success);
-}
 
-int analyze_directory_default(const std::filesystem::path&input,const Options&opt){return opt.run_requested?analyze_directory_retained(input,opt):analyze_directory_static_spooled(input,opt);}
+int analyze_directory_default(const std::filesystem::path&input,const Options&opt){return analyze_directory_spooled(input,opt);}
 
 
 } // namespace

@@ -71,6 +71,27 @@ def main() -> None:
         assert plan["traversal_skips_total"] == 140, plan
         assert plan["traversal_skips_rendered"] == 64, plan
         assert plan["traversal_skips_truncated"] is True
+        # Static preparation must preserve prior authorized runtime outputs and
+        # owner markers, while removing stale generated analysis derivatives.
+        preserved = root / "preserved"
+        preserved.mkdir()
+        source = preserved / "plain.txt"
+        source.write_text("ordinary static input", encoding="utf-8")
+        owned = pathlib.Path(str(source) + ".auto-refirst")
+        (owned / "runtime").mkdir(parents=True)
+        observation = owned / "runtime" / "retained-observation.bin"
+        observation.write_bytes(b"prior runtime observation")
+        marker = owned / ".auto-refirst-owner"
+        marker.write_text("retained marker", encoding="utf-8")
+        (owned / "maps").mkdir()
+        stale = owned / "maps" / "stale.csv"
+        stale.write_text("stale derivative", encoding="utf-8")
+        result = json.loads(run(preserved, "--json"))
+        assert observation.read_bytes() == b"prior runtime observation"
+        assert marker.read_text(encoding="utf-8") == "retained marker"
+        assert not stale.exists()
+        assert result["artifact_materialization"]["scope"] == "automatic_static_preparation"
+        assert result["artifact_materialization"]["materialized_bytes"] == 0
     print("[PASS] UTF-8 search/offsets/depth + full-analysis directory states + bounded traversal diagnostics")
 
 

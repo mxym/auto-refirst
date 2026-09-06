@@ -46,9 +46,18 @@ def main():
     with tempfile.TemporaryDirectory(prefix='ar-dir-target-limit-') as td:
         td=pathlib.Path(td)
         for n in ('a','b','c'):shutil.copy2('/bin/true',td/n)
+        for i in range(128):(td/f'note-{i:03d}.txt').write_text('ordinary static data\n',encoding='utf-8')
         before={n:sha(td/n) for n in ('a','b','c')}
         j,_=runj(td,'--run','--max-runtime-targets=1','--timeout=500','--total-runtime-budget=2000')
         assert len(j['directory_plan']['runtime_selected'])==1
+        rendering=j['report_rendering'];artifacts=j['artifact_materialization']
+        assert rendering['profile']=='bounded_default' and rendering['priorities_finalized'],rendering
+        assert rendering['retained_full_reports_peak']==3,rendering
+        assert rendering['full_report_count']==131 and rendering['inline_report_bytes']<=16*1024*1024,rendering
+        assert rendering['spool_resident_bytes']<=rendering['spool_hard_budget_bytes']==24*1024*1024,rendering
+        assert rendering['runtime_detail_deferred'] is False and rendering['detail_retrieval']['mode']=='reanalyze_file',rendering
+        assert artifacts['profile']=='bounded_static_preparation' and artifacts['scope']=='automatic_static_preparation',artifacts
+        assert artifacts['max_bytes']==64*1024*1024 and artifacts['max_files']==512,artifacts
         sk=j['directory_plan']['runtime_skipped'];assert sum(x['state']=='SKIPPED_TARGET_LIMIT' for x in sk)==2
         assert before=={n:sha(td/n) for n in ('a','b','c')} and all(not r['replacement']['performed'] for r in j['reports'])
 
