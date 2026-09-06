@@ -241,6 +241,7 @@ struct DirectoryReportIndex {
 
 struct DirectoryArtifactRendering {
     std::string profile="unbounded";
+    std::string scope="automatic_static_preparation";
     bool partial=false;
     std::uint64_t max_bytes=0;
     std::uint64_t max_files=0;
@@ -275,6 +276,13 @@ struct DirectoryReportRendering {
     std::uint64_t per_report_max_bytes=0;
     std::uint64_t spool_hard_budget_bytes=0;
     std::uint64_t spool_peak_bytes=0;
+    std::uint64_t spool_resident_bytes=0;
+    std::uint64_t cache_evicted_reports=0;
+    std::uint64_t reports_reselected=0;
+    bool priorities_finalized=false;
+    bool runtime_detail_deferred=false;
+    std::uint64_t retained_full_reports_peak=0;
+    std::string model_retention_policy;
     std::string selection_policy;
     std::string reason;
     std::string detail_retrieval_mode;
