@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 namespace prts {
+struct Finding;
 struct PeTlsCallback { std::uint64_t slot_va=0,slot_file_offset=0,target_va=0,target_file_offset=0; bool target_file_backed=false; };
 struct PeTlsInfo { bool present=false; std::uint64_t directory_rva=0,directory_file_offset=0; std::uint64_t callbacks_va=0,callbacks_file_offset=0; std::vector<std::uint64_t> callback_vas; std::vector<PeTlsCallback> callbacks; };
 struct PeRuntimeFunction { std::uint32_t begin_rva=0,end_rva=0,unwind_rva=0; };
@@ -41,4 +42,5 @@ PeInfo parse_pe(std::span<const std::uint8_t> data);
 PeInfo parse_pe(const std::filesystem::path& p);
 std::string pe_machine_name(std::uint16_t machine);
 std::string pe_subsystem_name(std::uint16_t subsystem);
+Finding pe_forwarder_finding(const PeInfo& info);
 }
