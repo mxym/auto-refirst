@@ -76,6 +76,9 @@ def main() -> None:
     assert finding["ranges"][0]["coordinate_space"] == "FILE_OFFSET"
     assert finding["ranges"][0]["basis"] == "CURRENT_INPUT_FILE"
     assert int(finding["fields"]["payload_bytes"]) >= 320
+    extraction = positive["authenticode"]["extraction"]
+    assert extraction["success"] and extraction["written_count"] == 1, extraction
+    assert (pathlib.Path(extraction["output_dir"]) / "extension-0.der").read_bytes() == nested
 
     # A valid private OID with only a short value is common metadata, not a
     # payload candidate.  A truncated DER carrier must also fail closed.

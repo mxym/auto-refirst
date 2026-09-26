@@ -41,7 +41,7 @@
 | P1 · 已实现 | 输入快照与一次读取 | 顶层快照从同一映射计算散列，并使用打开句柄的大小和时间；普通路径被重新绑定不会让快照读到另一个文件。安装前后独立 `snapshot_file` 校验保留；映射不声称抵抗并发内容修改。 |
 | P1 · 已实现 | 静态/运行时目录资源合同协调 | 共用有界静态准备、报告缓存与最终输出；仅运行时规划可用和关系处理必需的完整报告继续驻留。保留旧运行时工件，明确静态 64 MiB / 512 文件预算的统计范围；运行期输出和聚合模型内存不冒充受同一个字节上限控制。 |
 | P2 · 已实现 | 精确范围内的格式接纳一致性 | 统一的 64 KiB、与文件名无关的低成本路由覆盖 Mach-O（含 universal）、Hermes、Lua 5.1–5.5、JVM Class、CPython 及既有 PE/ELF/容器；`CAFEBABE` 等共享魔数在结构不足时降为低置信度，高置信结论仍由深解析产生。 |
-| P2 · 已实现 | PE 证书区载荷线索 | 对已验证的 Certificate Table 仅做 file-offset 坐标下的有界 DER 遍历；私有企业 OID 后接至少 256 字节 OCTET STRING 时输出 `SUSPECTED` 载荷线索，带精确范围、负证据和后续检查建议，不执行/解密/自动提取。 |
+| P2 · 已实现 | PE 证书区载荷线索 | 对已验证的 Certificate Table 仅做 file-offset 坐标下的有界 DER 遍历；私有企业 OID 后接至少 256 字节 OCTET STRING 时输出 `SUSPECTED` 载荷线索，并在 AUTO_CORE/`--extract` 的预算内按原始字节物化为 `BULK` 不透明工件，带精确范围、负证据和后续检查建议；不递归解释、解密或执行嵌套内容。 |
 | P2 · 已实现 | PE 导出 forwarder/API-set 关系 | 对导出地址落入导出目录的字符串做既有有界解析，验证模块与符号/ordinal 几何并输出 `RVA`/`CURRENT_INPUT_IMAGE` 范围；API-set 仅标记命名空间，畸形目标降为 `PARTIAL`，不猜主机 DLL 或运行时加载结果。 |
 | P2 · 已实现 | PE delay-load 关系 | 对 `IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT` 有界验证 RVA/VA 属性、descriptor、INT/IAT thunk 及 DLL/name/ordinal 几何；首次调用与 helper 搜索路径保持静态未决，截断目录或 thunk 降为 `PARTIAL`。 |
 | P2 · 已实现 | 非标准分层/Polyglot 线索 | 在静态扫描上限内汇总非零偏移的 PDF、Mach-O/JVM、UDF、VHD 以及已知容器标记；至少两种不同格式同时出现时输出 `Layered/polyglot format markers`，附当前输入文件坐标、候选上限、负证据和后续结构检查建议，不将标记当作已验证子工件。 |

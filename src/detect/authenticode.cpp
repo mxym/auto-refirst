@@ -1,9 +1,11 @@
 #include "prts/authenticode.hpp"
 #include "prts/sha1.hpp"
 #include "prts/sha256.hpp"
+#include "prts/path_utf8.hpp"
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <optional>
@@ -62,7 +64,9 @@ void collect_extension_payloads(std::span<const std::uint8_t>d,const Der&node,st
             const auto&octets=fields[value];bool inner_der=false;std::size_t p=octets.content;Der nested{};
             if(der_one(d,p,nested)&&p==octets.end)inner_der=true;
             if(base<=std::numeric_limits<std::uint64_t>::max()-node.begin){
-                out.push_back({base+node.begin,node.end-node.begin,octets.length,oid,inner_der});
+                AuthenticodeExtensionPayload hint{base+node.begin,node.end-node.begin,octets.length,oid,inner_der};
+                if(base<=std::numeric_limits<std::uint64_t>::max()-octets.content)hint.payload_offset=base+octets.content;
+                out.push_back(std::move(hint));
             }
         }
     }
@@ -287,5 +291,26 @@ std::optional<Finding> authenticode_extension_payload_finding(const Authenticode
     f.fields["payload_bytes"]=std::to_string(total);
     f.suggested_actions.push_back("inspect the bounded certificate-extension ranges as data; validate any nested format independently before extraction or execution");
     return f;
+}
+
+AuthenticodeExtensionPayloadExtractResult extract_authenticode_extension_payloads(std::span<const std::uint8_t> data,const AuthenticodeInfo& info,const std::filesystem::path& output_dir,bool core_only,std::uint64_t max_output_bytes,std::uint32_t max_output_files){
+    AuthenticodeExtensionPayloadExtractResult out;out.output_dir=output_dir;out.core_only=core_only;
+    std::vector<const AuthenticodeExtensionPayload*> candidates;
+    for(const auto&s:info.signatures)for(const auto&x:s.extension_payloads)candidates.push_back(&x);
+    out.candidate_count=candidates.size()>(std::numeric_limits<std::uint32_t>::max)()?(std::numeric_limits<std::uint32_t>::max)():static_cast<std::uint32_t>(candidates.size());
+    if(candidates.empty()){out.success=true;return out;}
+    if(output_dir.empty()){out.error="Authenticode extension payload output directory is empty";return out;}
+    std::error_code ec;auto st=std::filesystem::symlink_status(output_dir,ec);if(ec&&ec!=std::errc::no_such_file_or_directory){out.error="cannot inspect Authenticode extension payload output directory: "+prts::error_message_utf8(ec);return out;}if(!ec&&st.type()==std::filesystem::file_type::symlink){out.error="refusing Authenticode extension payload output directory symlink: "+prts::path_utf8(output_dir);return out;}if(!ec&&st.type()!=std::filesystem::file_type::not_found&&st.type()!=std::filesystem::file_type::directory){out.error="refusing non-directory Authenticode extension payload output path: "+prts::path_utf8(output_dir);return out;}ec.clear();std::filesystem::create_directories(output_dir,ec);if(ec){out.error="cannot create Authenticode extension payload output directory: "+prts::error_message_utf8(ec);return out;}
+    if(core_only)std::stable_sort(candidates.begin(),candidates.end(),[](const auto*a,const auto*b){return a->inner_der!=b->inner_der?a->inner_der>b->inner_der:a->payload_size>b->payload_size;});
+    const auto note=[&](std::string text){if(out.warnings.size()<128)out.warnings.push_back(std::move(text));};
+    auto sat_add=[](std::uint64_t a,std::uint64_t b){return b>(std::numeric_limits<std::uint64_t>::max)()-a?(std::numeric_limits<std::uint64_t>::max)():a+b;};
+    for(std::size_t i=0;i<candidates.size();++i){
+        const auto&x=*candidates[i];if(x.payload_offset>data.size()||x.payload_size>static_cast<std::uint64_t>(data.size())-x.payload_offset){note("validated Authenticode extension payload is outside the input");++out.omitted_count;out.omitted_bytes=sat_add(out.omitted_bytes,x.payload_size);continue;}
+        if(out.written_count>=max_output_files||x.payload_size>max_output_bytes-out.output_bytes){out.budget_exhausted=true;++out.omitted_count;out.omitted_bytes=sat_add(out.omitted_bytes,x.payload_size);continue;}
+        const auto filename=std::string("extension-")+std::to_string(i)+(x.inner_der?".der":".bin");const auto path=output_dir/prts::path_from_utf8(filename);ec.clear();st=std::filesystem::symlink_status(path,ec);if(!ec&&st.type()!=std::filesystem::file_type::not_found){if(st.type()==std::filesystem::file_type::symlink||st.type()!=std::filesystem::file_type::regular){note("refusing non-regular Authenticode extension payload output: "+prts::path_utf8(path));++out.omitted_count;out.omitted_bytes=sat_add(out.omitted_bytes,x.payload_size);continue;}}
+        if(x.payload_size>static_cast<std::uint64_t>((std::numeric_limits<std::streamsize>::max)())){note("Authenticode extension payload exceeds the local stream write limit");++out.omitted_count;out.omitted_bytes=sat_add(out.omitted_bytes,x.payload_size);continue;}
+        std::ofstream file(path,std::ios::binary|std::ios::trunc);if(!file){note("cannot create Authenticode extension payload output: "+prts::path_utf8(path));++out.omitted_count;out.omitted_bytes=sat_add(out.omitted_bytes,x.payload_size);continue;}file.write(reinterpret_cast<const char*>(data.data()+static_cast<std::size_t>(x.payload_offset)),static_cast<std::streamsize>(x.payload_size));file.flush();if(!file){file.close();ec.clear();std::filesystem::remove(path,ec);note("Authenticode extension payload output write failed: "+prts::path_utf8(path));++out.omitted_count;out.omitted_bytes=sat_add(out.omitted_bytes,x.payload_size);continue;}file.close();ec.clear();const auto written=std::filesystem::file_size(path,ec);if(ec||written!=x.payload_size){ec.clear();std::filesystem::remove(path,ec);note("Authenticode extension payload output size mismatch: "+prts::path_utf8(path));++out.omitted_count;out.omitted_bytes=sat_add(out.omitted_bytes,x.payload_size);continue;}out.files.push_back(path);++out.written_count;out.output_bytes=sat_add(out.output_bytes,x.payload_size);
+    }
+    out.success=out.written_count==out.candidate_count&&!out.budget_exhausted&&out.warnings.empty();if(!out.success&&out.error.empty())out.error="not all validated Authenticode extension payloads were materialized";return out;
 }
 }

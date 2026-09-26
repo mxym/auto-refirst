@@ -2,6 +2,7 @@
 #include "prts/finding.hpp"
 #include "prts/pe.hpp"
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
@@ -31,6 +32,16 @@ struct AuthenticodeExtensionPayload {
     std::uint64_t file_offset=0,encoded_size=0,payload_size=0;
     std::string oid;
     bool inner_der=false;
+    std::uint64_t payload_offset=0;
+};
+struct AuthenticodeExtensionPayloadExtractResult {
+    bool success=false,core_only=false,budget_exhausted=false;
+    std::filesystem::path output_dir;
+    std::uint32_t candidate_count=0,written_count=0,omitted_count=0;
+    std::uint64_t output_bytes=0,omitted_bytes=0;
+    std::vector<std::filesystem::path> files;
+    std::vector<std::string> warnings;
+    std::string error;
 };
 struct AuthenticodeSignerInfo {
     std::string identifier_type,issuer,serial,digest_algorithm,signature_algorithm,signing_time,signature_value_sha256;
@@ -68,4 +79,5 @@ struct AuthenticodeInfo {
 AuthenticodeInfo analyze_authenticode(std::span<const std::uint8_t> data,const PeInfo& pe);
 Finding authenticode_finding(const AuthenticodeInfo& info);
 std::optional<Finding> authenticode_extension_payload_finding(const AuthenticodeInfo& info);
+AuthenticodeExtensionPayloadExtractResult extract_authenticode_extension_payloads(std::span<const std::uint8_t> data,const AuthenticodeInfo& info,const std::filesystem::path& output_dir,bool core_only=false,std::uint64_t max_output_bytes=64ull*1024*1024,std::uint32_t max_output_files=256);
 }
