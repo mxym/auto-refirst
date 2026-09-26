@@ -614,6 +614,30 @@ std::vector<ArtifactCandidate> extracted_artifacts(const prts::AnalysisReport&r)
     std::sort(out.begin(),out.end(),[](const auto&a,const auto&b){return prts::path_utf8(a.path)<prts::path_utf8(b.path);});return out;
 }
 
+// Keep recursive artifact-budget accounting in one place.  The individual
+// extractor flags are intentionally reported with their existing wording, but
+// centralizing this bookkeeping prevents a newly added extractor from being
+// forgotten in the graph-mode orchestration path.
+void note_recursive_extraction_budget(prts::AnalysisReport&report,prts::ArtifactGraphInfo&graph,const std::filesystem::path&input,std::uint32_t depth){
+    const auto note=[&](bool exhausted,std::string message){
+        if(!exhausted)return;
+        graph.truncated=true;++graph.skipped_limits;graph.warnings.push_back(std::move(message));
+    };
+    note(report.pyinstaller_extract.budget_exhausted,"PyInstaller extraction hit the recursive byte/file budget while decoding outer/PYZ artifacts at "+prts::path_utf8(input));
+    note(report.apk_extract.budget_exhausted,"APK analysis-only extraction omitted lower-priority static children at "+prts::path_utf8(input)+" because the remaining byte/file budget was insufficient");
+    note(report.jar_extract.budget_exhausted,"JAR analysis-only extraction omitted lower-priority static children at "+prts::path_utf8(input)+" because the remaining byte/file budget was insufficient");
+    note(report.godot_extract.budget_exhausted,"Godot extraction omitted lower-priority materialization at "+prts::path_utf8(input)+" because the remaining byte/file budget was insufficient");
+    note(report.nuitka_extract.budget_exhausted,"Nuitka extraction omitted lower-priority materialization at "+prts::path_utf8(input)+" because the remaining byte/file budget was insufficient");
+    note(report.asar_extract.budget_exhausted,"ASAR extraction omitted lower-priority materialization at "+prts::path_utf8(input)+" because the remaining byte/file budget was insufficient");
+    note(report.wxapkg_extract.budget_exhausted,"wxapkg extraction omitted lower-priority materialization at "+prts::path_utf8(input)+" because the remaining byte/file budget was insufficient");
+    note(report.renpy_rpa_extract.budget_exhausted,"Ren'Py RPA extraction omitted lower-priority materialization at "+prts::path_utf8(input)+" because the remaining byte/file budget was insufficient");
+    for(const auto&finding:report.findings){
+        if(finding.family!="Artifact extraction budget"||finding.state!="REFUSED")continue;
+        const auto it=finding.fields.find("ecosystem");
+        note(true,"recursive extraction preflight refused "+(it==finding.fields.end()?std::string("container"):it->second)+" at depth "+std::to_string(depth)+" because the remaining byte/file budget was insufficient");
+    }
+}
+
 bool parse_options(int argc,char**argv,Options&opt){
     auto fail=[&](std::string message){opt.parse_error=std::move(message);return false;};
     for(int i=2;i<argc;++i){
@@ -2184,19 +2208,7 @@ int main(int argc,char**argv){
             auto report=analyze_file(cur.path,node_opt);if(cur.root&&!root_input_analysis_failed(report))++successful_root_inputs;report.artifact.graph_member=true;report.artifact.root=cur.root;report.artifact.depth=cur.depth;report.artifact.parent=cur.parent;report.artifact.root_input=cur.root_input;report.artifact.offset_basis=cur.path;report.artifact.offset_space="current_input_file";report.artifact.relation=cur.relation;
             ++graph.nodes;
             if(!report.input_snapshot.sha256.empty())first_by_sha.try_emplace(report.input_snapshot.sha256,cur.path);
-            if(report.pyinstaller_extract.budget_exhausted){graph.truncated=true;++graph.skipped_limits;graph.warnings.push_back("PyInstaller extraction hit the recursive byte/file budget while decoding outer/PYZ artifacts at "+prts::path_utf8(cur.path));}
-            if(report.apk_extract.budget_exhausted){graph.truncated=true;++graph.skipped_limits;graph.warnings.push_back("APK analysis-only extraction omitted lower-priority static children at "+prts::path_utf8(cur.path)+" because the remaining byte/file budget was insufficient");}
-            if(report.jar_extract.budget_exhausted){graph.truncated=true;++graph.skipped_limits;graph.warnings.push_back("JAR analysis-only extraction omitted lower-priority static children at "+prts::path_utf8(cur.path)+" because the remaining byte/file budget was insufficient");}
-            if(report.godot_extract.budget_exhausted){graph.truncated=true;++graph.skipped_limits;graph.warnings.push_back("Godot extraction omitted lower-priority materialization at "+prts::path_utf8(cur.path)+" because the remaining byte/file budget was insufficient");}
-            if(report.nuitka_extract.budget_exhausted){graph.truncated=true;++graph.skipped_limits;graph.warnings.push_back("Nuitka extraction omitted lower-priority materialization at "+prts::path_utf8(cur.path)+" because the remaining byte/file budget was insufficient");}
-            if(report.asar_extract.budget_exhausted){graph.truncated=true;++graph.skipped_limits;graph.warnings.push_back("ASAR extraction omitted lower-priority materialization at "+prts::path_utf8(cur.path)+" because the remaining byte/file budget was insufficient");}
-            if(report.wxapkg_extract.budget_exhausted){graph.truncated=true;++graph.skipped_limits;graph.warnings.push_back("wxapkg extraction omitted lower-priority materialization at "+prts::path_utf8(cur.path)+" because the remaining byte/file budget was insufficient");}
-            if(report.renpy_rpa_extract.budget_exhausted){graph.truncated=true;++graph.skipped_limits;graph.warnings.push_back("Ren'Py RPA extraction omitted lower-priority materialization at "+prts::path_utf8(cur.path)+" because the remaining byte/file budget was insufficient");}
-            for(const auto&finding:report.findings){
-                if(finding.family!="Artifact extraction budget"||finding.state!="REFUSED")continue;
-                graph.truncated=true;++graph.skipped_limits;auto it=finding.fields.find("ecosystem");
-                graph.warnings.push_back("recursive extraction preflight refused "+(it==finding.fields.end()?std::string("container"):it->second)+" at depth "+std::to_string(cur.depth)+" because the remaining byte/file budget was insufficient");
-            }
+            note_recursive_extraction_budget(report,graph,cur.path,cur.depth);
             if(cur.depth>=graph.max_depth&&has_extractable_child_container(report)){
                 graph.truncated=true;++graph.skipped_limits;graph.warnings.push_back("recursive depth limit reached at "+prts::path_utf8(cur.path)+"; deeper extraction was not materialized");
             }
