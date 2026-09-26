@@ -33,7 +33,7 @@ auto-refirst directory --json
 auto-refirst file --extract --recursive --json
 ```
 
-默认静态模式可自动物化有界高价值工件。`--extract` 增加完整容器/resource 展开和重型静态分析。递归工件模式不会执行子工件。
+默认静态模式可自动物化有界高价值工件，包括已验证 .NET `ManifestResource` 的原始嵌入字节。`--extract` 增加完整容器/resource 展开和重型静态分析；.NET 资源仍保持原样，不做解压、解密或执行。递归工件模式不会执行子工件。
 
 `--json` 的现有输出形状保持兼容：单文件通常是一个 report object，`--extract --recursive` 在产生多个 report 时是顶层 array，而目录分析使用带 `reports` 的 directory envelope。需要稳定集合传输层的调用方可显式使用 `--json --json-envelope`：单文件与递归工件图都统一为 `{ "report_schema_version": "1.0", "reports": [...] }`；目录 JSON 本来就是 envelope，因此保持其现有 directory 字段和 `reports` 数组。该选项是 opt-in，不改变既有 `--json` 输出，也不提升 `report_schema_version`。`--json-envelope` 必须与 `--json` 一起使用，且不适用于 `--search` 的 JSON Lines 模式。
 

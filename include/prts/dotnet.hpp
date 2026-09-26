@@ -97,14 +97,25 @@ struct DotNetInfo {
     ImplicitExecutionInfo implicit_exec;
     std::string error;
 };
+struct DotNetResourceExtractResult {
+    bool success=false,core_only=false,budget_exhausted=false;
+    std::filesystem::path output_dir;
+    std::vector<std::filesystem::path> files;
+    std::uint32_t embedded_count=0,written_count=0,omitted_count=0;
+    std::uint64_t output_bytes=0,omitted_bytes=0;
+    std::vector<std::string> warnings;
+    std::string error;
+};
 struct DotNetExtractResult {
     bool success=false;
     std::filesystem::path symbols_csv,types_csv,members_csv;
     std::uint64_t symbol_count=0,type_count=0,member_count=0;
     std::string error;
+    DotNetResourceExtractResult resource_extract;
 };
 DotNetInfo detect_dotnet(std::span<const std::uint8_t>data,const PeInfo&pe,const std::filesystem::path&path={});
 Finding dotnet_finding(const DotNetInfo&info);
 Finding dotnet_resources_finding(const DotNetInfo&info);
+DotNetResourceExtractResult extract_dotnet_resources(std::span<const std::uint8_t>data,const DotNetInfo&info,const std::filesystem::path&out,bool core_only,std::uint64_t max_output_bytes,std::uint32_t max_output_files);
 DotNetExtractResult extract_dotnet_symbols(const DotNetInfo&info,const std::filesystem::path&out);
 }

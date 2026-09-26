@@ -1,7 +1,10 @@
 #include "prts/dotnet_boundary.hpp"
 
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <vector>
 
 namespace {
@@ -37,6 +40,13 @@ int main(){
     resources.resources={embedded,external,external_file};
     auto resource_finding=prts::dotnet_resources_finding(resources);
     if(resource_finding.state!="CONFIRMED"||resource_finding.variant!="embedded-and-external"||resource_finding.fields["embedded_count"]!="1"||resource_finding.fields["external_reference_count"]!="2"||resource_finding.fields["external_assembly_ref_count"]!="1"||resource_finding.fields["external_file_count"]!="1"||resource_finding.fields["resource_semantics"]!="NOT_ATTEMPTED_STATIC_ONLY"||resource_finding.ranges.size()!=1||resource_finding.ranges.front().coordinate_space!=prts::CoordinateSpace::FILE_OFFSET||resource_finding.ranges.front().basis!=prts::CoordinateBasis::CURRENT_INPUT_FILE||resource_finding.ranges.front().offset!=0x380||resource_finding.ranges.front().size!=64)return 6;
+
+    for(std::size_t i=0;i<64;++i)data[0x380+i]=static_cast<std::uint8_t>(i+1);
+    std::error_code ec;auto resource_dir=std::filesystem::temp_directory_path(ec)/"auto-refirst-dotnet-resources-unit";if(ec)return 7;std::filesystem::remove_all(resource_dir,ec);ec.clear();
+    auto extracted=prts::extract_dotnet_resources(data,resources,resource_dir,false,64,1);
+    if(!extracted.success||extracted.written_count!=1||extracted.output_bytes!=64||extracted.files.size()!=1)return 8;
+    std::ifstream resource_file(extracted.files.front(),std::ios::binary);std::vector<std::uint8_t>resource_bytes((std::istreambuf_iterator<char>(resource_file)),{});if(resource_bytes.size()!=64||resource_bytes.front()!=1||resource_bytes.back()!=64)return 9;
+    std::filesystem::remove_all(resource_dir,ec);ec.clear();auto limited=prts::extract_dotnet_resources(data,resources,resource_dir,true,32,1);if(limited.success||!limited.budget_exhausted||limited.omitted_count!=1||!limited.files.empty())return 10;std::filesystem::remove_all(resource_dir,ec);
 
     auto malformed=pe;malformed.clr.rva=0x4f00;malformed.clr.size=0x80;auto failed=prts::analyze_dotnet_boundary(data,malformed,dotnet);if(failed.state!="FAILED"||failed.boundary_kind!="UNRESOLVED_BOUNDARY")return 3;
 
