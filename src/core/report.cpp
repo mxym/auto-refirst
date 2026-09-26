@@ -1551,7 +1551,7 @@ void render_dotnet_boundary_json(std::ostream&o,const AnalysisReport&r,bool comp
       << ",\"pinvoke_method_count\":" << b.pinvoke_method_count << ",\"native_import_module_count\":" << b.native_import_module_count
       << ",\"native_import_count\":" << b.native_import_count << ",\"native_export_count\":" << b.native_export_count
       << ",\"truncated\":" << (b.truncated?"true":"false") << ",\"execution_refusal\":\"static_only_runtime_not_performed\"";
-    render_cardinality(o,"bridge_methods",b.bridge_methods.size(),method_cap);o << ",\"bridge_methods\":[";
+    o << ','; render_cardinality(o,"bridge_methods",b.bridge_methods.size(),method_cap);o << ",\"bridge_methods\":[";
     for(std::size_t i=0;i<b.bridge_methods.size()&&i<method_cap;++i){if(i)o<<',';const auto&m=b.bridge_methods[i];o<<"{\"token\":"<<m.token<<",\"rva\":"<<m.rva<<",\"file_offset\":"<<m.file_offset<<",\"code_size\":"<<m.code_size<<",\"body_file_backed\":"<<(m.body_file_backed?"true":"false")<<",\"pinvoke\":"<<(m.pinvoke?"true":"false")<<",\"type\":\""<<esc(m.type_name)<<"\",\"name\":\""<<esc(m.name)<<"\",\"import_module\":\""<<esc(m.import_module)<<"\",\"import_name\":\""<<esc(m.import_name)<<"\",\"state\":\""<<esc(m.state)<<"\"}";}
     o << "],";render_cardinality(o,"dependencies",b.dependencies.size(),dependency_cap);o << ",\"dependencies\":[";
     for(std::size_t i=0;i<b.dependencies.size()&&i<dependency_cap;++i){if(i)o<<',';const auto&d=b.dependencies[i];o<<"{\"source\":\""<<esc(d.source)<<"\",\"module\":\""<<esc(d.module)<<"\",\"name\":\""<<esc(d.name)<<"\",\"token\":"<<d.token<<",\"file_offset\":"<<d.file_offset<<",\"offset_space\":\"current_input_file\"}";}
