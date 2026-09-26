@@ -31,6 +31,7 @@ P0 校验：
 - 搜索 UTF-8 路径、ASCII/UTF-16LE 命中偏移、大小写折叠与目录深度；完整解析后撤销无效可执行候选状态、更新字节码格式，以及目录深度截断与跳过明细上界；
 - APK/Hermes child 与 APK/JNI J0-J4 结构关系的有界静态 gate；
 - WebAssembly 目录 import/export 路由：唯一模块+函数正例、同名模块歧义、导出清单有界压缩和截断输入；关系保持 `BOUNDED`，明确不保证运行时模块解析；
+- WebAssembly `linking` / `reloc.*` custom metadata：合成 relocatable module 的 version/subsection/target/count 几何正例、unsupported linking version 与截断 relocation 负例；核心模块仍可确认，metadata 仅报告 bounded/partial，不推断完整 linker 语义；
 - Windows junction/reparse 输出安全（Windows runner）。
 
 ## P1 — source-generated integration

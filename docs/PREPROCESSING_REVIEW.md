@@ -41,6 +41,7 @@
 | P2 · 已实现 | 精确范围内的格式接纳一致性 | 统一的 64 KiB、与文件名无关的低成本路由覆盖 Mach-O（含 universal）、Hermes、Lua 5.1–5.5、JVM Class、CPython 及既有 PE/ELF/容器；`CAFEBABE` 等共享魔数在结构不足时降为低置信度，高置信结论仍由深解析产生。 |
 | P2 · 已实现 | PE 证书区载荷线索 | 对已验证的 Certificate Table 仅做 file-offset 坐标下的有界 DER 遍历；私有企业 OID 后接至少 256 字节 OCTET STRING 时输出 `SUSPECTED` 载荷线索，带精确范围、负证据和后续检查建议，不执行/解密/自动提取。 |
 | P2 · 已实现 | 非标准分层/Polyglot 线索 | 在静态扫描上限内汇总非零偏移的 PDF、Mach-O/JVM、UDF、VHD 以及已知容器标记；至少两种不同格式同时出现时输出 `Layered/polyglot format markers`，附当前输入文件坐标、候选上限、负证据和后续结构检查建议，不将标记当作已验证子工件。 |
+| P2 · 已实现 | Wasm relocatable metadata | 对 `linking` 与 `reloc.*` custom section 做有界版本、subsection、目标 section 和 relocation entry geometry 检查；合法 linking 版本可标记 relocatable module，unsupported/truncated metadata 保留核心模块确认并显式报告 `FAILED`/`PARTIAL`，不推断完整链接语义。 |
 | P2 | 路径与输出公共层 | 逐步统一各提取器的路径编码、输出创建与失败状态；按格式迁移，每次保留现有公开静态用例，避免一次性替换所有文件操作。 |
 | P2 | Wasm 跨文件路由深化 | 对 validated Wasm 的 import(module/name) 与唯一 supplied sibling export 做有界 `BOUNDED` 关系；多目标、截断或运行时模块搜索不明时保持未解析，不把静态目录关系当作实例化成功。 |
 | P2 | 入口/报告/运行时大文件拆分 | 按 CLI、单文件静态管线、工件协调、目录协调和呈现分离；每次拆分验证行为等价与构建成本。禁止以目录名、样本名或已知哈希作为产品规则。 |
