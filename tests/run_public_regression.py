@@ -292,6 +292,9 @@ def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
     spool=unit("auto_refirst_public_directory_report_spool_unit"); assert run([spool]).stdout.strip()=="PASS"
     model=unit("auto_refirst_public_model_trust_unit"); assert run([model]).stdout.strip()=="PASS"
     pyunit=unit("auto_refirst_public_python_bytecode_unit"); p=td/"public.pyc"; p.write_bytes(pyc310())
+    header_probe=run([sys.executable,ROOT/"tests/test_preflight_headers.py",pyunit])
+    assert "[PASS]" in header_probe.stdout,header_probe.stdout
+    log(header_probe.stdout.strip())
     out=run([pyunit,"inspect",p,"1"]).stdout.strip().split("\t",7)
     assert out[0:4]==["1","1","3.10","TIMESTAMP"],out
     bad=td/"bad.pyc"; bad.write_bytes(p.read_bytes()[:10]); out=run([pyunit,"inspect",bad,"1"]).stdout

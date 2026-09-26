@@ -1,5 +1,6 @@
 #include "prts/python_bytecode.hpp"
 #include "prts/python_marshal.hpp"
+#include "prts/preflight.hpp"
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -16,6 +17,10 @@ std::vector<std::uint8_t> read_all(const std::filesystem::path&p){
 int main(int argc,char**argv){
     if(argc<3)return 2;
     const std::string mode=argv[1];auto data=read_all(argv[2]);
+    if(mode=="preflight"){
+        const auto x=prts::probe_preflight_header(data,data.size());
+        std::cout<<x.type_hint<<'\t'<<x.confidence<<'\t'<<x.priority_boost<<'\t'<<x.role<<'\t'<<x.native_executable_hint<<'\n';return 0;
+    }
     if(mode=="inspect"){
         const bool hint=argc>=4&&std::string(argv[3])=="1";auto x=prts::detect_python_bytecode(data,hint);
         std::cout<<(x.candidate?1:0)<<'\t'<<(x.valid?1:0)<<'\t'<<x.magic.version_family<<'\t'<<x.header_kind<<'\t'<<x.marshal_offset<<'\t'<<x.marshal.code_object_count<<'\t'<<x.root.code.size()<<'\t'<<x.error<<'\n';return 0;

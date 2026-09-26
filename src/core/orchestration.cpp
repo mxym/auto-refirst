@@ -103,8 +103,6 @@ bool directory_candidate_better(const DirectoryCandidate&a,const DirectoryCandid
     return path_utf8(a.path)<path_utf8(b.path);
 }
 
-std::uint16_t u16le(const std::vector<unsigned char>& b,std::size_t o){return o+2<=b.size()?std::uint16_t(b[o]|(std::uint16_t(b[o+1])<<8)):0;}
-std::uint32_t u32le(const std::vector<unsigned char>& b,std::size_t o){return o+4<=b.size()?std::uint32_t(b[o]|(std::uint32_t(b[o+1])<<8)|(std::uint32_t(b[o+2])<<16)|(std::uint32_t(b[o+3])<<24)):0;}
 std::string lower_ext(const std::filesystem::path& p){auto s=path_utf8(p.extension());std::transform(s.begin(),s.end(),s.begin(),[](unsigned char c){return char(std::tolower(c));});return s;}
 std::string path_key(const std::filesystem::path& p){std::error_code ec;auto q=std::filesystem::weakly_canonical(p,ec);if(ec)q=std::filesystem::absolute(p,ec);return path_utf8(ec?p.lexically_normal():q.lexically_normal());}
 std::string lower_ascii(std::string s){std::transform(s.begin(),s.end(),s.begin(),[](unsigned char c){return char(std::tolower(c));});return s;}
@@ -233,33 +231,25 @@ DirectoryCandidate preflight_directory_candidate(const std::filesystem::path& pa
     DirectoryCandidate c;c.path=path;c.priority_score=5;c.priority_reasons.push_back("regular files are eligible for bounded priority admission; extension never filters analysis");
     std::error_code ec;c.size=std::filesystem::file_size(path,ec);if(ec){c.size=0;c.readable=false;c.analysis_state="SKIPPED";c.skipped_reason="file size/stat failed: "+error_message_utf8(ec);return c;}
     std::ifstream f(path,std::ios::binary);if(!f){c.readable=false;c.analysis_state="SKIPPED";c.skipped_reason="file cannot be opened for bounded preflight";return c;}
-    constexpr std::size_t cap=64*1024;std::vector<unsigned char>b(static_cast<std::size_t>(std::min<std::uint64_t>(c.size,cap)));if(!b.empty())f.read(reinterpret_cast<char*>(b.data()),static_cast<std::streamsize>(b.size()));b.resize(static_cast<std::size_t>(std::max<std::streamsize>(0,f.gcount())));
-    auto starts=[&](std::initializer_list<unsigned char>x){return b.size()>=x.size()&&std::equal(x.begin(),x.end(),b.begin());};
-    if(b.size()>=64&&b[0]=='M'&&b[1]=='Z'){
-        const auto peoff=static_cast<std::size_t>(u32le(b,0x3c));if(peoff<=b.size()&&b.size()-peoff>=24&&b[peoff]=='P'&&b[peoff+1]=='E'&&b[peoff+2]==0&&b[peoff+3]==0){auto ch=u16le(b,peoff+22);bool dll=(ch&0x2000)!=0;c.type_hint=dll?"PE DLL":"PE executable";c.structural_confidence="high";c.role=dll?"shared_library":"executable_root";add_reason(c,dll?60:100,"bounded PE/COFF header validates in preflight");
+    constexpr std::size_t cap=kPreflightPrefixBytes;std::vector<unsigned char>b(static_cast<std::size_t>(std::min<std::uint64_t>(c.size,cap)));if(!b.empty())f.read(reinterpret_cast<char*>(b.data()),static_cast<std::streamsize>(b.size()));b.resize(static_cast<std::size_t>(std::max<std::streamsize>(0,f.gcount())));
+    const auto header=probe_preflight_header(b,c.size);
+    if(!header.type_hint.empty()){
+        c.preflight_format=header.format;c.format_priority_boost=header.priority_boost;
+        c.type_hint=header.type_hint;c.role=header.role;c.structural_confidence=header.confidence;
+        add_reason(c,header.priority_boost,std::string(header.reason));
+        // This field remains provisional; the full parser/planner recalculates it.
 #ifdef _WIN32
-            c.runtime_eligible=!dll;c.runtime_eligibility_reason=dll?"PE DLL is a sidecar/loadable image, not a direct execution root":"PE executable header is directly runnable by the Windows backend";
-#else
-            c.runtime_eligibility_reason="PE executable is not directly runnable by this platform backend";
+        c.runtime_eligible=header.format==PreflightFormat::PE&&header.native_executable_hint;
+#elif defined(__linux__)
+        c.runtime_eligible=header.format==PreflightFormat::ELF&&header.native_executable_hint;
 #endif
-        }else{c.type_hint="MZ/DOS-like";c.structural_confidence="low";add_reason(c,5,"MZ prefix is only a route hint; PE structure did not fit the bounded preflight");}
-    }else if(starts({0x7f,'E','L','F'})){
-        c.type_hint="ELF";c.structural_confidence="high";std::uint16_t type=0;if(b.size()>=18){if(b[5]==2)type=std::uint16_t((b[16]<<8)|b[17]);else type=u16le(b,16);}bool exec=type==2;bool dyn=type==3;c.role=exec?"executable_root":(dyn?"elf_dynamic_image":"object");add_reason(c,exec?100:(dyn?65:45),"ELF identity and header type validate in bounded preflight");
-#ifdef __linux__
-        c.runtime_eligible=exec;c.runtime_eligibility_reason=exec?"ET_EXEC is directly runnable by the Linux backend":"ELF requires full analysis before deciding direct runtime eligibility";
-#else
-        c.runtime_eligibility_reason="ELF is not directly runnable by this platform backend";
-#endif
-    }else if(starts({0x00,'a','s','m'})){c.type_hint="WebAssembly";c.structural_confidence="high";c.role="bytecode_module";add_reason(c,55,"WebAssembly magic is structurally recognized");}
-    else if(b.size()>=8&&b[0]=='d'&&b[1]=='e'&&b[2]=='x'&&b[3]=='\n'){c.type_hint="DEX";c.structural_confidence="high";c.role="bytecode_module";add_reason(c,55,"DEX header magic/version prefix is recognized for full validation");}
-    else if(starts({'P','K',0x03,0x04})||starts({'P','K',0x05,0x06})||starts({'P','K',0x07,0x08})){c.type_hint="ZIP/container";c.structural_confidence="medium";c.role="container";add_reason(c,50,"ZIP container signature routes later APK/JAR/container validation");}
-    else if(starts({'-','=','=', '-', '-', '=', '=', '-', '-', '=', '=', '-', '-', '=', '=', '-'})){c.type_hint="Unreal IoStore TOC";c.structural_confidence="high";c.role="iostore_toc";add_reason(c,55,"fixed IoStore UTOC magic routes full bounded section and partition validation");}
-    else if(starts({'G','D','P','C'})){c.type_hint="Godot PCK";c.structural_confidence="medium";c.role="container";add_reason(c,50,"Godot PCK magic routes full structural validation");}
-    else if(starts({'#','!'})){c.type_hint="script";c.structural_confidence="medium";c.role="script";add_reason(c,30,"shebang identifies a script; it remains static-only by default");}
-    else{
-        std::size_t printable=0;for(unsigned char x:b)if(x==9||x==10||x==13||(x>=32&&x<127))++printable;if(!b.empty()&&printable*100/b.size()>90){c.type_hint="text";c.role="text";add_reason(c,5,"bounded prefix is predominantly text");}else{c.type_hint="unknown binary";c.role="data";add_reason(c,10,"unknown binary is retained for full static analysis");}
+        c.runtime_eligibility_reason=c.runtime_eligible?"native header is a provisional runtime hint; full validation remains required":"preflight does not establish a direct runtime root for this platform";
+    }else{
+        std::size_t printable=0;for(unsigned char x:b)if(x==9||x==10||x==13||(x>=32&&x<127))++printable;
+        if(!b.empty()&&printable*100/b.size()>90){c.type_hint="text";c.role="text";c.format_priority_boost=5;add_reason(c,5,"bounded prefix is predominantly text");}
+        else{c.type_hint="unknown binary";c.role="data";c.format_priority_boost=10;add_reason(c,10,"unknown binary is retained for full static analysis");}
     }
-    auto ext=lower_ext(path);if(!ext.empty()&&(ext==".exe"||ext==".dll"||ext==".so"||ext==".pck"||ext==".apk"||ext==".jar"||ext==".dex"||ext==".wasm"||ext==".pak"||ext==".utoc"||ext==".ucas"))add_reason(c,2,"filename extension is weak ordering evidence only");
+    auto ext=lower_ext(path);if(!ext.empty()&&(ext==".exe"||ext==".dll"||ext==".so"||ext==".pck"||ext==".apk"||ext==".jar"||ext==".dex"||ext==".wasm"||ext==".pak"||ext==".utoc"||ext==".ucas"||ext==".dylib"||ext==".class"||ext==".hbc"||ext==".luac"||ext==".pyc"))add_reason(c,2,"filename extension is weak ordering evidence only");
     set_tier(c);return c;
 }
 
@@ -275,21 +265,42 @@ void refine_directory_candidate(DirectoryCandidate& c,const AnalysisReport& r){
         return;
     }
     c.analysis_state="ANALYZED";
-    const bool rejected=((c.type_hint=="PE executable"||c.type_hint=="PE DLL")&&!r.pe.valid)
-        ||(c.type_hint=="ELF"&&!r.elf.valid)||(c.type_hint=="WebAssembly"&&!r.wasm.valid)
-        ||(c.type_hint=="DEX"&&!r.dex.valid)||(c.type_hint=="Godot PCK"&&!r.godot.valid)
-        ||(c.type_hint=="Unreal IoStore TOC"&&!r.unreal.iostore.toc_valid);
+    bool rejected=false;
+    switch(c.preflight_format){
+    case PreflightFormat::PE:rejected=!r.pe.valid;break;
+    case PreflightFormat::ELF:rejected=!r.elf.valid;break;
+    case PreflightFormat::MachO:rejected=!r.macho.valid;break;
+    case PreflightFormat::JvmClass:rejected=!r.jvm_class.valid;break;
+    case PreflightFormat::MachOOrJvm:rejected=!r.macho.valid&&!r.jvm_class.valid;break;
+    case PreflightFormat::Hermes:rejected=!r.hermes.valid;break;
+    case PreflightFormat::Lua:rejected=!r.lua.valid;break;
+    case PreflightFormat::PythonBytecode:rejected=!r.python_bytecode.valid;break;
+    case PreflightFormat::Wasm:rejected=!r.wasm.valid;break;
+    case PreflightFormat::Dex:rejected=!r.dex.valid;break;
+    case PreflightFormat::GodotPck:rejected=!r.godot.valid;break;
+    case PreflightFormat::IoStore:rejected=!r.unreal.iostore.toc_valid;break;
+    default:break;
+    }
     if(rejected){
         c.structural_confidence="rejected";c.role="unvalidated_candidate";
-        c.priority_score=5;
-        add_reason(c,0,"full structural validation rejected the preflight route; provisional priority was withdrawn");
+        c.priority_score-=c.format_priority_boost;c.format_priority_boost=0;
+        add_reason(c,0,"full parsing did not confirm the preflight route; provisional format priority was withdrawn");
+    }
+    int confirmed_boost=0;
+    if(r.pe.valid)confirmed_boost=r.pe.dll?60:100;
+    else if(r.elf.valid)confirmed_boost=r.elf.type==2?100:(r.elf.type==3?65:45);
+    else if(r.macho.valid)confirmed_boost=65;
+    else if(r.jvm_class.valid||r.hermes.valid||r.lua.valid||r.python_bytecode.valid||r.wasm.valid||r.dex.valid)confirmed_boost=55;
+    if(confirmed_boost>c.format_priority_boost){
+        add_reason(c,confirmed_boost-c.format_priority_boost,"full structural validation raises the bounded format priority; header hints are not counted twice");
+        c.format_priority_boost=confirmed_boost;
     }
     if(r.pe.valid){c.type_hint=r.pe.dll?"PE DLL":"PE executable";c.structural_confidence="validated";c.role=r.pe.dll?"shared_library":"executable_root";
     }
     if(r.elf.valid){c.type_hint="ELF";c.structural_confidence="validated";const bool exec_mode=file_has_execute_permission(c.path);bool direct=r.elf.type==2||(r.elf.type==3&&(!r.elf.interpreter.empty()||(r.elf.entry!=0&&exec_mode)));c.role=direct?"executable_root":(r.elf.type==1?"object":"shared_library");if(direct)add_reason(c,40,"full ELF validation confirms a directly executable root (ET_EXEC, interpreter-backed PIE, or executable nonzero-entry static/packed PIE)");
     }
     auto validated_format=[&](bool valid,const char*kind,const char*role){if(valid){c.type_hint=kind;c.structural_confidence="validated";c.role=role;}};
-    if(r.macho.valid){validated_format(true,"Mach-O","native_image");add_reason(c,55,"validated Mach-O native image structure");}
+    if(r.macho.valid)validated_format(true,"Mach-O","native_image");
     // Containers may also be embedded in native inputs; preserve native roles.
     if(!r.pe.valid&&!r.elf.valid&&!r.macho.valid){
         validated_format(r.wasm.valid,"WebAssembly","bytecode_module");

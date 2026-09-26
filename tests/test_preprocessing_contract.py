@@ -8,6 +8,7 @@ import sys
 import tempfile
 
 from run_public_regression import minimal_elf, minimal_pe
+from test_preflight_headers import large_dos_pe
 
 
 def main() -> None:
@@ -92,6 +93,11 @@ def main() -> None:
         assert not stale.exists()
         assert result["artifact_materialization"]["scope"] == "automatic_static_preparation"
         assert result["artifact_materialization"]["materialized_bytes"] == 0
+        late_header=root/'late-header';late_header.mkdir()
+        (late_header/'native.bin').write_bytes(large_dos_pe())
+        state=json.loads(run(late_header,'--json'))['directory_plan']['file_states'][0]
+        assert state['type_hint']=='PE executable' and state['structural_confidence']=='validated',state
+        assert state['score']>=100,state
     print("[PASS] UTF-8 search/offsets/depth + full-analysis directory states + bounded traversal diagnostics")
 
 
