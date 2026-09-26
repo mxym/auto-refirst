@@ -192,6 +192,7 @@ add_executable(auto_refirst
     src/extract/unity_engine_version.cpp
     src/extract/unity_registration_profile.cpp
     src/extract/dotnet.cpp
+    src/extract/dotnet_resources.cpp
     src/extract/dotnet_boundary.cpp
     src/extract/dotnet_native.cpp
     src/extract/dotnet_loader.cpp
@@ -474,6 +475,7 @@ target_include_directories(auto_refirst_public_unity_generic_class_profile_unit 
 add_executable(auto_refirst_public_dotnet_boundary_unit EXCLUDE_FROM_ALL
     tests/dotnet_boundary_unit.cpp
     src/extract/dotnet_boundary.cpp
+    src/extract/dotnet_resources.cpp
 )
 target_include_directories(auto_refirst_public_dotnet_boundary_unit PRIVATE include)
 
