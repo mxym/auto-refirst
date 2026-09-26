@@ -73,6 +73,24 @@ Windows 多配置生成器在上述命令后增加 `--config Release`。安装 g
 build 暂存到临时 prefix，逐字节核对 binary、README、NOTICE、项目许可证及
 `LICENSES/`，并拒绝额外文件、目录和链接。
 
+## Optional Qt evidence workspace
+
+桌面拖放界面默认关闭，不影响无 Qt 的 CLI 构建。需要 Qt 6 Widgets（优先）
+或 Qt 5 Widgets 开发包及其 CMake package 配置时，显式打开：
+
+```sh
+cmake -S . -B build-gui -DAUTO_REFIRST_BUILD_QT_UI=ON
+cmake --build build-gui --target auto_refirst_gui --parallel
+```
+
+Windows 多配置生成器在 build 命令增加 `--config Release`。界面会串行调用
+现有 `auto-refirst` CLI，使用 `--json --json-envelope --json-errors`，可选
+`--extract`、`--run`、`--apply`、目录预算、工件预算、搜索和 `wxid`，并提供
+拖放队列、取消、超时、报告摘要、下一步提示和限制提示。运行时与写回默认关闭，
+开启前需要确认；界面支持中英切换。无 Qt 的机器保持
+`AUTO_REFIRST_BUILD_QT_UI=OFF`，或
+运行不依赖 Qt 的 `python3 tests/check_qt_ui_contract.py`。
+
 ## Sanitizer smoke
 
 GCC/Clang：

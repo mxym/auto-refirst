@@ -72,6 +72,23 @@ cmake --build build --parallel
 
 详细能力和边界见 [docs/CAPABILITIES.md](docs/CAPABILITIES.md)。
 
+## 可选 Qt 拖放界面
+
+需要桌面样本队列时，可显式启用 Qt Widgets 界面：
+
+```sh
+cmake -S . -B build-gui -DAUTO_REFIRST_BUILD_QT_UI=ON
+cmake --build build-gui --target auto_refirst_gui --parallel
+./build-gui/auto-refirst-gui
+```
+
+界面支持拖放文件/目录、串行分析、取消/超时、JSON 证据摘要、partial/预算
+限制提示，以及打开报告和输出目录。基础页覆盖静态展开、递归报告、运行模式、
+写回授权和超时；高级页覆盖目录预算、`--run-all`、工件预算、搜索、`wxid` 和
+自定义工件目录。它复用现有 CLI，不复制解析器；运行时与写回默认关闭并在开启
+前确认。界面支持中英切换，Qt 构建选项默认为 OFF，完整说明见
+[docs/GUI.md](docs/GUI.md)。
+
 ## RC.2 工作进展
 
 已经纳入公开能力合同：
