@@ -33,6 +33,9 @@ struct WasmCustomSection {
     std::string name;
     std::uint64_t offset=0,size=0;
 };
+struct WasmProducerInfo {
+    std::string field,name,version;
+};
 struct WasmDataSegment {
     std::uint32_t index=0,memory_index=0;
     bool passive=false,offset_known=false;
@@ -40,7 +43,7 @@ struct WasmDataSegment {
     std::uint64_t data_offset=0,size=0;
 };
 struct WasmInfo {
-    bool candidate=false,valid=false,type_parse_complete=true,name_parse_complete=true,data_parse_complete=true;
+    bool candidate=false,valid=false,type_parse_complete=true,name_parse_complete=true,producer_parse_complete=true,data_parse_complete=true;
     std::uint32_t version=0;
     std::uint32_t section_count=0,imported_function_count=0,defined_function_count=0,named_function_count=0;
     bool has_data_count=false,has_start=false,start_imported=false,start_exported=false;
@@ -53,6 +56,8 @@ struct WasmInfo {
     std::vector<WasmExport> exports;
     std::vector<WasmFunction> functions;
     std::vector<WasmCustomSection> custom_sections;
+    std::vector<WasmProducerInfo> producers;
+    std::uint32_t producer_field_count=0,producer_value_count=0;
     std::vector<WasmDataSegment> data_segments;
     std::vector<std::string> string_hints;
     std::vector<std::string> dwarf_sections;

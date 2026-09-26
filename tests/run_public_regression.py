@@ -215,6 +215,9 @@ def p0_formats(binary: pathlib.Path, td: pathlib.Path) -> None:
         assert hermes["valid"] and hermes["parse_complete"] and hermes["version"]==version
         assert hermes["state"]=="CONFIRMED" and not j["runtime"]["requested"]
     log("[PASS P0] PE/ELF/JVM/DEX/Wasm/Lua/Hermes static format smoke + Lua 5.3 long-string size_t form")
+    cp=run([sys.executable,ROOT/"tests/test_wasm_producers.py",binary],timeout=180)
+    assert "[PASS]" in cp.stdout,cp.stdout
+    log("[PASS P0] bounded WebAssembly producers metadata evidence and malformed/oversized boundaries")
     cp=run([sys.executable,ROOT/"tests/test_hermes_apk.py",binary,"--smoke"],timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log("[PASS P0] APK/ZIP exact Hermes content-child route")
