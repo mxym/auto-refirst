@@ -187,6 +187,7 @@ add_executable(auto_refirst
     src/extract/dotnet.cpp
     src/extract/dotnet_boundary.cpp
     src/extract/dotnet_native.cpp
+    src/extract/dotnet_loader.cpp
     src/extract/wxapkg.cpp
     src/extract/asar.cpp
     src/extract/autoit.cpp
