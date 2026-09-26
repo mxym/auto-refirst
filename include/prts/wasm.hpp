@@ -56,6 +56,8 @@ struct WasmInfo {
     std::vector<WasmExport> exports;
     std::vector<WasmFunction> functions;
     std::vector<WasmCustomSection> custom_sections;
+    bool linking_section_present=false,linking_metadata_valid=false,relocatable=false,relocation_parse_complete=true;
+    std::uint32_t linking_version=0,relocation_section_count=0,relocation_entry_count=0;
     std::vector<WasmProducerInfo> producers;
     std::uint32_t producer_field_count=0,producer_value_count=0;
     std::vector<WasmDataSegment> data_segments;

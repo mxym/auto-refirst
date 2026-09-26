@@ -218,6 +218,9 @@ def p0_formats(binary: pathlib.Path, td: pathlib.Path) -> None:
     cp=run([sys.executable,ROOT/"tests/test_wasm_producers.py",binary],timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log("[PASS P0] bounded WebAssembly producers metadata evidence and malformed/oversized boundaries")
+    cp=run([sys.executable,ROOT/"tests/test_wasm_reloc_metadata.py",binary],timeout=180)
+    assert "[PASS]" in cp.stdout,cp.stdout
+    log("[PASS P0] bounded WebAssembly linking/relocatable metadata and malformed boundaries")
     cp=run([sys.executable,ROOT/"tests/test_hermes_apk.py",binary,"--smoke"],timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log("[PASS P0] APK/ZIP exact Hermes content-child route")
