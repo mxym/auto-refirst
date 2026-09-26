@@ -224,6 +224,9 @@ def p0_formats(binary: pathlib.Path, td: pathlib.Path) -> None:
     cp=run([sys.executable,ROOT/"tests/test_pe_loader_surface.py",binary],timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log("[PASS P0] bounded PE custom-loader surface and sparse resolver negative")
+    cp=run([sys.executable,ROOT/"tests/test_manual_resolver_fallback.py",binary],timeout=180)
+    assert "[PASS]" in cp.stdout,cp.stdout
+    log("[PASS P0] bounded no-.pdata manual API resolver entry-window fallback")
     cp=run([sys.executable,ROOT/"tests/test_pe_delay_imports.py",binary],timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log("[PASS P0] bounded PE delay-load descriptors/thunks and malformed boundaries")
