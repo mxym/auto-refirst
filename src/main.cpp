@@ -597,7 +597,8 @@ struct PendingArtifact { std::filesystem::path path,parent,root_input; std::stri
 bool has_extractable_child_container(const prts::AnalysisReport&r){
     return r.pyinstaller.valid||r.godot.valid||r.autoit.valid||r.renpy_rpa.valid||r.renpy_rpyc.valid||
            (r.wxapkg.valid&&!r.wxapkg.entries.empty())||r.asar.valid||r.apk.valid||r.jar.valid||
-           !r.dotnet_extract.resource_extract.files.empty()||(r.nuitka.valid&&(r.nuitka.onefile||r.nuitka.decompression_limited));
+           !r.dotnet_extract.resource_extract.files.empty()||!r.dotnet_bundle_extract.files.empty()||
+           (r.nuitka.valid&&(r.nuitka.onefile||r.nuitka.decompression_limited));
 }
 
 std::vector<ArtifactCandidate> extracted_artifacts(const prts::AnalysisReport&r){
@@ -613,6 +614,7 @@ std::vector<ArtifactCandidate> extracted_artifacts(const prts::AnalysisReport&r)
     for(const auto&p:r.apk_extract.files)add(p,"extracted:apk");
     for(const auto&p:r.jar_extract.files)add(p,"extracted:jar");
     for(const auto&p:r.dotnet_extract.resource_extract.files)add(p,"extracted:dotnet-managed-resource");
+    for(const auto&p:r.dotnet_bundle_extract.files)add(p,"extracted:dotnet-bundle");
     // Standalone Nuitka constant manifests are analysis derivatives, not child input artifacts.
     if(r.nuitka.onefile)for(const auto&p:r.nuitka_extract.files)add(p,"extracted:nuitka-onefile");
     std::sort(out.begin(),out.end(),[](const auto&a,const auto&b){return prts::path_utf8(a.path)<prts::path_utf8(b.path);});return out;
@@ -636,6 +638,7 @@ void note_recursive_extraction_budget(prts::AnalysisReport&report,prts::Artifact
     note(report.wxapkg_extract.budget_exhausted,"wxapkg extraction omitted lower-priority materialization at "+prts::path_utf8(input)+" because the remaining byte/file budget was insufficient");
     note(report.renpy_rpa_extract.budget_exhausted,"Ren'Py RPA extraction omitted lower-priority materialization at "+prts::path_utf8(input)+" because the remaining byte/file budget was insufficient");
     note(report.dotnet_extract.resource_extract.budget_exhausted,".NET managed resource extraction omitted lower-priority materialization at "+prts::path_utf8(input)+" because the remaining byte/file budget was insufficient");
+    note(report.dotnet_bundle_extract.budget_exhausted,".NET single-file bundle extraction omitted lower-priority materialization at "+prts::path_utf8(input)+" because the remaining byte/file budget was insufficient");
     for(const auto&finding:report.findings){
         if(finding.family!="Artifact extraction budget"||finding.state!="REFUSED")continue;
         const auto it=finding.fields.find("ecosystem");
@@ -936,6 +939,24 @@ void materialize_dotnet_resources(prts::AnalysisReport&report,const std::filesys
     const auto&x=report.dotnet_extract.resource_extract;prts::Finding f;f.kind="artifact";f.family=".NET managed resource materialization";f.state=x.budget_exhausted?"PARTIAL":(x.success?"CONFIRMED":"FAILED");f.evidence.push_back(x.success?"validated embedded managed resource bytes were materialized without decoding or execution":"validated managed resource materialization was incomplete");f.fields["output_dir"]=prts::path_utf8(x.output_dir);f.fields["embedded_count"]=std::to_string(x.embedded_count);f.fields["written_count"]=std::to_string(x.written_count);f.fields["output_bytes"]=std::to_string(x.output_bytes);f.fields["omitted_count"]=std::to_string(x.omitted_count);f.fields["omitted_bytes"]=std::to_string(x.omitted_bytes);f.fields["source_decompression"]="false";f.fields["source_decryption"]="false";f.fields["runtime_execution"]="false";for(std::size_t n=0;n<x.warnings.size()&&n<16;n++)f.negative_evidence.push_back(x.warnings[n]);if(!x.error.empty())f.negative_evidence.push_back(x.error);if(x.budget_exhausted)f.negative_evidence.push_back("resource output was bounded by the active artifact byte/file budget");f.suggested_actions={"inspect materialized resource bytes as independent static inputs","analyze embedded DLL/EXE children only after validating their own format"};report.findings.push_back(std::move(f));
 }
 
+void materialize_dotnet_bundle(prts::AnalysisReport&report,const Options&opt,std::span<const std::uint8_t>data,std::uint64_t&extract_bytes_left,std::uint32_t&extract_files_left){
+    if(!report.dotnet_bundle.valid||report.dotnet_bundle.entries.empty())return;
+    std::uint64_t declared_bytes=0;for(const auto&e:report.dotnet_bundle.entries)declared_bytes=sat_add(declared_bytes,e.size);
+    const auto declared_files=cap_count(report.dotnet_bundle.entries.size());
+    if(!opt.extract&&opt.suppress_auto_materialization){
+        report.materialization.partial=true;report.materialization.omitted_count=sat_add(report.materialization.omitted_count,declared_files);report.materialization.omitted_bytes=sat_add(report.materialization.omitted_bytes,declared_bytes);report.materialization.reasons.push_back(".NET single-file bundle materialization deferred by the directory aggregate artifact budget; rerun this file directly for its normal single-file contract");report.dotnet_bundle_extract.core_only=true;report.dotnet_bundle_extract.omitted_count=declared_files;report.dotnet_bundle_extract.omitted_bytes=declared_bytes;report.dotnet_bundle_extract.error="automatic .NET bundle materialization was deferred by the directory aggregate artifact budget";return;
+    }
+    auto out=container_output_dir(report,"dotnet-bundle");if(!prepare_container_output(report,out,".NET single-file bundle"))return;report.dotnet_bundle_extract.output_dir=out;
+    if(opt.extract){
+        if(declared_bytes>extract_bytes_left||declared_files>extract_files_left){prts::Finding f;f.kind="safety";f.family="Artifact extraction budget";f.state="REFUSED";f.evidence.push_back("validated .NET single-file bundle members were not materialized because declared output exceeds the recursive extraction budget");f.fields["ecosystem"]=".NET single-file bundle";f.fields["declared_bytes"]=std::to_string(declared_bytes);f.fields["declared_files"]=std::to_string(declared_files);f.fields["remaining_bytes"]=std::to_string(extract_bytes_left);f.fields["remaining_files"]=std::to_string(extract_files_left);report.findings.push_back(std::move(f));report.dotnet_bundle_extract.core_only=false;report.dotnet_bundle_extract.budget_exhausted=true;report.dotnet_bundle_extract.omitted_count=declared_files;report.dotnet_bundle_extract.omitted_bytes=declared_bytes;report.dotnet_bundle_extract.error="declared .NET bundle output exceeds the active artifact byte/file budget";return;}
+        extract_bytes_left-=declared_bytes;extract_files_left-=declared_files;report.dotnet_bundle_extract=prts::extract_dotnet_bundle(data,report.dotnet_bundle,out,false,declared_bytes,declared_files);
+    }else{
+        const auto [bytes,files]=auto_core_budget(opt);report.dotnet_bundle_extract=prts::extract_dotnet_bundle(data,report.dotnet_bundle,out,true,bytes,files);
+        const auto&x=report.dotnet_bundle_extract;if(x.omitted_count){report.materialization.partial=true;report.materialization.omitted_count=sat_add(report.materialization.omitted_count,x.omitted_count);report.materialization.omitted_bytes=sat_add(report.materialization.omitted_bytes,x.omitted_bytes);report.materialization.reasons.push_back(x.budget_exhausted?".NET single-file bundle AUTO_CORE budget omitted one or more lower-priority members":".NET single-file bundle contains compressed members that were not decompressed");}
+    }
+    const auto&x=report.dotnet_bundle_extract;prts::Finding f;f.kind="artifact";f.family=".NET single-file bundle materialization";f.state=(x.budget_exhausted||x.compressed_omitted_count||!x.success)?"PARTIAL": "CONFIRMED";f.evidence.push_back(x.file_count?"validated uncompressed .NET single-file bundle members were materialized without executing the application":"validated .NET single-file bundle members were not materialized");f.fields["output_dir"]=prts::path_utf8(x.output_dir);f.fields["file_count"]=std::to_string(x.file_count);f.fields["output_bytes"]=std::to_string(x.output_bytes);f.fields["omitted_count"]=std::to_string(x.omitted_count);f.fields["omitted_bytes"]=std::to_string(x.omitted_bytes);f.fields["compressed_omitted_count"]=std::to_string(x.compressed_omitted_count);f.fields["core_only"]=x.core_only?"true":"false";f.fields["source_decompression"]="false";f.fields["source_decryption"]="false";f.fields["runtime_execution"]="false";for(std::size_t n=0;n<x.warnings.size()&&n<16;n++)f.negative_evidence.push_back(x.warnings[n]);if(!x.error.empty())f.negative_evidence.push_back(x.error);if(x.budget_exhausted)f.negative_evidence.push_back("bundle output was bounded by the active artifact byte/file budget");if(x.compressed_omitted_count)f.negative_evidence.push_back("compressed bundle members were left for a decompressor-aware follow-up");f.suggested_actions={"analyze materialized managed assemblies, native runtime, deps, and runtimeconfig files separately","use a Brotli-aware follow-up when compressed bundle members are required"};report.findings.push_back(std::move(f));
+}
+
 void record_pyinstaller_materialization_finding(prts::AnalysisReport&report,const Options&opt){
     const auto&x=report.pyinstaller_extract;if(x.output_dir.empty())return;prts::Finding f;f.kind="artifact";f.family="PyInstaller automatic materialization";f.state=x.budget_exhausted?"PARTIAL":(x.success?"CONFIRMED":"FAILED");f.variant=x.mode==prts::PyInstExtractMode::AutoCore?"AUTO_CORE":"BULK_EXPLICIT";
     if(x.success)f.evidence.push_back(x.mode==prts::PyInstExtractMode::AutoCore?"validated CArchive automatically materialized reverse-ready Python user/bootstrap/PYZ artifacts under the per-input artifact root":"--extract materialized the complete supported PyInstaller container payload under the same per-input artifact root");
@@ -1016,6 +1037,11 @@ void register_container_artifacts(prts::AnalysisReport&report,const std::filesys
         else add(p,unity_metadata?"unity_il2cpp_metadata":"apk_member",unity_metadata?"il2cpp_metadata":(code?"analysis_child":(manifest?"manifest":"container_member")),"Android APK",code?"HIGH":(manifest?"ANALYSIS":"BULK"));
     }
     for(const auto&p:report.jar_extract.files){auto r=reltext(p,report.jar_extract.output_dir);const bool code=r.ends_with(".class")||r.ends_with(".jar")||r.ends_with(".zip");const bool manifest=r=="meta-inf/manifest.mf";add(p,"jar_member",code?"analysis_child":(manifest?"manifest":"container_member"),"Java/JVM archive",code?"HIGH":(manifest?"ANALYSIS":"BULK"));}
+    for(const auto&p:report.dotnet_bundle_extract.files){
+        const auto r=reltext(p,report.dotnet_bundle_extract.output_dir);const auto it=std::find_if(report.dotnet_bundle.entries.begin(),report.dotnet_bundle.entries.end(),[&](const auto&e){return lower(e.relative_path)==r;});
+        const auto type=it==report.dotnet_bundle.entries.end()?std::uint8_t{0}:it->type;const bool managed=type==1;const bool native=type==2;const bool metadata=type==3||type==4;const bool symbols=type==5;
+        add(p,"dotnet_bundle_member",managed?"managed_assembly":(native?"native_binary":(metadata?"runtime_metadata":(symbols?"symbols":"container_member"))),".NET single-file bundle",managed||native?"HIGH":(metadata?"ANALYSIS":"BULK"));
+    }
     for(const auto&p:report.nuitka_extract.files){auto r=reltext(p,report.nuitka_extract.output_dir);const bool main=r=="main.bin"||r=="__main__.bin"||r.ends_with(".exe");const bool map=r.ends_with(".nuitka-const.txt");add(p,"nuitka_member",main?"main_payload":(map?"analysis_map":"container_member"),"Nuitka",main?"HIGH":(map?"ANALYSIS":"BULK"));}
     std::set<std::string>godot_validated_native;for(const auto&b:report.godot.gdextensions)for(const auto&l:b.libraries)if(l.child_validated&&!l.matched_child_path.empty()){auto q=lower(l.matched_child_path);if(q.rfind("res://",0)==0)q.erase(0,6);godot_validated_native.insert(q);}
     for(const auto&p:report.godot_extract.files){auto r=reltext(p,report.godot_extract.output_dir);const bool code=r.ends_with(".gdc")||r.ends_with(".gd")||r.ends_with(".gdextension")||r=="project.binary"||r=="project.godot";const bool native=godot_validated_native.count(r)!=0;add(p,"godot_member",native?"native_extension":(code?"script_or_project":"container_member"),"Godot PCK",(code||native)?"HIGH":"BULK");if(r.ends_with(".gdc"))for(const auto*suf:{".godot-script-info.json",".godot-identifiers.csv",".godot-constants.csv",".godot-lines.csv",".godot-tokens.csv"}){auto q=prts::path_with_ascii_suffix(p,suf);register_artifact_file(report,q,"gdscript_analysis","analysis_map","Godot GDScript",p,"analysis_of","ANALYSIS");}}
@@ -1195,7 +1221,7 @@ void integrate_apk_flutter_aot_delivery(prts::AnalysisReport&report){
 }
 
 void cleanup_empty_container_outputs(const prts::AnalysisReport&report){
-    static constexpr std::string_view leaves[]={"renpy/rpa","renpy/rpyc","wxapkg","asar","autoit","apk","jar","nuitka","godot","dotnet-resources"};
+    static constexpr std::string_view leaves[]={"renpy/rpa","renpy/rpyc","wxapkg","asar","autoit","apk","jar","nuitka","godot","dotnet-resources","dotnet-bundle"};
     std::error_code ec;
     for(auto leaf:leaves){auto p=container_output_dir(report,leaf);ec.clear();std::filesystem::remove(p,ec);}
     auto renpy=report.materialization.root/prts::path_from_utf8("static")/prts::path_from_utf8("renpy");ec.clear();std::filesystem::remove(renpy,ec);
@@ -1590,6 +1616,7 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
 
         report.dotnet_bundle=prts::detect_dotnet_bundle(mapped.bytes(),report.pe,report.elf);
         if(report.dotnet_bundle.candidate)report.findings.push_back(prts::dotnet_bundle_finding(report.dotnet_bundle));
+        if(report.dotnet_bundle.valid)materialize_dotnet_bundle(report,opt,mapped.bytes(),extract_bytes_left,extract_files_left);
         report.native_aot=prts::detect_native_aot(mapped.bytes(),report.pe,report.elf);
         if(report.native_aot.candidate)report.findings.push_back(prts::native_aot_finding(report.native_aot));
 

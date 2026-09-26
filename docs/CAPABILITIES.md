@@ -41,7 +41,7 @@
 - PE/CLR bootstrap import contract：在已验证的 PE import directory 中闭合 `mscoree.dll` 与 `_CorExeMain`/`_CorDllMain`/有限 host API 的关系；对缺少 CLR 目录、缺少标准 bootstrap 或 EXE/DLL 入口不匹配输出 `RVA`/`CURRENT_INPUT_IMAGE` finding，完整且已验证的普通 bootstrap 只作为基线不重复输出。它只描述静态导入面，不解析 CLR host 版本、搜索路径、调用顺序或运行时绑定。
 - PE custom-loader surface：将有界 DLL/export/virtual-memory resolver imports、闭合的重定位块几何、TLS 预入口和入口段权限组合为低置信度 triage route；仅在多项 loader-facing 信号同时成立时输出 `SUSPECTED`/`LIKELY`，帮助定位反射式 loader、改写 DLL 或保护器入口。普通 `LoadLibrary`/`GetProcAddress`、单独重定位目录和插件宿主形状不会单独升级；结果不证明手动映射、保护器身份、运行时搜索路径或最终内存镜像。
 - .NET managed resources：在已验证的 `ManifestResource`/CLR resources 目录上列出嵌入资源的精确文件偏移、总字节数以及外部 `AssemblyRef`/`File`/`ExportedType` 实现关系，帮助先定位内嵌 DLL、配置和二进制 payload；默认静态模式和 `--extract` 都可在各自预算内原样物化嵌入字节并接入子工件图，资源名称不会被当作类型或执行证明，解压、解密和 CLR 资源语义保持静态未决。
-- .NET single-file bundle v2/v6 manifest/member geometry与 Linux NativeAOT section/table evidence；识别结果不等同于 IL 反混淆或源码恢复。
+- .NET single-file bundle v2/v6 manifest/member geometry与 Linux NativeAOT section/table evidence；已验证的未压缩 bundle 成员会在默认 AUTO_CORE 或 `--extract` 预算内原样物化并接入子工件图，成员路径、类型和压缩遗漏都会进入报告；v6 Brotli 压缩成员只保留边界与遗漏状态，不伪造解压结果。识别结果不等同于 IL 反混淆或源码恢复。
 - Hermes HBC v89/v96/v98 的 header/table/function/string/opcode/debug/footer 完整性与有界提取，并可由 APK content entry 进入静态子分析；不声明 JavaScript 源码恢复或 runtime loading。
 - CPython `.pyc`、marshal、opcode、扩展模块、Cython/frozen/static/runtime 参考比较；PyInstaller/Nuitka 负责打包层与高价值 Python 子工件。
 

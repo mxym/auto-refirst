@@ -279,7 +279,7 @@ class Runner:
         self.generated_bytes = 0
         self.cases = 0
 
-    def run(self, name: str, data: bytes) -> dict:
+    def run(self, name: str, data: bytes, *extra: str, inspect=None) -> dict:
         self.generated_bytes += len(data)
         assert self.generated_bytes < GENERATED_LIMIT, self.generated_bytes
         self.cases += 1
@@ -288,7 +288,7 @@ class Runner:
         sidecar = Path(str(path) + ".auto-refirst")
         try:
             completed = subprocess.run(
-                [str(self.cli), str(path), "--json"],
+                [str(self.cli), str(path), *extra, "--json"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -303,7 +303,10 @@ class Runner:
                 completed.stdout[-2000:],
                 completed.stderr[-4000:],
             )
-            return json.loads(completed.stdout)
+            report = json.loads(completed.stdout)
+            if inspect is not None:
+                inspect(report)
+            return report
         finally:
             path.unlink(missing_ok=True)
             if sidecar.is_symlink():
@@ -345,6 +348,30 @@ def run_suite(runner: Runner) -> None:
         assert bundle["valid"] and bundle["state"] == "CONFIRMED", (label, bundle)
         assert bundle["version"] == version and bundle["file_count"] == 4, bundle
         assert bundle["compressed_file_count"] == 0, bundle
+
+    def inspect_bundle_extraction(report: dict) -> None:
+        extraction = report["dotnet_bundle"]["extraction"]
+        assert extraction["success"] and not extraction["core_only"], extraction
+        assert extraction["file_count"] == 4 and extraction["output_bytes"] > 0, extraction
+        output = Path(extraction["output_dir"])
+        assert (output / "A.dll").read_bytes() == b"tiny-managed"
+        assert (output / "B.bin").read_bytes() == b"tiny-native"
+        assert (output / "app.deps.json").read_bytes() == b'{"deps":{}}'
+        assert (output / "app.runtimeconfig.json").read_bytes() == b'{"runtimeOptions":{}}'
+
+    runner.run("bundle-v6-extract.exe", v6, "--extract", inspect=inspect_bundle_extraction)
+
+    compressed = changed(
+        v6,
+        lambda data: p64(data, v6_meta["entries"][0]["compressed_field"], v6_meta["entries"][0]["size"] - 1),
+    )
+
+    def inspect_compressed_extraction(report: dict) -> None:
+        extraction = report["dotnet_bundle"]["extraction"]
+        assert not extraction["success"] and extraction["compressed_omitted_count"] == 1, extraction
+        assert extraction["file_count"] == 3, extraction
+
+    runner.run("bundle-v6-compressed-extract.exe", compressed, "--extract", inspect=inspect_compressed_extraction)
 
     native_result = runner.run("native-aot.elf", native)["native_aot"]
     assert native_result["valid"] and native_result["state"] == "CONFIRMED", native_result

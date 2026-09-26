@@ -1,7 +1,9 @@
 #include "prts/dotnet_native.hpp"
+#include "prts/path_utf8.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <fstream>
 #include <limits>
 #include <optional>
 #include <set>
@@ -79,6 +81,13 @@ const char* type_name(std::uint8_t t){
     return t<6?names[t]:"invalid";
 }
 DotNetBundleInfo bundle_fail(DotNetBundleInfo i,std::string e){i.valid=false;i.state="FAILED";i.error=std::move(e);return i;}
+std::uint64_t sat_add_bundle(std::uint64_t a,std::uint64_t b){return b>(std::numeric_limits<std::uint64_t>::max)()-a?(std::numeric_limits<std::uint64_t>::max)():a+b;}
+void note_bundle_warning(DotNetBundleExtractResult&out,std::string text){if(out.warnings.size()<128)out.warnings.push_back(std::move(text));}
+bool bundle_path_component_safe(const std::filesystem::path&root,const std::filesystem::path&relative,std::string&error){
+    auto current=root;std::error_code ec;for(const auto&part:relative){if(part.empty()||part==std::filesystem::path("."))continue;current/=part;auto st=std::filesystem::symlink_status(current,ec);if(ec&&ec!=std::errc::no_such_file_or_directory){error="cannot inspect .NET bundle output path: "+prts::error_message_utf8(ec);return false;}if(st.type()==std::filesystem::file_type::symlink){error="refusing .NET bundle output symlink: "+prts::path_utf8(current);return false;}if(st.type()!=std::filesystem::file_type::not_found&&st.type()!=std::filesystem::file_type::directory){error="refusing non-directory .NET bundle output component: "+prts::path_utf8(current);return false;}if(st.type()==std::filesystem::file_type::not_found){ec.clear();std::filesystem::create_directory(current,ec);if(ec){error="cannot create .NET bundle output directory: "+prts::error_message_utf8(ec);return false;}}ec.clear();}
+    return true;
+}
+int bundle_priority(const DotNetBundleEntry&e){switch(e.type){case 3:case 4:return 1000;case 1:return 900;case 2:return 850;case 5:return 600;default:return 100;} }
 std::optional<std::uint64_t> va_to_file(const ElfInfo&e,std::uint64_t va){
     for(const auto&s:e.segments){if(s.type!=1||va<s.address)continue;const auto delta=va-s.address;if(delta<s.file_size){std::uint64_t out=0;if(add_ok(s.offset,delta,out))return out;}}
     return std::nullopt;
@@ -167,6 +176,52 @@ Finding dotnet_bundle_finding(const DotNetBundleInfo& i){
     if(i.compressed_file_count)f.negative_evidence.push_back("compressed member content was not decompressed or validated; only bundle metadata is reported");
     if(i.trailing_bytes)f.negative_evidence.push_back(i.error);
     f.ranges.push_back(file_offset_range(i.header_offset,i.manifest_end-i.header_offset,".NET bundle header and manifest"));f.suggested_actions={"extract validated bundle member spans","analyze extracted managed assemblies separately"};return f;
+}
+
+DotNetBundleExtractResult extract_dotnet_bundle(std::span<const std::uint8_t> data,const DotNetBundleInfo& info,const std::filesystem::path& output_dir,bool core_only,std::uint64_t max_output_bytes,std::uint32_t max_output_files){
+    DotNetBundleExtractResult out;out.output_dir=output_dir;out.core_only=core_only;
+    if(!info.valid){out.error=".NET bundle manifest is not valid";return out;}
+    if(output_dir.empty()){out.error=".NET bundle output directory is empty";return out;}
+    if(info.entries.empty()){out.error=".NET bundle has no validated members";return out;}
+
+    std::error_code ec;auto root_status=std::filesystem::symlink_status(output_dir,ec);
+    if(ec&&ec!=std::errc::no_such_file_or_directory){out.error="cannot inspect .NET bundle output directory: "+prts::error_message_utf8(ec);return out;}
+    if(!ec&&root_status.type()==std::filesystem::file_type::symlink){out.error="refusing .NET bundle output directory symlink: "+prts::path_utf8(output_dir);return out;}
+    if(!ec&&root_status.type()!=std::filesystem::file_type::not_found&&root_status.type()!=std::filesystem::file_type::directory){out.error="refusing non-directory .NET bundle output path: "+prts::path_utf8(output_dir);return out;}
+    ec.clear();std::filesystem::create_directories(output_dir,ec);if(ec){out.error="cannot create .NET bundle output directory: "+prts::error_message_utf8(ec);return out;}
+
+    std::vector<const DotNetBundleEntry*> ordered;ordered.reserve(info.entries.size());
+    for(const auto&e:info.entries)ordered.push_back(&e);
+    if(core_only)std::stable_sort(ordered.begin(),ordered.end(),[](const auto*a,const auto*b){const auto pa=bundle_priority(*a),pb=bundle_priority(*b);return pa!=pb?pa>pb:a->index<b->index;});
+    std::set<std::string> output_keys;
+
+    for(const auto*entry:ordered){
+        if(entry->offset>data.size()||entry->stored_size>static_cast<std::uint64_t>(data.size())-entry->offset){
+            note_bundle_warning(out,"validated .NET bundle member is outside the input: "+entry->relative_path);++out.omitted_count;out.omitted_bytes=sat_add_bundle(out.omitted_bytes,entry->size);continue;
+        }
+        if(entry->compressed){
+            ++out.compressed_omitted_count;++out.omitted_count;out.omitted_bytes=sat_add_bundle(out.omitted_bytes,entry->size);note_bundle_warning(out,"compressed .NET bundle member was not decompressed: "+entry->relative_path);continue;
+        }
+        if(out.file_count>=max_output_files||entry->size>max_output_bytes-out.output_bytes){
+            out.budget_exhausted=true;++out.omitted_count;out.omitted_bytes=sat_add_bundle(out.omitted_bytes,entry->size);continue;
+        }
+        const auto rel=prts::path_from_utf8(entry->relative_path);if(rel.empty()||rel.is_absolute()||rel.has_root_name()){note_bundle_warning(out,"cannot encode safe .NET bundle member path: "+entry->relative_path);++out.omitted_count;out.omitted_bytes=sat_add_bundle(out.omitted_bytes,entry->size);continue;}
+        auto parent_rel=rel.parent_path();std::string path_error;if(!bundle_path_component_safe(output_dir,parent_rel,path_error)){note_bundle_warning(out,path_error);++out.omitted_count;out.omitted_bytes=sat_add_bundle(out.omitted_bytes,entry->size);continue;}
+        const auto path=output_dir/rel;auto output_key=prts::generic_path_utf8(rel);
+#ifdef _WIN32
+        std::transform(output_key.begin(),output_key.end(),output_key.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+#endif
+        if(!output_keys.insert(output_key).second){note_bundle_warning(out,"case-insensitive .NET bundle member path collision refused: "+entry->relative_path);++out.omitted_count;out.omitted_bytes=sat_add_bundle(out.omitted_bytes,entry->size);continue;}
+        ec.clear();auto st=std::filesystem::symlink_status(path,ec);if(!ec&&st.type()!=std::filesystem::file_type::not_found){if(st.type()==std::filesystem::file_type::symlink||st.type()!=std::filesystem::file_type::regular){note_bundle_warning(out,"refusing non-regular .NET bundle output: "+prts::path_utf8(path));++out.omitted_count;out.omitted_bytes=sat_add_bundle(out.omitted_bytes,entry->size);continue;}}
+        if(entry->size>static_cast<std::uint64_t>((std::numeric_limits<std::streamsize>::max)())){note_bundle_warning(out,".NET bundle member exceeds the local stream write limit: "+entry->relative_path);++out.omitted_count;out.omitted_bytes=sat_add_bundle(out.omitted_bytes,entry->size);continue;}
+        ec.clear();std::ofstream file(path,std::ios::binary|std::ios::trunc);if(!file){note_bundle_warning(out,"cannot create .NET bundle member output: "+prts::path_utf8(path));++out.omitted_count;out.omitted_bytes=sat_add_bundle(out.omitted_bytes,entry->size);continue;}
+        file.write(reinterpret_cast<const char*>(data.data()+static_cast<std::size_t>(entry->offset)),static_cast<std::streamsize>(entry->size));file.flush();if(!file){file.close();ec.clear();std::filesystem::remove(path,ec);note_bundle_warning(out,".NET bundle member output write failed: "+prts::path_utf8(path));++out.omitted_count;out.omitted_bytes=sat_add_bundle(out.omitted_bytes,entry->size);continue;}
+        file.close();ec.clear();const auto written=std::filesystem::file_size(path,ec);if(ec||written!=entry->size){ec.clear();std::filesystem::remove(path,ec);note_bundle_warning(out,".NET bundle member output size mismatch: "+prts::path_utf8(path));++out.omitted_count;out.omitted_bytes=sat_add_bundle(out.omitted_bytes,entry->size);continue;}
+        out.files.push_back(path);++out.file_count;out.output_bytes=sat_add_bundle(out.output_bytes,entry->size);
+    }
+    out.success=out.file_count==info.entries.size()&&!out.budget_exhausted&&out.compressed_omitted_count==0&&out.warnings.empty();
+    if(!out.success&&out.error.empty())out.error=out.compressed_omitted_count?"compressed .NET bundle members require decompression support":"not all validated .NET bundle members were materialized";
+    return out;
 }
 
 NativeAotInfo detect_native_aot(std::span<const std::uint8_t> data,const PeInfo& pe,const ElfInfo& elf){

@@ -962,6 +962,7 @@ std::string render_text(const AnalysisReport& r) {
         o << ".NET single-file bundle:\n"
           << "  state: " << b.state << " version=" << b.major_version << '.' << b.minor_version << " files=" << b.file_count << "\n";
         if(b.valid)o << "  bundle_id: " << b.bundle_id << " compressed_files=" << b.compressed_file_count << " integrity=" << b.integrity_state << "\n";
+        if(!r.dotnet_bundle_extract.output_dir.empty())o << "  members: " << (r.dotnet_bundle_extract.success?"EXTRACTED_VALIDATED":(r.dotnet_bundle_extract.budget_exhausted||r.dotnet_bundle_extract.compressed_omitted_count?"PARTIAL":"FAILED")) << " files=" << r.dotnet_bundle_extract.file_count << " bytes=" << r.dotnet_bundle_extract.output_bytes << " compressed_omitted=" << r.dotnet_bundle_extract.compressed_omitted_count << " output=" << path_utf8(r.dotnet_bundle_extract.output_dir) << "\n";
         if(!b.error.empty())o << "  note: " << b.error << "\n";
     }
     if (r.native_aot.candidate) {
@@ -1595,7 +1596,7 @@ void render_dotnet_native_json(std::ostream&o,const AnalysisReport&r,bool compac
      <<",\"flags\":"<<b.flags<<",\"stored_bytes\":"<<b.stored_bytes<<",\"uncompressed_bytes\":"<<b.uncompressed_bytes
      <<",\"compressed_file_count\":"<<b.compressed_file_count<<",\"integrity_state\":\""<<esc(b.integrity_state)<<"\",\"entries_total\":"<<b.entries.size()<<",\"entries_rendered\":"<<std::min<std::size_t>(b.entries.size(),compact?64:512)<<",\"entries_omitted\":"<<(b.entries.size()-std::min<std::size_t>(b.entries.size(),compact?64:512))<<",\"entries_truncated\":"<<(b.entries.size()>(compact?64:512)?"true":"false")<<",\"entries\":[";
     for(std::size_t x=0;x<b.entries.size()&&x<(compact?64:512);++x){if(x)o<<',';const auto&e=b.entries[x];o<<"{\"index\":"<<e.index<<",\"offset\":"<<e.offset<<",\"size\":"<<e.size<<",\"compressed_size\":"<<e.compressed_size<<",\"stored_size\":"<<e.stored_size<<",\"compressed\":"<<(e.compressed?"true":"false")<<",\"type\":"<<static_cast<unsigned>(e.type)<<",\"type_name\":\""<<esc(e.type_name)<<"\",\"relative_path\":\""<<esc(e.relative_path)<<"\"}";}
-    o<<"]},\n";
+    o<<"],\"extraction\":{\"success\":"<<(r.dotnet_bundle_extract.success?"true":"false")<<",\"core_only\":"<<(r.dotnet_bundle_extract.core_only?"true":"false")<<",\"budget_exhausted\":"<<(r.dotnet_bundle_extract.budget_exhausted?"true":"false")<<",\"output_dir\":\""<<esc(path_utf8(r.dotnet_bundle_extract.output_dir))<<"\",\"file_count\":"<<r.dotnet_bundle_extract.file_count<<",\"output_bytes\":"<<r.dotnet_bundle_extract.output_bytes<<",\"omitted_count\":"<<r.dotnet_bundle_extract.omitted_count<<",\"omitted_bytes\":"<<r.dotnet_bundle_extract.omitted_bytes<<",\"compressed_omitted_count\":"<<r.dotnet_bundle_extract.compressed_omitted_count<<",\"error\":\""<<esc(r.dotnet_bundle_extract.error)<<"\"}},\n";
     const auto&n=r.native_aot;
     o<<"  \"native_aot\": {\"candidate\":"<<(n.candidate?"true":"false")<<",\"valid\":"<<(n.valid?"true":"false")
      <<",\"state\":\""<<esc(n.state)<<"\",\"platform\":\""<<esc(n.platform)<<"\",\"error\":\""<<esc(n.error)
