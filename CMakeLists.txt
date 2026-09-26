@@ -185,6 +185,7 @@ add_executable(auto_refirst
     src/extract/unity_engine_version.cpp
     src/extract/unity_registration_profile.cpp
     src/extract/dotnet.cpp
+    src/extract/dotnet_boundary.cpp
     src/extract/dotnet_native.cpp
     src/extract/wxapkg.cpp
     src/extract/asar.cpp
@@ -385,6 +386,12 @@ add_executable(auto_refirst_public_unity_generic_class_profile_unit EXCLUDE_FROM
 )
 target_include_directories(auto_refirst_public_unity_generic_class_profile_unit PRIVATE include src/extract)
 
+add_executable(auto_refirst_public_dotnet_boundary_unit EXCLUDE_FROM_ALL
+    tests/dotnet_boundary_unit.cpp
+    src/extract/dotnet_boundary.cpp
+)
+target_include_directories(auto_refirst_public_dotnet_boundary_unit PRIVATE include)
+
 add_executable(auto_refirst_public_fixture_ordinary EXCLUDE_FROM_ALL tests/public/ordinary.c)
 add_executable(auto_refirst_public_fixture_crypto EXCLUDE_FROM_ALL tests/public/crypto_tea.c)
 add_executable(auto_refirst_public_fixture_runtime_child EXCLUDE_FROM_ALL tests/public/runtime_child.c)
@@ -407,7 +414,8 @@ set(AUTO_REFIRST_PUBLIC_UNIT_TARGETS
     auto_refirst_public_unity_metadata_usage_codec_unit
     auto_refirst_public_unity_engine_version_unit
     auto_refirst_public_unity_method_dispatch_profile_unit
-    auto_refirst_public_unity_generic_class_profile_unit)
+    auto_refirst_public_unity_generic_class_profile_unit
+    auto_refirst_public_dotnet_boundary_unit)
 set(AUTO_REFIRST_PUBLIC_TARGETS
     ${AUTO_REFIRST_PUBLIC_UNIT_TARGETS}
     auto_refirst_public_fixture_ordinary

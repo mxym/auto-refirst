@@ -43,6 +43,8 @@
 | P2 · 已实现 | PE 导出 forwarder/API-set 关系 | 对导出地址落入导出目录的字符串做既有有界解析，验证模块与符号/ordinal 几何并输出 `RVA`/`CURRENT_INPUT_IMAGE` 范围；API-set 仅标记命名空间，畸形目标降为 `PARTIAL`，不猜主机 DLL 或运行时加载结果。 |
 | P2 · 已实现 | 非标准分层/Polyglot 线索 | 在静态扫描上限内汇总非零偏移的 PDF、Mach-O/JVM、UDF、VHD 以及已知容器标记；至少两种不同格式同时出现时输出 `Layered/polyglot format markers`，附当前输入文件坐标、候选上限、负证据和后续结构检查建议，不将标记当作已验证子工件。 |
 | P2 · 已实现 | Wasm relocatable metadata | 对 `linking` 与 `reloc.*` custom section 做有界版本、subsection、目标 section 和 relocation entry geometry 检查；合法 linking 版本可标记 relocatable module，unsupported/truncated metadata 保留核心模块确认并显式报告 `FAILED`/`PARTIAL`，不推断完整链接语义。 |
+| P2 · 已实现 | PE export forwarder/API-set triage | 对已验证导出目录内的 forwarder 字符串做有界 module/symbol/ordinal/API-set 几何整理；畸形目标降为 `PARTIAL`，不猜 API-set host、不模拟 loader 搜索路径、不执行 DLL。 |
+| P2 · 已实现 | CLR/native boundary triage | 对 PE COR20、native entry flag/RVA、OEP、MethodDef body、P/Invoke 及非 CLR 原生导入/导出面做静态边界整理；VMProtect/自定义 loader 常见的托管-原生分界保留 `CONFIRMED`/`LIKELY`/`PARTIAL`，所有运行时解析保持明确拒绝。 |
 | P2 | 路径与输出公共层 | 逐步统一各提取器的路径编码、输出创建与失败状态；按格式迁移，每次保留现有公开静态用例，避免一次性替换所有文件操作。 |
 | P2 | Wasm 跨文件路由深化 | 对 validated Wasm 的 import(module/name) 与唯一 supplied sibling export 做有界 `BOUNDED` 关系；多目标、截断或运行时模块搜索不明时保持未解析，不把静态目录关系当作实例化成功。 |
 | P2 | 入口/报告/运行时大文件拆分 | 按 CLI、单文件静态管线、工件协调、目录协调和呈现分离；每次拆分验证行为等价与构建成本。禁止以目录名、样本名或已知哈希作为产品规则。 |

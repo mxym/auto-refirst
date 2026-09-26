@@ -293,7 +293,7 @@ def target_path(build:pathlib.Path,config:str|None,name:str) -> pathlib.Path:
 
 
 def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
-    targets=["auto_refirst_public_mapped_file_snapshot_unit","auto_refirst_public_directory_report_spool_unit","auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit","auto_refirst_public_nuitka_unit","auto_refirst_public_static_scan_unit","auto_refirst_public_pyinstaller_reference_unit","auto_refirst_public_unity_registration_profile_unit","auto_refirst_public_unity_metadata_usage_codec_unit","auto_refirst_public_unity_engine_version_unit","auto_refirst_public_unity_method_dispatch_profile_unit","auto_refirst_public_unity_generic_class_profile_unit"]
+    targets=["auto_refirst_public_mapped_file_snapshot_unit","auto_refirst_public_directory_report_spool_unit","auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit","auto_refirst_public_nuitka_unit","auto_refirst_public_static_scan_unit","auto_refirst_public_pyinstaller_reference_unit","auto_refirst_public_unity_registration_profile_unit","auto_refirst_public_unity_metadata_usage_codec_unit","auto_refirst_public_unity_engine_version_unit","auto_refirst_public_unity_method_dispatch_profile_unit","auto_refirst_public_unity_generic_class_profile_unit","auto_refirst_public_dotnet_boundary_unit"]
     assert len(targets)==len(set(targets)),targets
     build,config=cmake_build(binary,targets);seen:set[str]=set()
     def unit(name:str) -> pathlib.Path:
@@ -332,8 +332,9 @@ def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
     unity_engine_version=unit("auto_refirst_public_unity_engine_version_unit"); assert run([unity_engine_version]).stdout.strip()=="PASS"
     unity_method_dispatch=unit("auto_refirst_public_unity_method_dispatch_profile_unit"); assert run([unity_method_dispatch]).stdout.strip()=="PASS"
     unity_generic_class=unit("auto_refirst_public_unity_generic_class_profile_unit"); assert run([unity_generic_class]).stdout.strip()=="PASS"
+    dotnet_boundary=unit("auto_refirst_public_dotnet_boundary_unit"); assert run([dotnet_boundary]).stdout.strip()=="PASS"
     assert seen==set(targets),(sorted(set(targets)-seen),sorted(seen-set(targets)))
-    log("[PASS P0] model-trust + generic-path/Nuitka/static-scan/PyInstaller-reference/Unity-registration-profile/Unity-metadata-usage-codec/Unity-engine-version/Unity-method-dispatch-profile/Unity-generic-class-profile synthetic units + direct CPython pyc trust ingress + Flutter codec")
+    log("[PASS P0] model-trust + generic-path/Nuitka/static-scan/PyInstaller-reference/Unity-registration-profile/Unity-metadata-usage-codec/Unity-engine-version/Unity-method-dispatch-profile/Unity-generic-class-profile/CLR-native-boundary synthetic units + direct CPython pyc trust ingress + Flutter codec")
 
 
 def p0_cli_exit_contract(binary:pathlib.Path) -> None:

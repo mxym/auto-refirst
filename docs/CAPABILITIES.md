@@ -36,6 +36,7 @@
 - WebAssembly 模块结构和静态入口/导入导出相关证据；对标准 `producers` custom section 提取有界的 field/name/version 工具链元数据；对 `linking` 与 `reloc.*` custom sections 提取版本、subsection、目标 section、重定位数量和有界 entry geometry，用于识别 relocatable object 及其不完整/截断状态。目录预处理还会在导入模块名恰好对应一个 supplied Wasm sibling、且该 sibling 唯一导出同名函数时生成 `wasm_import_module_dependency` `BOUNDED` 关系并提升目标排序；多个同名模块、导出清单截断或模块实例化/搜索路径不明时不闭合关系。该段是编译器/工具链与链接元数据证据，不是编译器身份、完整链接器语义或源码的证明；截断、非法 UTF-8、超限值只保留部分证据，不影响核心模块结构结论。
 - Lua 5.x bytecode 结构、proto/指令/常量和受限 introspection 证据。
 - ECMA-335/.NET 元数据、方法、P/Invoke 与运行时/应用程序集路由。
+- CLR/native boundary triage：在已验证的 PE COR20 目录上有界检查 `COMIMAGE_FLAGS_NATIVE_ENTRYPOINT`、`EntryPointTokenOrRVA`、PE OEP、MethodDef body file-backed 状态、P/Invoke 以及排除 CLR loader DLL 后的原生导入/导出面。它可把 VMProtect/自定义 loader/混合托管-原生样本整理为 `MIXED_NATIVE_MANAGED_BOUNDARY`、`MANAGED_NATIVE_DEPENDENCY_SURFACE` 或 `MANAGED_ONLY_STATIC_SURFACE`，坐标使用当前输入文件偏移。它不执行 CLR/native payload，不解析 loader 搜索路径、不证明 native RVA 已被运行，也不把缺失 IL 自动还原为 native 逻辑；COR20、元数据或入口几何不闭合时保留 `PARTIAL`/`FAILED`。
 - .NET single-file bundle v2/v6 manifest/member geometry与 Linux NativeAOT section/table evidence；识别结果不等同于 IL 反混淆或源码恢复。
 - Hermes HBC v89/v96/v98 的 header/table/function/string/opcode/debug/footer 完整性与有界提取，并可由 APK content entry 进入静态子分析；不声明 JavaScript 源码恢复或 runtime loading。
 - CPython `.pyc`、marshal、opcode、扩展模块、Cython/frozen/static/runtime 参考比较；PyInstaller/Nuitka 负责打包层与高价值 Python 子工件。

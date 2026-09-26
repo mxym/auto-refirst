@@ -990,6 +990,24 @@ std::string render_text(const AnalysisReport& r) {
         } else if(!r.dotnet.error.empty()) o << "  error: " << r.dotnet.error << "\n";
     }
 
+    if (r.dotnet_boundary.candidate) {
+        const auto& b=r.dotnet_boundary;
+        o << "CLR/native boundary:\n"
+          << "  state: " << b.state << " kind=" << b.boundary_kind << "\n"
+          << "  COR20: RVA 0x" << std::hex << b.clr_rva << std::dec << " file+0x" << b.clr_file_offset
+          << " backed=" << (b.clr_range_file_backed?"yes":"no") << " section=" << b.clr_section << "\n"
+          << "  PE OEP: RVA 0x" << std::hex << b.pe_entry_rva << std::dec << " file+0x" << b.pe_entry_file_offset
+          << " backed=" << (b.pe_entry_file_backed?"yes":"no") << "\n"
+          << "  CLR native entry: " << (b.native_entrypoint?"yes":"no");
+        if(b.native_entrypoint)o << " RVA 0x" << std::hex << b.native_entry_rva << std::dec << " file+0x" << b.native_entry_file_offset
+                                << " backed=" << (b.native_entry_file_backed?"yes":"no") << " executable=" << (b.native_entry_executable?"yes":"no");
+        o << "\n  methods: total=" << b.managed_method_count << " unresolved_body=" << b.non_file_backed_method_count
+          << " pinvoke=" << b.pinvoke_method_count << " native_import_modules=" << b.native_import_module_count
+          << " native_imports=" << b.native_import_count << " native_exports=" << b.native_export_count << "\n"
+          << "  runtime resolution: NOT_PERFORMED; CLR/native payload is never executed by preprocessing\n";
+        if(!b.error.empty())o << "  note: " << b.error << "\n";
+    }
+
     if (r.wasm.candidate) {
         o << "WebAssembly:\n"
           << "  state: " << (r.wasm.valid?"CONFIRMED":"FAILED") << "\n"
@@ -1448,6 +1466,7 @@ struct ChildJsonPlaneLimit {
 constexpr std::size_t kChildDexMapItems=128,kChildDexTypes=128,kChildDexProtos=128,kChildDexFields=128,kChildDexMethods=256,kChildDexCodeItems=128,kChildDexClasses=64,kChildDexMethodHandles=64,kChildDexCallSites=64,kChildDexLibraryLoads=128,kChildDexStrings=256,kChildDexStringHints=256,kChildDexAnomalies=64;
 constexpr std::size_t kChildDotnetTableRows=64,kChildDotnetAssemblyRefs=64,kChildDotnetTypeRefs=128,kChildDotnetTypes=128,kChildDotnetFields=128,kChildDotnetParams=128,kChildDotnetMethods=256,kChildDotnetMemberRefs=128,kChildDotnetProperties=64,kChildDotnetEvents=64,kChildDotnetGenericParams=64,kChildDotnetMethodSpecs=64,kChildDotnetResources=64,kChildDotnetObfuscationHints=64,kChildDotnetAnomalies=64;
 constexpr std::size_t kChildDotnetBundleEntries=64,kChildNativeAotSections=64;
+constexpr std::size_t kChildDotnetBoundaryMethods=128,kChildDotnetBoundaryDependencies=96,kChildDotnetBoundaryRanges=32;
 constexpr std::size_t kChildSwiftTypes=64,kChildSwiftFields=64;
 
 struct SwiftSliceRenderPlan {
@@ -1467,6 +1486,9 @@ std::vector<ChildJsonPlaneLimit> child_json_plane_limits(const AnalysisReport&r)
     std::vector<ChildJsonPlaneLimit> x={{"dex.map_items",r.dex.map_items.size(),kChildDexMapItems},{"dex.types",r.dex.types.size(),kChildDexTypes},{"dex.protos",r.dex.protos.size(),kChildDexProtos},{"dex.fields",r.dex.fields.size(),kChildDexFields},{"dex.methods",r.dex.methods.size(),kChildDexMethods},{"dex.code_items",r.dex.code_items.size(),kChildDexCodeItems},{"dex.classes",r.dex.classes.size(),kChildDexClasses},{"dex.method_handles",r.dex.method_handles.size(),kChildDexMethodHandles},{"dex.call_sites",r.dex.call_sites.size(),kChildDexCallSites},{"dex.library_loads",r.dex.library_loads.size(),kChildDexLibraryLoads},{"dex.strings",r.dex.strings.size(),kChildDexStrings},{"dex.string_hints",r.dex.string_hints.size(),kChildDexStringHints},{"dex.anomalies",r.dex.anomalies.size(),kChildDexAnomalies},
         {"dotnet.table_rows",r.dotnet.table_rows.size(),kChildDotnetTableRows},{"dotnet.assembly_refs",r.dotnet.assembly_refs.size(),kChildDotnetAssemblyRefs},{"dotnet.type_refs",r.dotnet.type_refs.size(),kChildDotnetTypeRefs},{"dotnet.types",r.dotnet.types.size(),kChildDotnetTypes},{"dotnet.fields",r.dotnet.fields.size(),kChildDotnetFields},{"dotnet.params",r.dotnet.params.size(),kChildDotnetParams},{"dotnet.methods",r.dotnet.methods.size(),kChildDotnetMethods},{"dotnet.member_refs",r.dotnet.member_refs.size(),kChildDotnetMemberRefs},{"dotnet.properties",r.dotnet.properties.size(),kChildDotnetProperties},{"dotnet.events",r.dotnet.events.size(),kChildDotnetEvents},{"dotnet.generic_params",r.dotnet.generic_params.size(),kChildDotnetGenericParams},{"dotnet.method_specs",r.dotnet.method_specs.size(),kChildDotnetMethodSpecs},{"dotnet.resources",r.dotnet.resources.size(),kChildDotnetResources},{"dotnet.obfuscation_hints",r.dotnet.obfuscation_hints.size(),kChildDotnetObfuscationHints},{"dotnet.anomalies",r.dotnet.anomalies.size(),kChildDotnetAnomalies}};
     x.push_back({"dotnet_bundle.entries",r.dotnet_bundle.entries.size(),kChildDotnetBundleEntries});
+    x.push_back({"dotnet_boundary.methods",r.dotnet_boundary.bridge_methods.size(),kChildDotnetBoundaryMethods});
+    x.push_back({"dotnet_boundary.dependencies",r.dotnet_boundary.dependencies.size(),kChildDotnetBoundaryDependencies});
+    x.push_back({"dotnet_boundary.ranges",r.dotnet_boundary.ranges.size(),kChildDotnetBoundaryRanges});
     x.push_back({"native_aot.sections",r.native_aot.sections.size(),kChildNativeAotSections});
     x.push_back({"hermes.functions",r.hermes.functions.size(),256});
     x.push_back({"hermes.strings",r.hermes.strings.size(),512});
@@ -1505,6 +1527,37 @@ void render_dex_summary_json(std::ostream&o,const AnalysisReport&r){
     o<<"],";render_cardinality(o,"string_hints",d.string_hints.size(),kChildDexStringHints);o<<",\"string_hints\":[";for(std::size_t i=0;i<d.string_hints.size()&&i<kChildDexStringHints;++i){if(i)o<<',';o<<"\""<<esc(d.string_hints[i])<<"\"";}
     o<<"],";render_cardinality(o,"anomalies",d.anomalies.size(),kChildDexAnomalies);o<<",\"anomalies\":[";for(std::size_t i=0;i<d.anomalies.size()&&i<kChildDexAnomalies;++i){if(i)o<<',';o<<"\""<<esc(d.anomalies[i])<<"\"";}
     o<<"],\"extraction\":{\"success\":"<<(r.dex_extract.success?"true":"false")<<",\"methods_csv\":\""<<esc(path_utf8(r.dex_extract.methods_csv))<<"\",\"method_count\":"<<r.dex_extract.method_count<<",\"classes_csv\":\""<<esc(path_utf8(r.dex_extract.classes_csv))<<"\",\"class_count\":"<<r.dex_extract.class_count<<",\"fields_csv\":\""<<esc(path_utf8(r.dex_extract.fields_csv))<<"\",\"field_count\":"<<r.dex_extract.field_count<<",\"callsites_csv\":\""<<esc(path_utf8(r.dex_extract.callsites_csv))<<"\",\"callsite_count\":"<<r.dex_extract.callsite_count<<",\"error\":\""<<esc(r.dex_extract.error)<<"\"}},\n";
+}
+
+void render_dotnet_boundary_json(std::ostream&o,const AnalysisReport&r,bool compact){
+    const auto&b=r.dotnet_boundary;
+    const auto method_cap=compact?kChildDotnetBoundaryMethods:b.bridge_methods.size();
+    const auto dependency_cap=compact?kChildDotnetBoundaryDependencies:b.dependencies.size();
+    const auto range_cap=compact?kChildDotnetBoundaryRanges:b.ranges.size();
+    o << "  \"dotnet_boundary\": {\"candidate\":" << (b.candidate?"true":"false")
+      << ",\"valid\":" << (b.valid?"true":"false") << ",\"partial\":" << (b.partial?"true":"false")
+      << ",\"state\":\"" << esc(b.state) << "\",\"boundary_kind\":\"" << esc(b.boundary_kind)
+      << "\",\"error\":\"" << esc(b.error) << "\",\"offset_space\":\"current_input_file\""
+      << ",\"clr_rva\":" << b.clr_rva << ",\"clr_size\":" << b.clr_size << ",\"clr_file_offset\":" << b.clr_file_offset
+      << ",\"clr_range_file_backed\":" << (b.clr_range_file_backed?"true":"false")
+      << ",\"clr_section\":\"" << esc(b.clr_section) << "\",\"pe_entry_rva\":" << b.pe_entry_rva
+      << ",\"pe_entry_file_offset\":" << b.pe_entry_file_offset << ",\"pe_entry_file_backed\":" << (b.pe_entry_file_backed?"true":"false")
+      << ",\"pe_entry_section\":\"" << esc(b.pe_entry_section) << "\",\"native_entrypoint\":" << (b.native_entrypoint?"true":"false")
+      << ",\"native_entry_rva\":" << b.native_entry_rva << ",\"native_entry_file_offset\":" << b.native_entry_file_offset
+      << ",\"native_entry_file_backed\":" << (b.native_entry_file_backed?"true":"false")
+      << ",\"native_entry_executable\":" << (b.native_entry_executable?"true":"false")
+      << ",\"native_entry_section\":\"" << esc(b.native_entry_section) << "\",\"entry_rva_diverges\":" << (b.entry_rva_diverges?"true":"false")
+      << ",\"managed_method_count\":" << b.managed_method_count << ",\"non_file_backed_method_count\":" << b.non_file_backed_method_count
+      << ",\"pinvoke_method_count\":" << b.pinvoke_method_count << ",\"native_import_module_count\":" << b.native_import_module_count
+      << ",\"native_import_count\":" << b.native_import_count << ",\"native_export_count\":" << b.native_export_count
+      << ",\"truncated\":" << (b.truncated?"true":"false") << ",\"execution_refusal\":\"static_only_runtime_not_performed\"";
+    render_cardinality(o,"bridge_methods",b.bridge_methods.size(),method_cap);o << ",\"bridge_methods\":[";
+    for(std::size_t i=0;i<b.bridge_methods.size()&&i<method_cap;++i){if(i)o<<',';const auto&m=b.bridge_methods[i];o<<"{\"token\":"<<m.token<<",\"rva\":"<<m.rva<<",\"file_offset\":"<<m.file_offset<<",\"code_size\":"<<m.code_size<<",\"body_file_backed\":"<<(m.body_file_backed?"true":"false")<<",\"pinvoke\":"<<(m.pinvoke?"true":"false")<<",\"type\":\""<<esc(m.type_name)<<"\",\"name\":\""<<esc(m.name)<<"\",\"import_module\":\""<<esc(m.import_module)<<"\",\"import_name\":\""<<esc(m.import_name)<<"\",\"state\":\""<<esc(m.state)<<"\"}";}
+    o << "],";render_cardinality(o,"dependencies",b.dependencies.size(),dependency_cap);o << ",\"dependencies\":[";
+    for(std::size_t i=0;i<b.dependencies.size()&&i<dependency_cap;++i){if(i)o<<',';const auto&d=b.dependencies[i];o<<"{\"source\":\""<<esc(d.source)<<"\",\"module\":\""<<esc(d.module)<<"\",\"name\":\""<<esc(d.name)<<"\",\"token\":"<<d.token<<",\"file_offset\":"<<d.file_offset<<",\"offset_space\":\"current_input_file\"}";}
+    o << "],";render_cardinality(o,"ranges",b.ranges.size(),range_cap);o << ",\"ranges\":[";
+    for(std::size_t i=0;i<b.ranges.size()&&i<range_cap;++i){if(i)o<<',';const auto&x=b.ranges[i];o<<"{\"offset\":"<<x.offset<<",\"size\":"<<x.size<<",\"label\":\""<<esc(x.label)<<"\",\"coordinate_space\":\""<<coordinate_space_name(x.coordinate_space)<<"\",\"basis\":\""<<coordinate_basis_name(x.basis)<<"\"}";}
+    o << "]},\n";
 }
 
 void render_dotnet_summary_json(std::ostream&o,const AnalysisReport&r){
@@ -1922,6 +1975,8 @@ void render_json_impl(std::ostream& o,const AnalysisReport& r,bool automatic_chi
     o<<"],\"obfuscation_hints\":[";for(std::size_t i=0;i<r.dotnet.obfuscation_hints.size();++i){if(i)o<<',';o<<"\""<<esc(r.dotnet.obfuscation_hints[i])<<"\"";}o<<"],\"anomalies\":[";for(std::size_t i=0;i<r.dotnet.anomalies.size();++i){if(i)o<<',';o<<"\""<<esc(r.dotnet.anomalies[i])<<"\"";}o<<"],\"extraction\":{\"success\":"<<(r.dotnet_extract.success?"true":"false")<<",\"symbols_csv\":\""<<esc(path_utf8(r.dotnet_extract.symbols_csv))<<"\",\"symbol_count\":"<<r.dotnet_extract.symbol_count<<",\"types_csv\":\""<<esc(path_utf8(r.dotnet_extract.types_csv))<<"\",\"type_count\":"<<r.dotnet_extract.type_count<<",\"members_csv\":\""<<esc(path_utf8(r.dotnet_extract.members_csv))<<"\",\"member_count\":"<<r.dotnet_extract.member_count<<"}},\n";
 
     }
+
+    render_dotnet_boundary_json(o,r,automatic_child_summary);
 
     o << "  \"wasm\": {\"candidate\":"<<(r.wasm.candidate?"true":"false")<<",\"valid\":"<<(r.wasm.valid?"true":"false")<<",\"state\":\""<<(r.wasm.candidate?(r.wasm.valid?"CONFIRMED":"FAILED"):"ABSENT")<<"\",\"version\":"<<r.wasm.version<<",\"section_count\":"<<r.wasm.section_count<<",\"type_parse_complete\":"<<(r.wasm.type_parse_complete?"true":"false")<<",\"name_parse_complete\":"<<(r.wasm.name_parse_complete?"true":"false")<<",\"producer_parse_complete\":"<<(r.wasm.producer_parse_complete?"true":"false")<<",\"data_parse_complete\":"<<(r.wasm.data_parse_complete?"true":"false")<<",\"has_data_count\":"<<(r.wasm.has_data_count?"true":"false")<<",\"data_count\":"<<r.wasm.data_count<<",\"producer_field_count\":"<<r.wasm.producer_field_count<<",\"producer_value_count\":"<<r.wasm.producer_value_count<<",\"linking_section_present\":"<<(r.wasm.linking_section_present?"true":"false")<<",\"linking_metadata_valid\":"<<(r.wasm.linking_metadata_valid?"true":"false")<<",\"relocatable\":"<<(r.wasm.relocatable?"true":"false")<<",\"linking_version\":"<<r.wasm.linking_version<<",\"relocation_parse_complete\":"<<(r.wasm.relocation_parse_complete?"true":"false")<<",\"relocation_section_count\":"<<r.wasm.relocation_section_count<<",\"relocation_entry_count\":"<<r.wasm.relocation_entry_count<<",\"error_offset\":"<<r.wasm.error_offset<<",\"error\":\""<<esc(r.wasm.error)<<"\",\"types\":[";
     for(std::size_t i=0;i<r.wasm.types.size();++i){if(i)o<<',';const auto&t=r.wasm.types[i];o<<"{\"index\":"<<t.index<<",\"signature\":\""<<esc(t.signature)<<"\",\"params\":[";for(std::size_t z=0;z<t.params.size();++z){if(z)o<<',';o<<"\""<<esc(t.params[z])<<"\"";}o<<"],\"results\":[";for(std::size_t z=0;z<t.results.size();++z){if(z)o<<',';o<<"\""<<esc(t.results[z])<<"\"";}o<<"]}";}

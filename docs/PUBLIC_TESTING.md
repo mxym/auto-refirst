@@ -33,6 +33,8 @@ P0 校验：
 - APK/Hermes child 与 APK/JNI J0-J4 结构关系的有界静态 gate；
 - WebAssembly 目录 import/export 路由：唯一模块+函数正例、同名模块歧义、导出清单有界压缩和截断输入；关系保持 `BOUNDED`，明确不保证运行时模块解析；
 - WebAssembly `linking` / `reloc.*` custom metadata：合成 relocatable module 的 version/subsection/target/count 几何正例、unsupported linking version 与截断 relocation 负例；核心模块仍可确认，metadata 仅报告 bounded/partial，不推断完整 linker 语义；
+- PE export forwarder/API-set synthetic gate：普通 forwarder、API-set target、ordinal target、畸形 forwarder 与无 forwarder PE；只验证导出目录内字符串和 RVA 几何，关系保持 static-only，不推断 Windows loader host mapping。
+- CLR/native boundary synthetic gate：COR20/native entrypoint 与 PE OEP 分离、不可 file-backed MethodDef body、P/Invoke、非 CLR native import/export、损坏 COR20 目录及无 CLR 负例；结果保持静态 `CONFIRMED`/`LIKELY`/`PARTIAL`/`FAILED`，不执行 CLR 或 native payload。
 - Windows junction/reparse 输出安全（Windows runner）。
 
 ## P1 — source-generated integration
