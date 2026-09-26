@@ -20,6 +20,7 @@
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QGroupBox>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QGridLayout>
@@ -1054,6 +1055,8 @@ private:
         if (m_english || raw.isEmpty()) return raw;
         struct Pair { const char* source; const char* translated; };
         static const Pair pairs[] = {
+            {"Manual API resolver", "手工 API 解析器"},
+            {"PE custom-loader surface", "PE 自定义加载器面"},
             {"PE delay-load imports", "PE 延迟加载导入"},
             {"PE export forwarders", "PE 导出转发"},
             {"CLR/native boundary", "CLR/原生边界"},
@@ -1068,6 +1071,18 @@ private:
         return raw;
     }
 
+    QString variantLabel(const QString& raw) const {
+        if (m_english || raw.isEmpty()) return raw;
+        static const QHash<QString, QString> labels = {
+            {QStringLiteral("x64 PEB/export/FNV1A32"), QStringLiteral("x64 PEB/导出/FNV1A32")},
+            {QStringLiteral("x64 PEB/export/FNV1A32/no-pdata-entry-window"), QStringLiteral("x64 PEB/导出/FNV1A32/无 pdata 入口窗口")},
+            {QStringLiteral("x64 PEB/export/modified-name-hash"), QStringLiteral("x64 PEB/导出/修改名称哈希")},
+            {QStringLiteral("x64 PEB/export/modified-name-hash/no-pdata-entry-window"), QStringLiteral("x64 PEB/导出/修改名称哈希/无 pdata 入口窗口")},
+        };
+        const auto it = labels.constFind(raw);
+        return it == labels.constEnd() ? raw : it.value();
+    }
+
     QString cleanEvidence(const QString& raw) const {
         if (raw.isEmpty()) return {};
         if (raw.contains(QStringLiteral("execution_refusal"), Qt::CaseInsensitive)
@@ -1077,6 +1092,16 @@ private:
         }
         QString text = raw;
         if (!m_english) {
+            static const QHash<QString, QString> translations = {
+                {QStringLiteral("x64 code reads PEB from GS:[0x60], follows loader-list state and iterates loaded module bases"), QStringLiteral("x64 通过 GS:[0x60] 读取 PEB，遍历加载器链表中的模块基址")},
+                {QStringLiteral("the same bounded function validates PE signatures and walks IMAGE_EXPORT_DIRECTORY name/count, ordinal and function tables"), QStringLiteral("同一有界函数校验 PE 标记，并遍历 IMAGE_EXPORT_DIRECTORY 的名称、数量、序号和函数表")},
+                {QStringLiteral("export names are hashed byte-wise with FNV-1a32 seed 0x811C9DC5 and prime 0x01000193 inside a bounded loop"), QStringLiteral("有界循环按字节使用 FNV-1a32（种子 0x811C9DC5、乘数 0x01000193）计算导出名称哈希")},
+                {QStringLiteral("a bounded export-name loop applies arithmetic/bitwise hash-state updates; the exact name-hash algorithm is modified or unknown"), QStringLiteral("有界导出名称循环使用算术/位运算更新哈希状态，具体算法已被修改或无法确定")},
+                {QStringLiteral("a hash match indexes name-ordinal/function tables and returns a module-base-relative export address"), QStringLiteral("哈希命中后索引名称、序号和函数表，返回相对模块基址的导出地址")},
+                {QStringLiteral("the complete resolver shape was found in a bounded executable entry-section window"), QStringLiteral("在入口可执行节的有界窗口内恢复了完整解析器结构")},
+            };
+            const auto it = translations.constFind(text);
+            if (it != translations.constEnd()) return it.value();
             text.replace(QStringLiteral("NOT_ATTEMPTED_STATIC_ONLY"), QStringLiteral("未执行运行时操作"));
             text.replace(QStringLiteral("CURRENT_INPUT_IMAGE"), QStringLiteral("当前输入映像"));
             text.replace(QStringLiteral("CURRENT_INPUT_FILE"), QStringLiteral("当前输入文件"));
@@ -1086,6 +1111,16 @@ private:
 
     QString actionLabel(const QString& raw) const {
         if (m_english || raw.isEmpty()) return raw;
+        if (raw.contains(QStringLiteral("prioritize the selector target/fallthrough"), Qt::CaseInsensitive)) return QStringLiteral("先复核选择器的目标路径、顺落路径或返回值，再继续深入分析。");
+        if (raw.contains(QStringLiteral("record the concrete runtime CPUID value"), Qt::CaseInsensitive)) return QStringLiteral("只有需要动态确认时，再记录实际运行时的 CPUID 值。");
+        if (raw.contains(QStringLiteral("prioritize the gated path/value"), Qt::CaseInsensitive)) return QStringLiteral("先复核门控路径或返回值，再继续深入分析。");
+        if (raw.contains(QStringLiteral("record concrete runtime XCR0"), Qt::CaseInsensitive)) return QStringLiteral("只有需要动态确认时，再记录实际运行时的 XCR0 值。");
+        if (raw.contains(QStringLiteral("inspect the threshold-selected path/value"), Qt::CaseInsensitive)) return QStringLiteral("先检查阈值选择的路径或返回值，再判断其用途。");
+        if (raw.contains(QStringLiteral("use dynamic timing"), Qt::CaseInsensitive)) return QStringLiteral("只有需要确认实际阈值结果时，再使用动态计时。");
+        if (raw.contains(QStringLiteral("recreate the modified name-hash state"), Qt::CaseInsensitive)) return QStringLiteral("对照实际运行模块的导出表重建修改后的名称哈希状态。");
+        if (raw.contains(QStringLiteral("prioritize recovered resolver callsites"), Qt::CaseInsensitive)) return QStringLiteral("先复核已恢复的解析器调用点，再确定 API 身份。");
+        if (raw.contains(QStringLiteral("prioritize resolver function and recovered hash callsites"), Qt::CaseInsensitive)) return QStringLiteral("优先复核解析器函数和已恢复的哈希调用点。");
+        if (raw.contains(QStringLiteral("map unknown hashes against exports"), Qt::CaseInsensitive)) return QStringLiteral("对照实际运行模块的导出表映射未知哈希，再确定 API 身份。");
         if (raw.contains(QStringLiteral("--run=python-probe"), Qt::CaseInsensitive)) return QStringLiteral("如需确认 CPython 编译器行为，可启用 --run=python-probe。");
         if (raw.contains(QStringLiteral("--run"), Qt::CaseInsensitive)) return QStringLiteral("如需运行时证据，可启用 --run。");
         if (raw.contains(QStringLiteral("--extract"), Qt::CaseInsensitive)) return QStringLiteral("如需完整容器或重型静态展开，可启用 --extract。");
@@ -1125,7 +1160,7 @@ private:
                 const QString filter = m_filter_edit ? m_filter_edit->text().trimmed() : QString();
                 if (lines.size() < 24 && (filter.isEmpty() || familyMatch(finding, filter))) {
                     const QString family = familyLabel(finding.value(QStringLiteral("family")).toString());
-                    const QString variant = finding.value(QStringLiteral("variant")).toString();
+                    const QString variant = variantLabel(finding.value(QStringLiteral("variant")).toString());
                     const QJsonArray ev = finding.value(QStringLiteral("evidence")).toArray();
                     const QString evidence_text = ev.isEmpty() ? QString() : cleanEvidence(ev.first().toString());
                     QString label = family.isEmpty() ? finding.value(QStringLiteral("kind")).toString() : family;
