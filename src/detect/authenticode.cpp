@@ -5,6 +5,7 @@
 #include <array>
 #include <cstring>
 #include <iomanip>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <tuple>
@@ -43,6 +44,36 @@ std::string oid_text(std::span<const std::uint8_t>d,const Der&n){
     auto b=d.subspan(n.content,n.length);std::ostringstream o;unsigned first=b[0];o<<(first<80?first/40:2)<<'.'<<(first<80?first%40:first-80);std::uint64_t v=0;bool open=false;
     for(std::size_t i=1;i<b.size();++i){auto x=b[i];if(v>(~std::uint64_t(0)>>7))return{};v=(v<<7)|(x&0x7f);open=true;if(!(x&0x80)){o<<'.'<<v;v=0;open=false;}}
     return open?std::string():o.str();
+}
+bool private_enterprise_oid(std::string_view oid){
+    constexpr std::string_view prefix="1.3.6.1.4.1.";
+    return oid.size()>prefix.size()&&oid.rfind(prefix,0)==0;
+}
+void collect_extension_payloads(std::span<const std::uint8_t>d,const Der&node,std::uint64_t base,
+                                std::vector<AuthenticodeExtensionPayload>&out,std::size_t&budget,unsigned depth){
+    constexpr std::size_t kMaxHints=32;
+    if(!budget||depth>16||out.size()>=kMaxHints||node.end> d.size())return;
+    --budget;
+    bool ok=false;auto fields=children(d,node,ok);if(!ok)return;
+    if(node.tag==0x30&&fields.size()>=2&&fields[0].tag==0x06){
+        const auto oid=oid_text(d,fields[0]);std::size_t value=1;
+        if(value<fields.size()&&fields[value].tag==0x01&&fields[value].length==1)++value;
+        if(private_enterprise_oid(oid)&&value<fields.size()&&fields[value].tag==0x04&&fields[value].length>=256){
+            const auto&octets=fields[value];bool inner_der=false;std::size_t p=octets.content;Der nested{};
+            if(der_one(d,p,nested)&&p==octets.end)inner_der=true;
+            if(base<=std::numeric_limits<std::uint64_t>::max()-node.begin){
+                out.push_back({base+node.begin,node.end-node.begin,octets.length,oid,inner_der});
+            }
+        }
+    }
+    for(const auto&child:fields)if((child.tag&0x20)!=0)collect_extension_payloads(d,child,base,out,budget,depth+1);
+}
+void scan_private_extension_payloads(std::span<const std::uint8_t>blob,std::optional<std::uint64_t>base,
+                                     std::vector<AuthenticodeExtensionPayload>&out){
+    constexpr std::size_t kScanBytes=16u*1024u*1024u,kMaxNodes=4096;
+    if(!base||blob.empty())return;
+    const auto bounded=blob.first(std::min(blob.size(),kScanBytes));std::size_t p=0,budget=kMaxNodes;
+    while(p<bounded.size()&&budget){const auto before=p;Der root{};if(!der_one(bounded,p,root))break;collect_extension_payloads(bounded,root,*base,out,budget,0);if(p<=before)break;}
 }
 std::string asn1_string(std::span<const std::uint8_t>d,const Der&n){
     if(n.content+n.length>d.size())return{};
@@ -192,8 +223,9 @@ void verify_page_hashes(std::span<const std::uint8_t>d,const PeInfo&pe,const PeH
     const auto count=std::max(embedded.entries.size(),current.size());out.page_hashes.reserve(count);for(std::size_t i=0;i<count;++i){AuthenticodePageHashEntry e;const bool hs=i<embedded.entries.size(),hc=i<current.size();if(hs){e.signed_file_offset=embedded.entries[i].file_offset;e.signed_digest=hex_bytes(embedded.entries[i].digest);}if(hc){e.current_file_offset=current[i].file_offset;e.current_rva=current[i].rva;e.current_file_bytes=current[i].file_bytes;e.region=current[i].region;e.computed_digest=current[i].digest;e.terminator=current[i].terminator;}else if(hs&&i+1==embedded.entries.size())e.terminator=std::all_of(embedded.entries[i].digest.begin(),embedded.entries[i].digest.end(),[](std::uint8_t b){return b==0;});e.offset_match=hs&&hc&&e.signed_file_offset==e.current_file_offset;e.digest_match=hs&&hc&&e.signed_digest==e.computed_digest;e.match=e.offset_match&&e.digest_match;if(!e.match)++out.page_hash_mismatch_count;out.page_hashes.push_back(std::move(e));}
     out.page_hash_state=out.page_hash_mismatch_count==0&&embedded.entries.size()==current.size()?"MATCH":"MISMATCH";
 }
-void parse_pkcs7_signature(std::span<const std::uint8_t>file,const PeInfo&pe,const PeHashLayout&layout,std::span<const std::uint8_t>blob,AuthenticodeSignatureInfo&out){
+void parse_pkcs7_signature(std::span<const std::uint8_t>file,const PeInfo&pe,const PeHashLayout&layout,std::span<const std::uint8_t>blob,std::optional<std::uint64_t>blob_offset,AuthenticodeSignatureInfo&out){
     out.pkcs7=true;std::string alg,err;std::vector<std::uint8_t>dig;std::uint32_t signer_count=0;EmbeddedPageHashes page_hashes;
+    scan_private_extension_payloads(blob,blob_offset,out.extension_payloads);
     if(!parse_spc_digest(blob,alg,dig,signer_count,page_hashes,err)){out.state="PKCS7_PARSE_FAILED";out.error=std::move(err);return;}
     out.spc_indirect_data=true;out.signer_infos_present=true;out.signer_info_count=signer_count;out.digest_extracted=true;std::string metaerr;if(parse_pkcs7_identity(blob,out.certificates,out.signers,metaerr))out.signer_metadata_state="PARSED";else{out.signer_metadata_state="PARTIAL";out.signer_metadata_error=std::move(metaerr);}verify_page_hashes(file,pe,layout,page_hashes,out);out.digest_algorithm=alg;out.signed_digest=hex_bytes(dig);out.computed_digest=compute_digest(file,layout,alg);if(out.computed_digest.empty()){out.state="UNSUPPORTED_DIGEST";out.error="SpcIndirectDataContent digest algorithm is not yet supported for local recomputation";}else{out.digest_match=out.signed_digest==out.computed_digest;out.state=out.digest_match?"DIGEST_MATCH":"DIGEST_MISMATCH";}
 }
@@ -214,10 +246,10 @@ AuthenticodeInfo analyze_authenticode(std::span<const std::uint8_t>d,const PeInf
     std::vector<PendingNested> nested_queue;
     std::uint64_t q=x.cert_off,end=cert_end;while(q<end){if(q+8>end){out.error="WIN_CERTIFICATE header truncated";out.state="FAILED";return out;}std::uint32_t len=0;std::uint16_t rev=0,type=0;rd(d,q,len);rd(d,q+4,rev);rd(d,q+6,type);if(len<8||len>end-q){out.error="WIN_CERTIFICATE length invalid";out.state="FAILED";return out;}auto adv=(std::uint64_t(len)+7)&~std::uint64_t(7);if(adv>end-q){out.error="WIN_CERTIFICATE aligned length exceeds table";out.state="FAILED";return out;}for(std::uint64_t z=q+len;z<q+adv;++z)if(d[z]){out.error="WIN_CERTIFICATE alignment padding is non-zero";out.state="FAILED";return out;}
         AuthenticodeSignatureInfo s;s.certificate_offset=q;s.certificate_size=len;s.revision=rev;s.certificate_type=type;s.pkcs7=type==0x0002;
-        auto blob=d.subspan(q+8,len-8);if(s.pkcs7){parse_pkcs7_signature(d,pe,x,blob,s);std::vector<std::vector<std::uint8_t>>nested;std::string nerr;if(!collect_nested_signature_blobs(blob,nested,nerr))s.nested_signature_error=std::move(nerr);s.nested_signature_count=static_cast<std::uint32_t>(nested.size());auto parent=static_cast<int>(out.signatures.size());for(auto&n:nested)nested_queue.push_back({std::move(n),parent,1});}else s.state="NON_PKCS7_CERTIFICATE";out.signatures.push_back(std::move(s));q+=adv;
+        auto blob=d.subspan(q+8,len-8);if(s.pkcs7){parse_pkcs7_signature(d,pe,x,blob,q+8,s);std::vector<std::vector<std::uint8_t>>nested;std::string nerr;if(!collect_nested_signature_blobs(blob,nested,nerr))s.nested_signature_error=std::move(nerr);s.nested_signature_count=static_cast<std::uint32_t>(nested.size());auto parent=static_cast<int>(out.signatures.size());for(auto&n:nested)nested_queue.push_back({std::move(n),parent,1});}else s.state="NON_PKCS7_CERTIFICATE";out.signatures.push_back(std::move(s));q+=adv;
     }
     if(q!=end){out.error="Attribute Certificate Table size does not equal aligned WIN_CERTIFICATE entries";out.state="FAILED";return out;}
-    for(std::size_t qi=0;qi<nested_queue.size();++qi){if(out.signatures.size()>=16){if(nested_queue[qi].parent>=0&&std::size_t(nested_queue[qi].parent)<out.signatures.size())out.signatures[std::size_t(nested_queue[qi].parent)].nested_signature_error="nested-signature total count exceeds safety limit";break;}auto pending=std::move(nested_queue[qi]);AuthenticodeSignatureInfo ns;ns.source="SPC_NESTED_SIGNATURE";ns.nesting_depth=pending.depth;ns.parent_signature_index=pending.parent;ns.certificate_type=0x0002;ns.certificate_size=pending.blob.size();parse_pkcs7_signature(d,pe,x,pending.blob,ns);std::vector<std::vector<std::uint8_t>>children;std::string nerr;if(!collect_nested_signature_blobs(pending.blob,children,nerr))ns.nested_signature_error=std::move(nerr);ns.nested_signature_count=static_cast<std::uint32_t>(children.size());auto parent=static_cast<int>(out.signatures.size());if(!children.empty()){if(pending.depth>=4)ns.nested_signature_error="nested-signature depth exceeds safety limit";else for(auto&child:children)nested_queue.push_back({std::move(child),parent,pending.depth+1});}out.signatures.push_back(std::move(ns));}
+    for(std::size_t qi=0;qi<nested_queue.size();++qi){if(out.signatures.size()>=16){if(nested_queue[qi].parent>=0&&std::size_t(nested_queue[qi].parent)<out.signatures.size())out.signatures[std::size_t(nested_queue[qi].parent)].nested_signature_error="nested-signature total count exceeds safety limit";break;}auto pending=std::move(nested_queue[qi]);AuthenticodeSignatureInfo ns;ns.source="SPC_NESTED_SIGNATURE";ns.nesting_depth=pending.depth;ns.parent_signature_index=pending.parent;ns.certificate_type=0x0002;ns.certificate_size=pending.blob.size();parse_pkcs7_signature(d,pe,x,pending.blob,std::nullopt,ns);std::vector<std::vector<std::uint8_t>>children;std::string nerr;if(!collect_nested_signature_blobs(pending.blob,children,nerr))ns.nested_signature_error=std::move(nerr);ns.nested_signature_count=static_cast<std::uint32_t>(children.size());auto parent=static_cast<int>(out.signatures.size());if(!children.empty()){if(pending.depth>=4)ns.nested_signature_error="nested-signature depth exceeds safety limit";else for(auto&child:children)nested_queue.push_back({std::move(child),parent,pending.depth+1});}out.signatures.push_back(std::move(ns));}
     out.certificate_table_valid=true;
     bool match=false,mismatch=false,parsed=false,pkcs7_failed=false;for(const auto&s:out.signatures){parsed|=s.digest_extracted;match|=s.digest_extracted&&s.digest_match;mismatch|=s.digest_extracted&&!s.computed_digest.empty()&&!s.digest_match;pkcs7_failed|=s.pkcs7&&!s.digest_extracted;}
     if(mismatch)out.state="SIGNED_CONTENT_MISMATCH";else if(match)out.state="SIGNED_CONTENT_MATCH";else if(parsed)out.state="DIGEST_UNSUPPORTED";else if(pkcs7_failed)out.state="SIGNATURE_PARSE_FAILED";else out.state="CERTIFICATE_TABLE_PRESENT";return out;
@@ -237,6 +269,23 @@ Finding authenticode_finding(const AuthenticodeInfo&i){
     f.fields["integrity_state"]=i.state;f.fields["image_hash_excludes_checksum"]="true";f.fields["image_hash_excludes_certificate_table"]="true";f.fields["image_hash_excludes_post_section_bytes"]="true";f.fields["certificate_table_offset"]=std::to_string(i.certificate_table_offset);f.fields["certificate_table_size"]=std::to_string(i.certificate_table_size);f.fields["covered_bytes"]=std::to_string(i.covered_bytes);f.fields["checksum_excluded_offset"]=std::to_string(i.checksum_offset);f.fields["certificate_directory_excluded_offset"]=std::to_string(i.certificate_directory_entry_offset);f.fields["post_section_unhashed_bytes"]=std::to_string(i.post_section_bytes);f.fields["pre_certificate_unhashed_bytes"]=std::to_string(i.pre_certificate_unhashed_bytes);f.fields["post_certificate_unhashed_bytes"]=std::to_string(i.post_certificate_unhashed_bytes);f.fields["cryptographic_signer_verification"]="NOT_PERFORMED_STATIC_DIGEST_LAYER";f.fields["catalog_signature_verification"]="NOT_CHECKED";
     if(i.state=="SIGNED_CONTENT_MISMATCH")f.suggested_actions.push_back("treat the mismatch as strong evidence that Authenticode-covered PE content or the embedded signature material was modified/corrupted; inspect changed executable/data sections first");
     if(i.state=="SIGNED_CONTENT_MATCH")f.suggested_actions.push_back("do not equate digest match with whole-file pristine: inspect Authenticode-excluded checksum/certificate metadata and post-section bytes separately");
+    return f;
+}
+std::optional<Finding> authenticode_extension_payload_finding(const AuthenticodeInfo&i){
+    std::vector<const AuthenticodeExtensionPayload*> hints;
+    for(const auto&s:i.signatures)for(const auto&x:s.extension_payloads)if(hints.size()<32)hints.push_back(&x);
+    if(hints.empty())return std::nullopt;
+    Finding f;f.kind="embedded_payload";f.family="PE Authenticode extension payload";f.variant="PRIVATE_ENTERPRISE_LARGE_OCTET_STRING";f.state="SUSPECTED";f.confidence=.45;
+    f.evidence.push_back("bounded DER walk found "+std::to_string(hints.size())+" private-enterprise certificate extension(s) carrying large OCTET STRING payloads");
+    f.evidence.push_back("candidate bytes are reported in current-input file-offset space; PE Certificate Table offsets are not RVA coordinates");
+    f.negative_evidence.push_back("private-enterprise certificate extensions can be legitimate; this route preserves opaque bytes and does not infer executable code or trust impact");
+    f.fields["candidate_count"]=std::to_string(hints.size());
+    f.fields["minimum_payload_bytes"]="256";
+    f.fields["der_node_budget"]="4096";
+    f.fields["der_scan_bytes_cap"]="16777216";
+    std::uint64_t total=0;for(const auto*x:hints){total+=x->payload_size;std::ostringstream detail;detail<<"private OID="<<x->oid<<" payload="<<x->payload_size<<" encoded="<<x->encoded_size<<(x->inner_der?" inner-DER":" opaque");f.evidence.push_back(detail.str());f.ranges.push_back(file_offset_range(x->file_offset,x->encoded_size,"private-enterprise certificate extension with opaque payload"));}
+    f.fields["payload_bytes"]=std::to_string(total);
+    f.suggested_actions.push_back("inspect the bounded certificate-extension ranges as data; validate any nested format independently before extraction or execution");
     return f;
 }
 }

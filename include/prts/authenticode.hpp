@@ -2,6 +2,7 @@
 #include "prts/finding.hpp"
 #include "prts/pe.hpp"
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -23,6 +24,14 @@ struct AuthenticodePageHashEntry {
     std::string region,signed_digest,computed_digest;
     bool offset_match=false,digest_match=false,match=false,terminator=false;
 };
+// A bounded, format-neutral hint for a private-enterprise X.509 extension that
+// carries a large OCTET STRING.  The bytes are intentionally left opaque: this
+// is a triage signal for embedded payloads, not a claim about executable code.
+struct AuthenticodeExtensionPayload {
+    std::uint64_t file_offset=0,encoded_size=0,payload_size=0;
+    std::string oid;
+    bool inner_der=false;
+};
 struct AuthenticodeSignerInfo {
     std::string identifier_type,issuer,serial,digest_algorithm,signature_algorithm,signing_time,signature_value_sha256;
     bool certificate_matched=false;
@@ -41,6 +50,7 @@ struct AuthenticodeSignatureInfo {
     std::uint32_t signer_info_count=0,page_size=0,page_hash_mismatch_count=0;
     std::vector<AuthenticodeCertificateInfo> certificates;
     std::vector<AuthenticodeSignerInfo> signers;
+    std::vector<AuthenticodeExtensionPayload> extension_payloads;
     std::vector<AuthenticodePageHashEntry> page_hashes;
     std::string signer_metadata_state,signer_metadata_error;
     std::string page_hash_algorithm,page_hash_state,page_hash_error;
@@ -57,4 +67,5 @@ struct AuthenticodeInfo {
 };
 AuthenticodeInfo analyze_authenticode(std::span<const std::uint8_t> data,const PeInfo& pe);
 Finding authenticode_finding(const AuthenticodeInfo& info);
+std::optional<Finding> authenticode_extension_payload_finding(const AuthenticodeInfo& info);
 }
