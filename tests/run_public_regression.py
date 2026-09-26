@@ -302,6 +302,9 @@ def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
     header_probe=run([sys.executable,ROOT/"tests/test_preflight_headers.py",pyunit])
     assert "[PASS]" in header_probe.stdout,header_probe.stdout
     log(header_probe.stdout.strip())
+    wasm_rel=run([sys.executable,ROOT/"tests/test_wasm_directory_relationship.py",binary],timeout=180)
+    assert "[PASS]" in wasm_rel.stdout,wasm_rel.stdout
+    log(wasm_rel.stdout.strip())
     out=run([pyunit,"inspect",p,"1"]).stdout.strip().split("\t",7)
     assert out[0:4]==["1","1","3.10","TIMESTAMP"],out
     bad=td/"bad.pyc"; bad.write_bytes(p.read_bytes()[:10]); out=run([pyunit,"inspect",bad,"1"]).stdout

@@ -30,7 +30,7 @@
 - JVM ClassFile 与 JAR 路由、方法/调用与隐式执行相关结构。
 - Android DEX 035/037/038/039/040 及 container-v041 的关键几何、ids/classes/code/debug/invoke-custom 和完整性字段；APK 负责容器/AXML/签名块/本地库与高价值子工件路由。
 - APK JNI 可组合 Java native declaration、`Java_...` export 与 `RegisterNatives` 表的结构关系，并严格处理 JNI modified UTF-8。J2/J3/J4 关系等级不被夸大为已执行注册或完整 native 语义证明。
-- WebAssembly 模块结构和静态入口/导入导出相关证据；对标准 `producers` custom section 提取有界的 field/name/version 工具链元数据。该段是编译器/工具链的辅助线索，不是编译器身份、构建来源或源码的证明；截断、非法 UTF-8、超限值只保留 `producer_parse_complete=false` 的部分证据，不影响核心模块结构结论。
+- WebAssembly 模块结构和静态入口/导入导出相关证据；对标准 `producers` custom section 提取有界的 field/name/version 工具链元数据。目录预处理还会在导入模块名恰好对应一个 supplied Wasm sibling、且该 sibling 唯一导出同名函数时生成 `wasm_import_module_dependency` `BOUNDED` 关系并提升目标排序；多个同名模块、导出清单截断或模块实例化/搜索路径不明时不闭合关系。该段是编译器/工具链的辅助线索，不是编译器身份、构建来源或源码的证明；截断、非法 UTF-8、超限值只保留 `producer_parse_complete=false` 的部分证据，不影响核心模块结构结论。
 - Lua 5.x bytecode 结构、proto/指令/常量和受限 introspection 证据。
 - ECMA-335/.NET 元数据、方法、P/Invoke 与运行时/应用程序集路由。
 - .NET single-file bundle v2/v6 manifest/member geometry与 Linux NativeAOT section/table evidence；识别结果不等同于 IL 反混淆或源码恢复。
