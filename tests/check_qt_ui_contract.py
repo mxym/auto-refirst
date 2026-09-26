@@ -33,6 +33,7 @@ def main() -> int:
         "add_executable(auto_refirst_gui tools/qt_gui/main.cpp)",
         'OUTPUT_NAME "auto-refirst-gui"',
         "target_link_libraries(auto_refirst_gui",
+        "add_executable(auto_refirst_gui WIN32",
     ):
         if needle not in cmake:
             fail(f"missing CMake integration marker: {needle}")
@@ -48,16 +49,39 @@ def main() -> int:
         "processTimedOut",
         "cancelAnalysis",
         "kUiOutputCap",
-        "LIMITATIONS / LOW CONFIDENCE",
+        "LIMITS",
+        "m_language",
+        "m_recursive",
+        "m_run",
+        "m_apply",
+        "m_runtime_mode",
+        "m_search_edit",
+        "m_artifact_root_edit",
+        "--report-lang=",
+        "--timeout=",
+        "--max-depth=",
+        "--max-runtime-targets=",
+        "--total-runtime-budget=",
+        "--run-all",
+        "--artifact-depth=",
+        "--artifact-nodes=",
+        "--artifact-bytes=",
+        "--artifact-root=",
+        "--search=",
+        "--search-ignore-case",
+        "--wxid=",
+        "setCreateProcessArgumentsModifier",
+        "CREATE_NO_WINDOW",
+        "familyMatch",
+        "AUTO_REFIRST_GUI_LANGUAGE",
+        "AUTO_REFIRST_GUI_SEARCH",
         "QDesktopServices::openUrl",
     ):
         if needle not in source:
             fail(f"missing UI behavior marker: {needle}")
-    if "--run" in source or "--apply" in source:
-        # The words are allowed in explanatory UI text, but the GUI must not
-        # pass either authorization flag to the child process.
-        if re.search(r"args\s*<<[^;]*(--run|--apply)", source):
-            fail("GUI must not authorize runtime execution or replacement")
+    for flag in ("--run", "--apply"):
+        if flag in source and f"if (m_{'run' if flag == '--run' else 'apply'}->isChecked())" not in source:
+            fail(f"{flag} must be explicitly gated by its checkbox")
     print("[PASS] optional Qt UI contract (offline)")
     return 0
 

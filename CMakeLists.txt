@@ -262,7 +262,13 @@ if(AUTO_REFIRST_BUILD_QT_UI)
       "AUTO_REFIRST_BUILD_QT_UI=ON requires Qt6 Widgets (preferred) or Qt5 Widgets; "
       "install the development package or configure with -DAUTO_REFIRST_BUILD_QT_UI=OFF")
   endif()
-  add_executable(auto_refirst_gui tools/qt_gui/main.cpp)
+  # Windows desktop target: Qt supplies WinMain, so launching the GUI does
+  # not open a console window alongside the application.
+  if(WIN32)
+    add_executable(auto_refirst_gui WIN32 tools/qt_gui/main.cpp)
+  else()
+    add_executable(auto_refirst_gui tools/qt_gui/main.cpp)
+  endif()
   set_target_properties(auto_refirst_gui PROPERTIES OUTPUT_NAME "auto-refirst-gui")
   target_link_libraries(auto_refirst_gui PRIVATE ${_auto_refirst_qt_widgets_target})
   target_compile_features(auto_refirst_gui PRIVATE cxx_std_20)

@@ -22,15 +22,23 @@ package configuration. If Qt is not installed, leave the option at its default
 `OFF`; the CLI remains buildable. Enabling it without Qt fails at configure
 time with an explicit dependency message.
 
-The client invokes the selected CLI executable once per queue item with:
+The client locates `auto-refirst` beside the GUI executable (or uses the
+`AUTO_REFIRST_CLI` environment override for development). There is no CLI
+path picker in the product UI. It invokes the CLI once per queue item with:
 
 ```text
 auto-refirst <file-or-directory> --json --json-envelope --json-errors
 ```
 
-The optional *expand static containers* checkbox adds `--extract`. The GUI
-never adds `--run` or `--apply`, because executing a sample and installing a
-replacement require a deliberate isolated CLI workflow. Reports are written
+The **Basic** tab maps static preparation, recursive artifact reports,
+runtime mode, replacement authorization, report language, and the per-item
+timeout. Runtime analysis and replacement are disabled by default and require
+confirmation. The **Advanced** tab exposes directory depth/runtime budgets,
+`--run-all`, artifact depth/node/byte limits, a product-owned artifact folder,
+directory text search (including case-insensitive mode), and optional `wxid`.
+The GUI passes these values to the CLI rather than reimplementing analysis;
+search mode uses a normalized JSON report so its JSON-lines results can be
+reviewed in the same workspace. Reports are written
 as timestamped JSON files under the selected report directory. The *Open
 report* and *Open output directory* buttons use the desktop's registered file
 handler.
@@ -39,10 +47,14 @@ Each item runs serially with a user-visible timeout (default 120 seconds), a
 cancel action, and a 64 MiB stdout cap. A timeout, process failure, malformed
 JSON, or report write failure stays attached to that queue row and does not
 discard completed reports. The summary counts findings and separates
-`CONFIRMED` from review-level states such as `LIKELY` and `SUSPECTED`. It also
-surfaces directory/report rendering partiality, materialization limits, and
-artifact graph warnings. These are display aids: the CLI JSON remains the
-authoritative evidence and coordinate provenance.
+`CONFIRMED` from review-level states such as `LIKELY` and `SUSPECTED`. It shows
+concise next steps and whether output was partial; detailed coordinates and
+limits remain in the JSON report.
+
+The interface includes a Chinese/English switch, a finding filter, a readable
+summary, next-step text, and compact limit messages. Internal evidence fields
+are kept in JSON but are not copied into the normal report view. On Windows
+both the GUI target and its CLI child use the no-console process path.
 
 The dependency-free contract check can run on a headless machine:
 
