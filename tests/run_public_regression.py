@@ -344,6 +344,9 @@ def p0_cli_exit_contract(binary:pathlib.Path) -> None:
     cp=run([sys.executable,ROOT/"tests/test_authenticode_extension_payload.py",binary],env=env,timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log("[PASS P0] bounded Authenticode certificate-extension payload triage")
+    cp=run([sys.executable,ROOT/"tests/test_polyglot_markers.py",binary],env=env,timeout=180)
+    assert "[PASS]" in cp.stdout,cp.stdout
+    log("[PASS P0] bounded layered/polyglot marker triage")
 
 
 def p0_windows_reparse(binary:pathlib.Path) -> None:

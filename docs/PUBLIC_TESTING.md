@@ -9,6 +9,7 @@ P0 校验：
 - 13 个公开 fixture 的 provenance 与 SHA-256；
 - PE/ELF/JVM/DEX/Wasm/Lua/Hermes 静态格式边界；
 - PE Authenticode extension triage：合成 private-enterprise OID + 大 OCTET STRING 正例，短值、公共 OID、截断 DER 负例，以及 32 条候选输出上限；范围必须标为当前输入 `FILE_OFFSET`，不混用 RVA；
+- 分层/Polyglot 静态线索：合成 PE 外壳后接 PDF、Mach-O 与 ZIP 标记，验证至少两种非零偏移格式才产生 `Layered/polyglot format markers`，范围为当前输入 `FILE_OFFSET`，单一诱饵标记、截断 marker 与 16 MiB 前缀上限之外的 marker 均不提升；
 - 跨文件关系与目录 guidance；
 - interpreter/runtime-modality 静态授权边界；
 - nested executable 与 recursive artifact graph；
