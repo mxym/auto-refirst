@@ -134,6 +134,10 @@ CONTENT_RULES = (
     ),
     ContentRule("internal Direction label", re.compile(r"\bDirection\s+[A-Z]{1,3}\b")),
     ContentRule("internal Direction token", re.compile(r"\bDIRECTION_[A-Z]{1,3}(?:\b|_)")),
+    ContentRule(
+        "unresolved merge marker",
+        re.compile(r"^(?:<<<<<<<|>>>>>>>)\s+", re.MULTILINE),
+    ),
 )
 
 
@@ -544,6 +548,7 @@ def self_test(script: pathlib.Path) -> int:
         _pieces("auto-refirst-", "tier-r-fixtures-bc"),
         _pieces("AUTO_REFIRST_", "TIER_R_FIXTURES"),
         _pieces("Direc", "tion AZ"),
+        "<<<<<<< HEAD",
     )
     for index, value in enumerate(forbidden_texts):
         negative_cases.append(

@@ -20,7 +20,11 @@ On Windows with a multi-configuration generator, use
 machine must provide the corresponding Qt development package and CMake
 package configuration. If Qt is not installed, leave the option at its default
 `OFF`; the CLI remains buildable. Enabling it without Qt fails at configure
-time with an explicit dependency message.
+time with an explicit dependency message. When the Qt SDK provides
+`windeployqt`, the Windows build automatically places Qt and MinGW runtime
+files beside `auto-refirst-gui.exe`; this keeps a built GUI runnable by
+double-click without relying on the developer's PATH. On SDKs without that
+helper, run `windeployqt` manually before distributing the executable.
 
 The client locates `auto-refirst` beside the GUI executable (or uses the
 `AUTO_REFIRST_CLI` environment override for development). There is no CLI

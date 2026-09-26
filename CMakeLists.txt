@@ -283,6 +283,35 @@ if(AUTO_REFIRST_BUILD_QT_UI)
     target_compile_options(auto_refirst_gui PRIVATE -Wall -Wextra -Wpedantic)
   endif()
   auto_refirst_enable_warnings_as_errors(auto_refirst_gui)
+  if(WIN32)
+    # A GUI executable built with MinGW needs both Qt and compiler runtime DLLs
+    # beside it.  When the Qt SDK supplies windeployqt, deploy the optional
+    # desktop runtime after linking so a double-clicked build is runnable and
+    # does not depend on the developer's PATH.  Keep configure usable with
+    # distro Qt packages that do not ship the helper; the CLI is unaffected.
+    if(_auto_refirst_qt_version STREQUAL "Qt6")
+      set(_auto_refirst_qt_core_target Qt6::Core)
+    else()
+      set(_auto_refirst_qt_core_target Qt5::Core)
+    endif()
+    get_target_property(_auto_refirst_qt_core_location ${_auto_refirst_qt_core_target} IMPORTED_LOCATION_RELEASE)
+    if(NOT _auto_refirst_qt_core_location)
+      get_target_property(_auto_refirst_qt_core_location ${_auto_refirst_qt_core_target} IMPORTED_LOCATION)
+    endif()
+    if(_auto_refirst_qt_core_location)
+      get_filename_component(_auto_refirst_qt_bin "${_auto_refirst_qt_core_location}" DIRECTORY)
+    endif()
+    find_program(_auto_refirst_windeployqt
+      NAMES windeployqt6.exe windeployqt.exe windeployqt
+      HINTS "${_auto_refirst_qt_bin}")
+    if(_auto_refirst_windeployqt)
+      add_custom_command(TARGET auto_refirst_gui POST_BUILD
+        COMMAND "${_auto_refirst_windeployqt}" --no-translations --no-system-d3d-compiler
+                "$<TARGET_FILE:auto_refirst_gui>"
+        COMMENT "Deploying Qt runtime beside auto-refirst-gui"
+        VERBATIM)
+    endif()
+  endif()
   install(TARGETS auto_refirst_gui RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 

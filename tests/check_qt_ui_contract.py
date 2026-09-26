@@ -34,6 +34,8 @@ def main() -> int:
         'OUTPUT_NAME "auto-refirst-gui"',
         "target_link_libraries(auto_refirst_gui",
         "add_executable(auto_refirst_gui WIN32",
+        "windeployqt",
+        "POST_BUILD",
     ):
         if needle not in cmake:
             fail(f"missing CMake integration marker: {needle}")

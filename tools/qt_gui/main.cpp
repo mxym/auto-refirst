@@ -19,7 +19,6 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontDatabase>
-#include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -47,7 +46,6 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVector>
-#include <QElapsedTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -110,6 +108,8 @@ public:
         if (!search_override.isEmpty()) m_search_edit->setText(QString::fromLocal8Bit(search_override));
         if (qgetenv("AUTO_REFIRST_GUI_LANGUAGE").toLower() == QByteArrayLiteral("en")) m_language->setCurrentIndex(1);
         m_exit_after_analysis = qgetenv("AUTO_REFIRST_GUI_EXIT_AFTER_ANALYSIS") == QByteArrayLiteral("1");
+        m_english = m_language->currentIndex() == 1;
+        applyLanguage();
         setStatus(m_english ? QStringLiteral("Drop files or folders to start; static preparation is the default.") : QStringLiteral("拖放文件或目录开始；默认只做静态预处理。"));
     }
 
@@ -231,7 +231,7 @@ private:
         m_detail = new QTextEdit();
         m_detail->setReadOnly(true);
         m_detail->setLineWrapMode(QTextEdit::WidgetWidth);
-        m_detail->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+        m_detail->setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
         detail_layout->addWidget(m_detail, 1);
         auto* open_row = new QHBoxLayout();
         m_open_report = new QPushButton(QStringLiteral("打开报告"));
@@ -495,6 +495,7 @@ private:
 
     void applyLanguage() {
         m_title->setText(QStringLiteral("auto-refirst"));
+        setWindowTitle(m_english ? QStringLiteral("auto-refirst  ·  Evidence workspace") : QStringLiteral("auto-refirst  ·  证据工作台"));
         m_subtitle->setText(m_english ? QStringLiteral("Static preparation workspace for unusual programs") : QStringLiteral("异常程序预处理工作台"));
         m_queue_box->setTitle(m_english ? QStringLiteral("Samples  ·  drop files or folders here") : QStringLiteral("样本队列  ·  拖放文件或目录到这里"));
         m_detail_box->setTitle(m_english ? QStringLiteral("Report") : QStringLiteral("报告"));
@@ -513,9 +514,13 @@ private:
         m_open_report->setText(m_english ? QStringLiteral("Open JSON") : QStringLiteral("打开 JSON"));
         m_open_output->setText(m_english ? QStringLiteral("Open report folder") : QStringLiteral("打开报告目录"));
         m_extract->setText(m_english ? QStringLiteral("Expand static containers") : QStringLiteral("展开静态容器"));
+        m_extract->setToolTip(m_english ? QStringLiteral("Add bounded static artifact expansion and heavier static analysis.") : QStringLiteral("增加有界静态工件展开和重型静态分析。"));
         m_recursive->setText(m_english ? QStringLiteral("Recursive artifact report") : QStringLiteral("递归工件报告"));
+        m_recursive->setToolTip(m_english ? QStringLiteral("Emit recursive artifact reports; extracted children remain static-only.") : QStringLiteral("输出递归工件报告；递归子工件保持静态。"));
         m_run->setText(m_english ? QStringLiteral("Runtime analysis") : QStringLiteral("运行时分析"));
+        m_run->setToolTip(m_english ? QStringLiteral("Off by default; enabling it asks for confirmation.") : QStringLiteral("默认关闭；启用前需要确认。"));
         m_apply->setText(m_english ? QStringLiteral("Allow replacement") : QStringLiteral("允许写回"));
+        m_apply->setToolTip(m_english ? QStringLiteral("Allow validated replacement only after runtime analysis.") : QStringLiteral("仅在运行时分析后允许经过验证的写回。"));
         m_runtime_mode_label->setText(m_english ? QStringLiteral("Runtime mode") : QStringLiteral("运行模式"));
         const QStringList runtime_modes = m_english
             ? QStringList{QStringLiteral("Automatic deep analysis"), QStringLiteral("Trace compatibility"), QStringLiteral("Unpack compatibility"), QStringLiteral("Python probe compatibility")}
@@ -530,6 +535,7 @@ private:
         m_max_depth_label->setText(m_english ? QStringLiteral("Max depth") : QStringLiteral("最大深度"));
         m_max_targets_label->setText(m_english ? QStringLiteral("Runtime targets") : QStringLiteral("运行目标数"));
         m_run_all->setText(m_english ? QStringLiteral("Run every confirmed target") : QStringLiteral("运行全部确认目标"));
+        m_run_all->setToolTip(m_english ? QStringLiteral("Run all confirmed directory targets within the total budget.") : QStringLiteral("在总预算内运行目录中所有已确认目标。"));
         m_total_budget_label->setText(m_english ? QStringLiteral("Total runtime budget") : QStringLiteral("总运行预算"));
         m_total_runtime_budget->setSuffix(m_english ? QStringLiteral(" s") : QStringLiteral(" 秒"));
         m_artifact_limits->setText(m_english ? QStringLiteral("Custom artifact budget") : QStringLiteral("自定义工件预算"));
@@ -550,12 +556,19 @@ private:
         m_timeout->setSuffix(m_english ? QStringLiteral(" s") : QStringLiteral(" 秒"));
         for (int row = 0; row < m_items.size(); ++row) {
             const QString state = m_items[row].state;
+            if (!m_items[row].report.isEmpty()) {
+                renderSummary(m_items[row].report, m_items[row].format, m_items[row].evidence, m_items[row].detail);
+                setCell(row, 2, m_items[row].format);
+                setCell(row, 3, m_items[row].evidence);
+            }
             QString shown = state;
             if (state == QStringLiteral("Queued")) shown = m_english ? QStringLiteral("Queued") : QStringLiteral("等待");
             else if (state == QStringLiteral("Running")) shown = m_english ? QStringLiteral("Analyzing…") : QStringLiteral("分析中…");
             else if (state == QStringLiteral("Done")) shown = m_english ? QStringLiteral("Complete") : QStringLiteral("完成");
             else if (state == QStringLiteral("Failed")) shown = m_english ? QStringLiteral("Failed") : QStringLiteral("失败");
             else if (state == QStringLiteral("Cancelled")) shown = m_english ? QStringLiteral("Cancelled") : QStringLiteral("已取消");
+            if (state == QStringLiteral("Done") && m_items[row].evidence.contains(QStringLiteral("partial"), Qt::CaseInsensitive))
+                shown = m_english ? QStringLiteral("Complete · partial") : QStringLiteral("完成 · 部分");
             setCell(row, 1, shown);
             if (state == QStringLiteral("Queued")) setCell(row, 2, m_english ? QStringLiteral("Pending") : QStringLiteral("待识别"));
         }
@@ -587,7 +600,7 @@ private:
     }
 
     void addFiles() {
-        const auto files = QFileDialog::getOpenFileNames(this, QStringLiteral("选择样本文件"));
+        const auto files = QFileDialog::getOpenFileNames(this, m_english ? QStringLiteral("Choose sample files") : QStringLiteral("选择样本文件"));
         int added = 0;
         for (const auto& file : files) if (addPath(file)) ++added;
         if (added) {
@@ -597,7 +610,7 @@ private:
     }
 
     void addDirectory() {
-        const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("选择样本目录"));
+        const QString dir = QFileDialog::getExistingDirectory(this, m_english ? QStringLiteral("Choose sample folder") : QStringLiteral("选择样本目录"));
         if (!dir.isEmpty() && addPath(dir)) {
             setStatus(QStringLiteral("已加入目录：%1，正在自动分析。").arg(shortPath(dir)));
             startPending();
@@ -621,7 +634,8 @@ private:
     }
 
     void chooseOutput() {
-        const QString selected = QFileDialog::getExistingDirectory(this, QStringLiteral("选择报告输出目录"), m_output_edit->text());
+        const QString selected = QFileDialog::getExistingDirectory(this,
+            m_english ? QStringLiteral("Choose report folder") : QStringLiteral("选择报告输出目录"), m_output_edit->text());
         if (!selected.isEmpty()) m_output_edit->setText(selected);
     }
 
@@ -674,6 +688,7 @@ private:
             m_items[i].state = QStringLiteral("Queued");
             m_items[i].format.clear();
             m_items[i].evidence.clear();
+            m_items[i].detail.clear();
             m_items[i].report_path.clear();
             m_items[i].report = {};
         }
@@ -787,7 +802,7 @@ private:
         m_process->start();
         if (!m_process->waitForStarted(2000)) {
             m_start_error = m_process->errorString().isEmpty()
-                ? QStringLiteral("无法启动 CLI") : m_process->errorString();
+                ? (m_english ? QStringLiteral("The CLI could not be started.") : QStringLiteral("无法启动 CLI")) : m_process->errorString();
             finishWithoutProcess();
             return;
         }
@@ -800,7 +815,9 @@ private:
         if (m_current < 0) return;
         m_stdout += m_process->readAllStandardOutput();
         if (m_stdout.size() > kUiOutputCap) {
-            m_start_error = QStringLiteral("报告超过 GUI 的 64 MiB 展示上限；请直接使用 CLI 保存完整输出");
+            m_start_error = m_english
+                ? QStringLiteral("The report exceeded the 64 MiB GUI display limit; use the CLI for the full output.")
+                : QStringLiteral("报告超过 GUI 的 64 MiB 展示上限；请直接使用 CLI 保存完整输出");
             m_process->kill();
         }
     }
@@ -809,7 +826,9 @@ private:
         if (m_current >= 0) m_stderr += m_process->readAllStandardError();
         if (m_stderr.size() > kUiErrorCap) {
             m_stderr.truncate(static_cast<int>(kUiErrorCap));
-            if (m_start_error.isEmpty()) m_start_error = QStringLiteral("CLI stderr 超过 GUI 的 4 MiB 错误输出上限");
+            if (m_start_error.isEmpty()) m_start_error = m_english
+                ? QStringLiteral("CLI diagnostics exceeded the 4 MiB GUI limit.")
+                : QStringLiteral("CLI stderr 超过 GUI 的 4 MiB 错误输出上限");
             if (m_process->state() != QProcess::NotRunning) m_process->kill();
         }
     }
@@ -817,7 +836,9 @@ private:
     void processTimedOut() {
         if (m_current < 0 || m_process->state() == QProcess::NotRunning) return;
         m_timed_out = true;
-        m_start_error = QStringLiteral("单项分析超过 %1 秒，已终止进程").arg(m_timeout->value());
+        m_start_error = m_english
+            ? QStringLiteral("The item exceeded the %1 second timeout and was stopped.").arg(m_timeout->value())
+            : QStringLiteral("单项分析超过 %1 秒，已终止进程").arg(m_timeout->value());
         m_process->kill();
     }
 
@@ -944,7 +965,8 @@ private:
             m_items[row].state = QStringLiteral("Cancelled");
             setCell(row, 1, m_english ? QStringLiteral("Cancelled") : QStringLiteral("已取消"));
         } else {
-            finishFailure(row, m_start_error.isEmpty() ? QStringLiteral("无法启动 CLI") : m_start_error);
+            finishFailure(row, m_start_error.isEmpty()
+                ? (m_english ? QStringLiteral("The CLI could not be started.") : QStringLiteral("无法启动 CLI")) : m_start_error);
         }
         ++m_completed;
         m_progress->setValue(terminalCount());
@@ -968,12 +990,12 @@ private:
     QString writeReport(const QueueItem& item, const QByteArray& output, QString& error) const {
         QString directory = m_output_edit->text().trimmed();
         if (directory.isEmpty()) {
-            error = QStringLiteral("报告目录为空");
+            error = m_english ? QStringLiteral("The report folder is empty.") : QStringLiteral("报告目录为空");
             return {};
         }
         QDir out(directory);
         if (!out.mkpath(QStringLiteral("."))) {
-            error = QStringLiteral("无法创建报告目录：%1").arg(directory);
+            error = m_english ? QStringLiteral("Could not create the report folder: %1").arg(directory) : QStringLiteral("无法创建报告目录：%1").arg(directory);
             return {};
         }
         QString base = QFileInfo(item.path).completeBaseName();
@@ -985,11 +1007,11 @@ private:
         while (QFileInfo::exists(candidate)) candidate = out.filePath(base + QStringLiteral("-") + stamp + QStringLiteral("-") + QString::number(suffix++) + QStringLiteral(".json"));
         QFile file(candidate);
         if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            error = QStringLiteral("无法写入报告：%1").arg(file.errorString());
+            error = m_english ? QStringLiteral("Could not write the report: %1").arg(file.errorString()) : QStringLiteral("无法写入报告：%1").arg(file.errorString());
             return {};
         }
         if (file.write(output) != output.size()) {
-            error = QStringLiteral("报告写入不完整：%1").arg(file.errorString());
+            error = m_english ? QStringLiteral("The report was written incompletely: %1").arg(file.errorString()) : QStringLiteral("报告写入不完整：%1").arg(file.errorString());
             return {};
         }
         file.close();
@@ -1062,6 +1084,16 @@ private:
         return text;
     }
 
+    QString actionLabel(const QString& raw) const {
+        if (m_english || raw.isEmpty()) return raw;
+        if (raw.contains(QStringLiteral("--run=python-probe"), Qt::CaseInsensitive)) return QStringLiteral("如需确认 CPython 编译器行为，可启用 --run=python-probe。");
+        if (raw.contains(QStringLiteral("--run"), Qt::CaseInsensitive)) return QStringLiteral("如需运行时证据，可启用 --run。");
+        if (raw.contains(QStringLiteral("--extract"), Qt::CaseInsensitive)) return QStringLiteral("如需完整容器或重型静态展开，可启用 --extract。");
+        if (raw.contains(QStringLiteral("inspect"), Qt::CaseInsensitive) || raw.contains(QStringLiteral("review"), Qt::CaseInsensitive)) return QStringLiteral("复核 JSON 中的范围和证据。");
+        if (raw.contains(QStringLiteral("sibling"), Qt::CaseInsensitive) || raw.contains(QStringLiteral("directory"), Qt::CaseInsensitive)) return QStringLiteral("结合同目录文件和关系报告继续定位。");
+        return raw;
+    }
+
     void renderSummary(const QJsonObject& root, QString& format, QString& evidence, QString& detail) const {
         QJsonArray reports;
         if (root.value(QStringLiteral("reports")).isArray()) reports = root.value(QStringLiteral("reports")).toArray();
@@ -1129,7 +1161,7 @@ private:
         detail = (m_english ? QStringLiteral("INPUT\n%1\n\nFORMAT\n%2\n\nSUMMARY\n%3\n\n") : QStringLiteral("输入\n%1\n\n格式\n%2\n\n摘要\n%3\n\n")).arg(input_label, format, evidence);
         if (!next_steps.isEmpty()) {
             detail += m_english ? QStringLiteral("NEXT STEPS\n") : QStringLiteral("下一步\n");
-            for (const auto& action : next_steps) detail += QStringLiteral("• ") + cleanEvidence(action) + QLatin1Char('\n');
+            for (const auto& action : next_steps) detail += QStringLiteral("• ") + actionLabel(action) + QLatin1Char('\n');
             detail += QLatin1Char('\n');
         }
         detail += m_english ? QStringLiteral("FINDINGS\n") : QStringLiteral("发现\n");
