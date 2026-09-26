@@ -542,6 +542,8 @@ private:
         m_choose_artifact_root->setText(m_english ? QStringLiteral("Browse…") : QStringLiteral("选择…"));
         m_queue_hint->setText(m_english ? QStringLiteral("Dropped items start automatically. Double-click a finished row to open its JSON report.") : QStringLiteral("拖放后会自动开始。双击已完成项打开 JSON 报告。"));
         m_filter_edit->setPlaceholderText(m_english ? QStringLiteral("Filter findings…") : QStringLiteral("筛选发现…"));
+        if (m_queue_table->currentRow() < 0) m_summary->setText(m_english ? QStringLiteral("Select a row to view its summary") : QStringLiteral("选择一行查看摘要"));
+        if (m_items.isEmpty()) m_progress->setFormat(m_english ? QStringLiteral("Waiting for samples") : QStringLiteral("等待样本"));
         m_queue_table->setHorizontalHeaderLabels(m_english
             ? QStringList{QStringLiteral("Sample"), QStringLiteral("Status"), QStringLiteral("Format"), QStringLiteral("Findings"), QStringLiteral("Report")}
             : QStringList{QStringLiteral("样本"), QStringLiteral("状态"), QStringLiteral("格式"), QStringLiteral("发现"), QStringLiteral("报告")});
@@ -610,11 +612,11 @@ private:
         m_items.clear();
         m_queue_table->setRowCount(0);
         m_detail->clear();
-        m_summary->setText(QStringLiteral("选择一行查看摘要"));
+        m_summary->setText(m_english ? QStringLiteral("Select a row to view its summary") : QStringLiteral("选择一行查看摘要"));
         m_open_report->setEnabled(false);
         m_open_output->setEnabled(false);
         m_progress->setRange(0, 0);
-        m_progress->setFormat(QStringLiteral("等待样本"));
+        m_progress->setFormat(m_english ? QStringLiteral("Waiting for samples") : QStringLiteral("等待样本"));
         setStatus(QStringLiteral("队列已清空。"));
     }
 
@@ -953,7 +955,8 @@ private:
 
     void finishFailure(int row, const QString& message) {
         m_items[row].state = QStringLiteral("Failed");
-        m_items[row].detail = QStringLiteral("[FAILED] %1\n\n%2").arg(message, QString::fromUtf8(m_stderr).trimmed());
+        const QString title = m_english ? QStringLiteral("Analysis failed") : QStringLiteral("分析失败");
+        m_items[row].detail = QStringLiteral("%1\n\n%2").arg(title, message);
         setCell(row, 1, m_english ? QStringLiteral("Failed") : QStringLiteral("失败"));
         setCell(row, 2, QStringLiteral("—"));
         setCell(row, 3, m_english ? QStringLiteral("Open details") : QStringLiteral("查看详情"));
@@ -1153,8 +1156,13 @@ private:
         if (row < 0 || row >= m_items.size()) return;
         const auto& item = m_items[row];
         if (item.report.isEmpty()) {
-            m_summary->setText(QStringLiteral("%1  ·  %2").arg(shortPath(item.path), item.state));
-            m_detail->setPlainText(item.detail.isEmpty() ? QStringLiteral("等待分析结果…") : item.detail);
+            QString state = item.state;
+            if (item.state == QStringLiteral("Queued")) state = m_english ? QStringLiteral("Queued") : QStringLiteral("等待");
+            else if (item.state == QStringLiteral("Running")) state = m_english ? QStringLiteral("Analyzing…") : QStringLiteral("分析中…");
+            else if (item.state == QStringLiteral("Failed")) state = m_english ? QStringLiteral("Failed") : QStringLiteral("失败");
+            else if (item.state == QStringLiteral("Cancelled")) state = m_english ? QStringLiteral("Cancelled") : QStringLiteral("已取消");
+            m_summary->setText(QStringLiteral("%1  ·  %2").arg(shortPath(item.path), state));
+            m_detail->setPlainText(item.detail.isEmpty() ? (m_english ? QStringLiteral("Waiting for analysis…") : QStringLiteral("等待分析结果…")) : item.detail);
         } else {
             QString next = item.detail.section(m_english ? QStringLiteral("NEXT STEPS\n") : QStringLiteral("下一步\n"), 1, 1).section(QLatin1Char('\n'), 0, 0).trimmed();
             QString headline = QStringLiteral("%1  ·  %2  ·  %3").arg(shortPath(item.path), item.format, item.evidence);
