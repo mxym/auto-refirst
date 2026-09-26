@@ -20,7 +20,7 @@ std::string resource_output_name(const DotNetResource&r){
     if(safe.empty())safe="unnamed";
     return "resource_"+std::to_string(r.rid)+"_"+safe;
 }
-std::uint64_t sat_add_resource(std::uint64_t a,std::uint64_t b){return b>std::numeric_limits<std::uint64_t>::max()-a?std::numeric_limits<std::uint64_t>::max():a+b;}
+std::uint64_t sat_add_resource(std::uint64_t a,std::uint64_t b){return b>(std::numeric_limits<std::uint64_t>::max)()-a?(std::numeric_limits<std::uint64_t>::max)():a+b;}
 void note_resource_warning(DotNetResourceExtractResult&out,std::string text){if(out.warnings.size()<128)out.warnings.push_back(std::move(text));}
 }
 Finding dotnet_resources_finding(const DotNetInfo&i){
@@ -30,7 +30,7 @@ Finding dotnet_resources_finding(const DotNetInfo&i){
     for(const auto&r:i.resources){
         if(r.embedded&&r.size_known){
             ++embedded;
-            bytes=bytes>std::numeric_limits<std::uint64_t>::max()-r.size?std::numeric_limits<std::uint64_t>::max():bytes+r.size;
+            bytes=bytes>(std::numeric_limits<std::uint64_t>::max)()-r.size?(std::numeric_limits<std::uint64_t>::max)():bytes+r.size;
             if(rendered<64){f.ranges.push_back(file_offset_range(r.data_offset,r.size,"embedded managed resource "+(r.name.empty()?std::to_string(r.rid):r.name)));++rendered;}
         } else if(r.implementation_token){
             ++external;
@@ -65,14 +65,14 @@ DotNetResourceExtractResult extract_dotnet_resources(std::span<const std::uint8_
     DotNetResourceExtractResult out;out.output_dir=outdir;out.core_only=core_only;
     if(!i.valid){out.error=".NET metadata not valid";return out;}
     std::vector<const DotNetResource*>embedded;embedded.reserve(i.resources.size());for(const auto&r:i.resources)if(r.embedded&&r.size_known)embedded.push_back(&r);
-    out.embedded_count=embedded.size()>std::numeric_limits<std::uint32_t>::max()?std::numeric_limits<std::uint32_t>::max():static_cast<std::uint32_t>(embedded.size());
+    out.embedded_count=embedded.size()>(std::numeric_limits<std::uint32_t>::max)()?(std::numeric_limits<std::uint32_t>::max)():static_cast<std::uint32_t>(embedded.size());
     if(embedded.empty()){out.success=true;return out;}
     if(outdir.empty()){out.error=".NET resource output directory is empty";return out;}
     std::error_code ec;std::filesystem::create_directories(outdir,ec);if(ec){out.error="cannot create .NET resource output directory: "+ec.message();return out;}
     for(const auto*r:embedded){
         if(r->data_offset>d.size()||r->size>d.size()-r->data_offset){note_resource_warning(out,"embedded managed resource range is outside the input: "+(r->name.empty()?std::to_string(r->rid):r->name));continue;}
         if(out.files.size()>=max_output_files||r->size>max_output_bytes-out.output_bytes){out.budget_exhausted=true;++out.omitted_count;out.omitted_bytes=sat_add_resource(out.omitted_bytes,r->size);continue;}
-        if(r->size>static_cast<std::uint64_t>(std::numeric_limits<std::streamsize>::max())){note_resource_warning(out,"embedded managed resource exceeds the local stream write limit: "+std::to_string(r->rid));continue;}
+        if(r->size>static_cast<std::uint64_t>((std::numeric_limits<std::streamsize>::max)())){note_resource_warning(out,"embedded managed resource exceeds the local stream write limit: "+std::to_string(r->rid));continue;}
         const auto rel=resource_output_name(*r);auto path=outdir/prts::path_from_utf8(rel);if(path.empty()){note_resource_warning(out,"cannot encode managed resource output name for RID "+std::to_string(r->rid));continue;}
         auto st=std::filesystem::symlink_status(path,ec);if(!ec&&st.type()!=std::filesystem::file_type::not_found){if(st.type()==std::filesystem::file_type::symlink){note_resource_warning(out,"refusing managed resource output symlink: "+prts::path_utf8(path));continue;}if(st.type()!=std::filesystem::file_type::regular){note_resource_warning(out,"refusing non-regular managed resource output: "+prts::path_utf8(path));continue;}}
         ec.clear();std::ofstream f(path,std::ios::binary|std::ios::trunc);if(!f){note_resource_warning(out,"cannot create managed resource output: "+prts::path_utf8(path));continue;}
