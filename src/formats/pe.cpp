@@ -1,6 +1,8 @@
 #include "prts/pe.hpp"
+#include "prts/finding.hpp"
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -92,4 +94,29 @@ PeInfo parse_pe(std::span<const std::uint8_t>d){
 PeInfo parse_pe(const std::filesystem::path&p){std::ifstream f(p,std::ios::binary);if(!f){PeInfo o;o.error="open failed";return o;}std::vector<std::uint8_t>d((std::istreambuf_iterator<char>(f)),{});return parse_pe(d);}
 std::string pe_machine_name(std::uint16_t m){switch(m){case 0x014c:return"x86";case 0x8664:return"x64";case 0xaa64:return"ARM64";case 0x01c4:return"ARMv7";default:return"0x"+std::to_string(m);}}
 std::string pe_subsystem_name(std::uint16_t s){switch(s){case 1:return"Native";case 2:return"Windows GUI";case 3:return"Windows Console";case 7:return"POSIX Console";case 9:return"Windows CE GUI";case 10:return"EFI Application";case 14:return"Xbox";case 16:return"Windows Boot";default:return"Unknown";}}
+Finding pe_forwarder_finding(const PeInfo&pe){
+    Finding f;f.kind="loader_relation";f.family="PE export forwarders";f.state="CONFIRMED";
+    std::size_t total=0,valid=0,malformed=0,api_set=0,ordinal_targets=0,rendered=0;
+    std::set<std::string>modules;
+    for(const auto&e:pe.exports){
+        if(e.forwarder.empty())continue;
+        ++total;
+        bool printable=!e.forwarder.empty()&&e.forwarder.size()<=512;
+        for(unsigned char c:e.forwarder)if(c<0x21||c>0x7e){printable=false;break;}
+        const auto dot=e.forwarder.find('.');
+        const bool geometry=printable&&dot!=std::string::npos&&dot!=0&&dot+1<e.forwarder.size();
+        if(!geometry){++malformed;continue;}
+        ++valid;auto module=e.forwarder.substr(0,dot),target=e.forwarder.substr(dot+1);std::string lower=module;
+        std::transform(lower.begin(),lower.end(),lower.begin(),[](unsigned char c){return char(std::tolower(c));});
+        if(lower.rfind("api-ms-win-",0)==0||lower.rfind("ext-ms-win-",0)==0)++api_set;
+        if(target.front()=='#'){bool digits=target.size()>1;for(std::size_t i=1;i<target.size();++i)digits&=target[i]>='0'&&target[i]<='9';if(digits)++ordinal_targets;else{--valid;++malformed;continue;}}
+        modules.insert(std::move(module));
+        if(rendered++<64)f.ranges.push_back(rva_range(e.rva,e.forwarder.size()+1,"export "+(e.name.empty()?"#"+std::to_string(e.ordinal):e.name)+" forwards to "+e.forwarder));
+    }
+    f.evidence={"export address table entries whose RVAs point inside the export directory were decoded as bounded forwarder strings","module and symbol/ordinal target geometry was validated without resolving the Windows loader search path"};
+    f.negative_evidence={"forwarder strings come from the existing bounded PE export-directory string parse; no unbounded scan was performed","a forwarder names a loader dependency but does not prove which file will satisfy it at runtime","API-set contract names require the target system namespace mapping; no concrete host DLL is guessed"};
+    if(malformed){f.state="PARTIAL";f.negative_evidence.push_back("one or more export-directory strings had malformed forwarder target geometry");}
+    f.fields["forwarder_count"]=std::to_string(total);f.fields["validated_forwarders"]=std::to_string(valid);f.fields["malformed_forwarders"]=std::to_string(malformed);f.fields["target_module_count"]=std::to_string(modules.size());f.fields["api_set_forwarders"]=std::to_string(api_set);f.fields["ordinal_forwarders"]=std::to_string(ordinal_targets);f.fields["ranges_rendered"]=std::to_string(std::min<std::size_t>(rendered,64));f.fields["load_resolution"]="NOT_ATTEMPTED_STATIC_ONLY";
+    f.suggested_actions={"inventory sibling DLL candidates before runtime tracing","resolve API-set contracts against the exact target Windows build","inspect forwarded targets before choosing hook/breakpoint locations"};return f;
+}
 }
