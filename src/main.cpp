@@ -6,6 +6,7 @@
 #include "prts/macho.hpp"
 #include "prts/dotnet.hpp"
 #include "prts/dotnet_native.hpp"
+#include "prts/dotnet_loader.hpp"
 #include "prts/file_snapshot.hpp"
 #include "prts/godot.hpp"
 #include "prts/hermes.hpp"
@@ -1572,6 +1573,14 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
         else if(report.pe.valid&&report.pe.clr.present)add_validation_failure(report.findings,".NET metadata","PE CLR data directory",report.dotnet.error);
         report.dotnet_boundary=prts::analyze_dotnet_boundary(mapped.bytes(),report.pe,report.dotnet);
         if(report.dotnet_boundary.candidate)report.findings.push_back(prts::dotnet_boundary_finding(report.dotnet_boundary));
+        if(report.pe.valid){
+            const auto loader=prts::analyze_dotnet_loader(report.pe,report.dotnet.valid);
+            // A validated ordinary CLR bootstrap is already covered by the
+            // .NET metadata finding. Keep this plane focused on incomplete or
+            // unusual contracts that can redirect triage toward a custom
+            // native host/loader.
+            if(loader.candidate && loader.state!="CONFIRMED")report.findings.push_back(prts::dotnet_loader_finding(loader));
+        }
 
         if(unity_routed)report.unity=unity_future.get();
         if(report.unity.valid){

@@ -37,6 +37,7 @@
 - Lua 5.x bytecode 结构、proto/指令/常量和受限 introspection 证据。
 - ECMA-335/.NET 元数据、方法、P/Invoke 与运行时/应用程序集路由。
 - CLR/native boundary triage：在已验证的 PE COR20 目录上有界检查 `COMIMAGE_FLAGS_NATIVE_ENTRYPOINT`、`EntryPointTokenOrRVA`、PE OEP、MethodDef body file-backed 状态、P/Invoke 以及排除 CLR loader DLL 后的原生导入/导出面。它可把 VMProtect/自定义 loader/混合托管-原生样本整理为 `MIXED_NATIVE_MANAGED_BOUNDARY`、`MANAGED_NATIVE_DEPENDENCY_SURFACE` 或 `MANAGED_ONLY_STATIC_SURFACE`，坐标使用当前输入文件偏移。它不执行 CLR/native payload，不解析 loader 搜索路径、不证明 native RVA 已被运行，也不把缺失 IL 自动还原为 native 逻辑；COR20、元数据或入口几何不闭合时保留 `PARTIAL`/`FAILED`。
+- PE/CLR bootstrap import contract：在已验证的 PE import directory 中闭合 `mscoree.dll` 与 `_CorExeMain`/`_CorDllMain`/有限 host API 的关系；对缺少 CLR 目录、缺少标准 bootstrap 或 EXE/DLL 入口不匹配输出 `RVA`/`CURRENT_INPUT_IMAGE` finding，完整且已验证的普通 bootstrap 只作为基线不重复输出。它只描述静态导入面，不解析 CLR host 版本、搜索路径、调用顺序或运行时绑定。
 - .NET single-file bundle v2/v6 manifest/member geometry与 Linux NativeAOT section/table evidence；识别结果不等同于 IL 反混淆或源码恢复。
 - Hermes HBC v89/v96/v98 的 header/table/function/string/opcode/debug/footer 完整性与有界提取，并可由 APK content entry 进入静态子分析；不声明 JavaScript 源码恢复或 runtime loading。
 - CPython `.pyc`、marshal、opcode、扩展模块、Cython/frozen/static/runtime 参考比较；PyInstaller/Nuitka 负责打包层与高价值 Python 子工件。

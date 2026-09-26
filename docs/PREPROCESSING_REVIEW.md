@@ -2,6 +2,8 @@
 
 审计基线：`a78dc78496773dddf4b5caf1bfbfd977fd9a6759`。本轮目标是完善已有预处理能力：输入盘点、格式与生态路由、证据交接、工件预算、报告及构建验证。完整求解题目、通用解密、通用反编译和自动执行附件不作为验收目标。
 
+近期能力深化：PE/CLR bootstrap import contract 将 `mscoree.dll` 导入、CLR data directory 与 EXE/DLL 标志做有界闭合，帮助识别自定义 CLR host、被改写的入口契约和不完整托管壳；完整且已验证的普通 bootstrap 只作为基线不重复输出。该 finding 只有 import directory/CLR directory 结构证据，不能推出运行时 host、DLL 搜索路径或保护器身份；没有 CLR 或 mscoree 结构的普通 PE 不会产生该 finding。
+
 ## 结论与覆盖范围
 
 项目已具备广泛的格式覆盖和证据分层。更迫切的问题集中在公共流程与验证维护：预筛选状态和完整解析不同步、Windows 路径与存储差异、目录覆盖范围提示不完整，以及旧测试与当前 CI/来源目录脱节。继续扩展格式前，应先稳定这些共同依赖。
