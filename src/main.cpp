@@ -38,6 +38,7 @@
 #include "prts/antidebug.hpp"
 #include "prts/execution_prerequisite.hpp"
 #include "prts/manual_resolver.hpp"
+#include "prts/pe_loader_surface.hpp"
 #include "prts/runtime.hpp"
 #include "prts/renpy.hpp"
 #include "prts/rust.hpp"
@@ -1524,6 +1525,10 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
         if(report.pe.valid){auto anti=prts::detect_antidebug(mapped.bytes(),report.pe);report.findings.insert(report.findings.end(),std::make_move_iterator(anti.begin()),std::make_move_iterator(anti.end()));}
         if(report.pe.valid){auto prereq=prts::detect_execution_prerequisites(mapped.bytes(),report.pe);report.findings.insert(report.findings.end(),std::make_move_iterator(prereq.begin()),std::make_move_iterator(prereq.end()));}
         if(report.pe.valid){auto manual=prts::detect_manual_resolvers(mapped.bytes(),report.pe);report.findings.insert(report.findings.end(),std::make_move_iterator(manual.begin()),std::make_move_iterator(manual.end()));}
+        if(report.pe.valid){
+            const auto loader_surface=prts::analyze_pe_loader_surface(mapped.bytes(),report.pe);
+            if(loader_surface.candidate)report.findings.push_back(prts::pe_loader_surface_finding(loader_surface));
+        }
 
         auto packed=prts::detect_packed_pe(report.pe,report.input_snapshot.size);
         if(packed.candidate)report.findings.push_back(prts::packed_pe_finding(packed,report.pe));

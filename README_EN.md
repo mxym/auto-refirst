@@ -59,6 +59,7 @@ The root is bound to the input path by an ownership marker; unrelated existing d
 ## Capability groups
 
 - Native executable parsing: PE, ELF, Mach-O/Universal Mach-O, including bounded Swift metadata records without source or full-semantic recovery claims.
+- Special PE loader surfaces: combine bounded resolver imports, relocations, TLS pre-entry callbacks and unusual entry-section permissions to route reflective-loader or modified-DLL review; a single API or relocation directory is not promoted to a manual-mapping claim.
 - Managed and bytecode formats: JVM/JAR, DEX/APK/JNI relations, WebAssembly, Lua, Hermes HBC, ECMA-335/.NET single-file/NativeAOT, and CPython bytecode/runtime evidence.
 - Packers and ecosystems: UPX and bounded PE packer/protector evidence, PyInstaller, Nuitka, Electron/ASAR, AutoIt, Ren'Py/RPA, wxapkg, Unreal Pak/IoStore, Go, Rust, and Dart/Flutter.
 - Unity and Godot routing/materialization, including Mono/IL2CPP and PCK/GDScript/GDExtension evidence.

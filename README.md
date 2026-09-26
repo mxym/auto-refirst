@@ -61,6 +61,7 @@ cmake --build build --parallel
 ## 能力概览
 
 - **原生可执行格式**：PE、ELF、Mach-O/Universal Mach-O 的结构、入口、导入/导出、动态链接、异常/展开、签名、Mach-O Swift 元数据与部分平台安全元数据。
+- **特殊 PE 加载面**：组合有界 resolver 导入、重定位、TLS 预入口和入口段权限，提示反射式 loader、改写 DLL 或保护器入口；单一 API 或重定位目录不会被单独升级为手动映射结论。
 - **字节码与托管格式**：JVM Class/JAR、DEX/APK/JNI 关系、WebAssembly、Lua、Hermes HBC、ECMA-335/.NET single-file/NativeAOT、CPython bytecode 与嵌入式运行时相关证据。
 - **封装与生态识别**：UPX/多类 PE packer/protector 证据、PyInstaller、Nuitka、ASAR/Electron、AutoIt、Ren'Py/RPA、wxapkg、Unreal Pak/IoStore，以及 Go/Rust/Dart/Flutter 等运行时/编译产物特征。
 - **Unity / Godot**：Unity Mono、IL2CPP 元数据/本地映像关系、Godot PCK/GDScript/GDExtension 等结构与工件路线。
