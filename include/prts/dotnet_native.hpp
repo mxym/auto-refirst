@@ -3,6 +3,7 @@
 #include "prts/finding.hpp"
 #include "prts/pe.hpp"
 #include <cstdint>
+#include <filesystem>
 #include <span>
 #include <string>
 #include <vector>
@@ -28,6 +29,15 @@ struct DotNetBundleInfo {
     std::string integrity_state="NOT_AVAILABLE_IN_FORMAT";
     std::vector<DotNetBundleEntry> entries;
 };
+struct DotNetBundleExtractResult {
+    bool success=false,core_only=false,budget_exhausted=false;
+    std::filesystem::path output_dir;
+    std::uint32_t file_count=0,omitted_count=0,compressed_omitted_count=0;
+    std::uint64_t output_bytes=0,omitted_bytes=0;
+    std::vector<std::filesystem::path> files;
+    std::vector<std::string> warnings;
+    std::string error;
+};
 
 struct NativeAotSectionRow {
     std::uint32_t id=0,flags=0;
@@ -47,6 +57,7 @@ struct NativeAotInfo {
 
 DotNetBundleInfo detect_dotnet_bundle(std::span<const std::uint8_t> data,const PeInfo& pe,const ElfInfo& elf);
 Finding dotnet_bundle_finding(const DotNetBundleInfo& info);
+DotNetBundleExtractResult extract_dotnet_bundle(std::span<const std::uint8_t> data,const DotNetBundleInfo& info,const std::filesystem::path& output_dir,bool core_only=false,std::uint64_t max_output_bytes=512ull*1024*1024,std::uint32_t max_output_files=100000);
 NativeAotInfo detect_native_aot(std::span<const std::uint8_t> data,const PeInfo& pe,const ElfInfo& elf);
 Finding native_aot_finding(const NativeAotInfo& info);
 } // namespace prts

@@ -45,7 +45,7 @@ P0 校验：
 
 P1 从仓库源码构建普通 native、crypto、runtime-child/runtime-parent fixtures，并验证分析仍保持 static-only。Python bytecode fixture 由测试脚本按固定字节格式生成。
 
-P1 还运行 .NET bundle/NativeAOT、Mach-O/Swift、Unreal Pak/IoStore 与完整 Hermes HBC 的 source/project-generated focused gates；这些 gate 不属于 P0。
+P1 还运行 .NET bundle/NativeAOT、Mach-O/Swift、Unreal Pak/IoStore 与完整 Hermes HBC 的 source/project-generated focused gates；其中 .NET bundle gate 覆盖 v2/v6 manifest/member geometry、完整未压缩成员物化、输出字节与工件报告，以及 v6 压缩成员被明确遗漏；这些 gate 不属于 P0。
 
 运行：
 
