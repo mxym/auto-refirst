@@ -30,6 +30,14 @@ int main(){
     if(mixed.state!="CONFIRMED"||mixed.boundary_kind!="MIXED_NATIVE_MANAGED_BOUNDARY"||!mixed.native_entry_file_backed||!mixed.native_entry_executable||!mixed.entry_rva_diverges||mixed.non_file_backed_method_count!=1||mixed.pinvoke_method_count!=1||mixed.dependencies.empty())return 1;
     auto finding=prts::dotnet_boundary_finding(mixed);if(finding.state!="CONFIRMED"||finding.fields["runtime_resolution"]!="NOT_PERFORMED"||finding.fields["clr_rva"]!="0x1000"||finding.ranges.empty())return 2;
 
+    auto resources=dotnet;
+    prts::DotNetResource embedded;embedded.rid=1;embedded.name="payload.dll";embedded.embedded=true;embedded.size_known=true;embedded.data_offset=0x380;embedded.size=64;
+    prts::DotNetResource external;external.rid=2;external.name="satellite.resources";external.implementation_token=0x23000001;external.implementation="Satellite";external.implementation_kind="AssemblyRef";
+    prts::DotNetResource external_file;external_file.rid=3;external_file.name="native.dat";external_file.implementation_token=0x26000001;external_file.implementation_kind="File";
+    resources.resources={embedded,external,external_file};
+    auto resource_finding=prts::dotnet_resources_finding(resources);
+    if(resource_finding.state!="CONFIRMED"||resource_finding.variant!="embedded-and-external"||resource_finding.fields["embedded_count"]!="1"||resource_finding.fields["external_reference_count"]!="2"||resource_finding.fields["external_assembly_ref_count"]!="1"||resource_finding.fields["external_file_count"]!="1"||resource_finding.fields["resource_semantics"]!="NOT_ATTEMPTED_STATIC_ONLY"||resource_finding.ranges.size()!=1||resource_finding.ranges.front().coordinate_space!=prts::CoordinateSpace::FILE_OFFSET||resource_finding.ranges.front().basis!=prts::CoordinateBasis::CURRENT_INPUT_FILE||resource_finding.ranges.front().offset!=0x380||resource_finding.ranges.front().size!=64)return 6;
+
     auto malformed=pe;malformed.clr.rva=0x4f00;malformed.clr.size=0x80;auto failed=prts::analyze_dotnet_boundary(data,malformed,dotnet);if(failed.state!="FAILED"||failed.boundary_kind!="UNRESOLVED_BOUNDARY")return 3;
 
     auto dependency=base_pe();dependency.clr.rva=0x1000;dependency.clr.size=0x40;auto managed=dotnet;managed.entry_point_native=false;managed.clr_flags=0;managed.entry_point_token_or_rva=0x06000001;auto managed_data=clr_header();managed_data[0x200+16]=0;auto likely=prts::analyze_dotnet_boundary(managed_data,dependency,managed);if(likely.state!="LIKELY"||likely.boundary_kind!="MANAGED_NATIVE_DEPENDENCY_SURFACE")return 4;

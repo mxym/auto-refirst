@@ -72,7 +72,7 @@ struct DotNetResource {
     std::uint32_t rid=0,token=0,offset=0,flags=0,implementation_token=0;
     bool embedded=false,size_known=false;
     std::uint64_t data_offset=0,size=0;
-    std::string name,implementation;
+    std::string name,implementation,implementation_kind;
 };
 struct DotNetInfo {
     bool valid=false,unity_managed=false,unity_mono=false,unity_path_hint=false,unity_engine_reference=false,signature_parse_complete=true,entry_point_native=false;
@@ -105,5 +105,6 @@ struct DotNetExtractResult {
 };
 DotNetInfo detect_dotnet(std::span<const std::uint8_t>data,const PeInfo&pe,const std::filesystem::path&path={});
 Finding dotnet_finding(const DotNetInfo&info);
+Finding dotnet_resources_finding(const DotNetInfo&info);
 DotNetExtractResult extract_dotnet_symbols(const DotNetInfo&info,const std::filesystem::path&out);
 }

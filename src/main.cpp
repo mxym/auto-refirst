@@ -1574,7 +1574,7 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
         if(report.native_aot.candidate)report.findings.push_back(prts::native_aot_finding(report.native_aot));
 
         report.dotnet=prts::detect_dotnet(mapped.bytes(),report.pe,input);
-        if(report.dotnet.valid){report.findings.push_back(prts::dotnet_finding(report.dotnet));}
+        if(report.dotnet.valid){report.findings.push_back(prts::dotnet_finding(report.dotnet));if(!report.dotnet.resources.empty())report.findings.push_back(prts::dotnet_resources_finding(report.dotnet));}
         else if(report.pe.valid&&report.pe.clr.present)add_validation_failure(report.findings,".NET metadata","PE CLR data directory",report.dotnet.error);
         report.dotnet_boundary=prts::analyze_dotnet_boundary(mapped.bytes(),report.pe,report.dotnet);
         if(report.dotnet_boundary.candidate)report.findings.push_back(prts::dotnet_boundary_finding(report.dotnet_boundary));
