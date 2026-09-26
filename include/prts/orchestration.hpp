@@ -1,4 +1,5 @@
 #pragma once
+#include "prts/preflight.hpp"
 #include "prts/artifact_relationship.hpp"
 #include "prts/relationship_evidence.hpp"
 #include "prts/runtime_modality.hpp"
@@ -51,6 +52,8 @@ const RuntimePlanStep* runtime_plan_step(const RuntimePlan& plan,const std::stri
 
 struct DirectoryCandidate {
     std::filesystem::path path;
+    PreflightFormat preflight_format=PreflightFormat::Unknown;
+    int format_priority_boost=0;
     std::uint64_t size=0;
     std::string type_hint="unknown";
     std::string structural_confidence="low";

@@ -129,6 +129,7 @@ add_executable(auto_refirst
     src/core/gdextension.cpp
     src/core/mapped_file.cpp
     src/core/static_scan.cpp
+    src/core/preflight.cpp
     src/core/search.cpp
     src/detect/upx.cpp
     src/detect/packed_pe.cpp
@@ -315,6 +316,7 @@ target_include_directories(auto_refirst_public_model_trust_unit PRIVATE include)
 
 add_executable(auto_refirst_public_python_bytecode_unit EXCLUDE_FROM_ALL
     tests/python_bytecode_ingress_unit.cpp
+    src/core/preflight.cpp
     src/formats/python_bytecode.cpp
     src/formats/python_marshal.cpp
     src/core/sha256.cpp

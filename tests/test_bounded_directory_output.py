@@ -6,6 +6,8 @@ this runs from a clean source archive as well as a Git checkout.
 """
 from __future__ import annotations
 import json, os, pathlib, struct, subprocess, sys, tempfile
+from run_public_regression import pyc310
+from test_artifact_graph import make_fat_macho
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 AR=pathlib.Path(sys.argv[1]) if len(sys.argv)>1 else ROOT/'build'/('auto-refirst.exe' if os.name=='nt' else 'auto-refirst')
@@ -61,9 +63,19 @@ def main():
         d=pathlib.Path(raw)
         for i in range(1030):
             if i==0:
-                (d/'a0000.py').write_text('obj=open("a1022.txt","rb").read()\n',encoding='utf-8')
+                (d/'a0000.py').write_text('obj=open("a1017.txt","rb").read()\n',encoding='utf-8')
             else:
                 (d/f'a{i:04d}.txt').write_text('low priority text payload\n',encoding='utf-8')
+        # Replace five late fillers with existing formats under neutral names.
+        # Keep the same 1031-file stress workload and admission limit.
+        format_inputs={
+            'a1020.txt':(make_fat_macho(),'Mach-O'),
+            'a1021.txt':((ROOT/'tests/corpus/hermes/v98.hbc').read_bytes(),'Hermes HBC'),
+            'a1022.txt':((ROOT/'tests/corpus/lua/sample-5.4.8.luac').read_bytes(),'Lua'),
+            'a1023.txt':((ROOT/'tests/corpus/jvm/LambdaSample.class').read_bytes(),'JVM Class'),
+            'a1024.txt':(pyc310(),'CPython bytecode'),
+        }
+        for name,(data,_) in format_inputs.items():(d/name).write_bytes(data)
         (d/'zzzz-decisive.bin').write_bytes(minimal_pe())
         j,n=runj(d); assert_common_bounds(j)
         s,p,rr=j['directory_summary'],j['directory_plan'],j['report_rendering']; fs=p['file_states']
@@ -74,16 +86,20 @@ def main():
         assert any('report rendering deferred' in x for x in s['partial_reasons']),s['partial_reasons']
         assert len(fs)==1024 and rr['full_report_count']==1024
         decisive=next(x for x in fs if pathlib.Path(x['path']).name=='zzzz-decisive.bin')
-        assert decisive['rank']==1 and decisive['tier']=='Tier 1' and decisive['role']=='executable_root',decisive
+        assert decisive['rank']<=6 and decisive['tier']=='Tier 1' and decisive['role']=='executable_root',decisive
+        for name,(_,kind) in format_inputs.items():
+            candidate=next(x for x in fs if pathlib.Path(x['path']).name==name)
+            assert candidate['type_hint']==kind and candidate['structural_confidence']=='validated',candidate
+            assert candidate['report_detail_state']=='INLINE_FULL' and candidate['runtime_eligible'] is False,candidate
         assert not any(pathlib.Path(x['path']).name=='a1029.txt' for x in fs)
         # The late payload is admitted but falls outside the provisional inline
         # budget. Its exact cross-file reference is resolved only afterwards.
-        payload=next(x for x in fs if pathlib.Path(x['path']).name=='a1022.txt')
+        payload=next(x for x in fs if pathlib.Path(x['path']).name=='a1017.txt')
         assert payload['report_detail_state']=='INLINE_FULL',payload
         assert rr['reports_reselected']>0,rr
         assert rr['cache_evicted_reports']==sum(x['report_detail_reason']=='DIRECTORY_SPOOL_CACHE_BUDGET' for x in fs),rr
-        assert any(pathlib.Path(r['input']).name=='a1022.txt' for r in j['reports'])
-        assert any(r['kind']=='script_literal_data_dependency' and pathlib.Path(r['second']).name=='a1022.txt' for r in p['relationships']),p['relationships']
+        assert any(pathlib.Path(r['input']).name=='a1017.txt' for r in j['reports'])
+        assert any(r['kind']=='script_literal_data_dependency' and pathlib.Path(r['second']).name=='a1017.txt' for r in p['relationships']),p['relationships']
         # This generated corpus drives the report selection right against the
         # aggregate boundary: at least one whole record must be deferred and the
         # remaining gap must be smaller than every aggregate-budget-deferred record.
