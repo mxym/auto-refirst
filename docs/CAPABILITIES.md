@@ -4,6 +4,8 @@
 
 ## 1. 原生可执行文件与系统元数据
 
+- 非标准分层/Polyglot 预处理线索：对只读 16 MiB 前缀与文件末尾 512B 有界扫描，汇总非零偏移 PDF、Mach-O/JVM、UDF、VHD 及已识别容器标记；至少两种格式同时出现时输出当前输入 `FILE_OFFSET` 坐标和低置信度 finding。该能力只定位结构矛盾/层叠候选，不确认嵌入格式、不自动提取、不授权运行。
+
 ### PE / Windows
 
 - DOS/NT/COFF/Optional Header、节表、入口、导入/导出、TLS、Load Config 等结构验证。

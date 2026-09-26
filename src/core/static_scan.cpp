@@ -132,6 +132,23 @@ EmbeddedScanPart scan_embedded_part(std::span<const std::uint8_t>d){EmbeddedScan
         else if((c==0xfb||c==0xfa||c==0xf0||c==0xf1)&&d[o+1]==0xff&&d[o+2]==0xff&&d[o+3]==0xff&&o+8<=d.size()&&d[o+4]==0&&d[o+5]==0&&(d[o+6]==1||d[o+6]==2||d[o+6]==4)&&(d[o+7]==4||d[o+7]==8))r.hints.golang=true;
         else if(c=='M'&&o+8<=d.size()&&d[o+1]=='E'&&d[o+2]=='I'&&d[o+3]==014&&d[o+4]==013&&d[o+5]==012&&d[o+6]==013&&d[o+7]==016)r.hints.pyinstaller=true;
     }
+    // Layered/polyglot samples often hide a second format behind a valid
+    // outer image.  Keep these as bounded, low-confidence markers; dedicated
+    // parsers still decide whether the candidate is a real child artifact.
+    constexpr std::size_t kLayeredMarkerScanBytes=16u*1024u*1024u;
+    const auto marker_limit=std::min<std::size_t>(d.size(),kLayeredMarkerScanBytes);
+    for(std::size_t o=1;o+5<=marker_limit&&r.embedded.size()<512;++o){
+        if(d[o]=='%'&&d[o+1]=='P'&&d[o+2]=='D'&&d[o+3]=='F'&&d[o+4]=='-')
+            r.embedded.push_back({"PDF",o,0,false,"SUSPECTED",0.35,"PDF header marker at a non-zero file offset; PDF structure not parsed"});
+        else if((d[o]==0xce&&d[o+1]==0xfa&&d[o+2]==0xed&&d[o+3]==0xfe)||(d[o]==0xcf&&d[o+1]==0xfa&&d[o+2]==0xed&&d[o+3]==0xfe)||(d[o]==0xfe&&d[o+1]==0xed&&d[o+2]==0xfa&&d[o+3]==0xce)||(d[o]==0xfe&&d[o+1]==0xed&&d[o+2]==0xfa&&d[o+3]==0xcf))
+            r.embedded.push_back({"Mach-O",o,0,false,"SUSPECTED",0.30,"Mach-O magic at a non-zero file offset; slice header geometry not parsed"});
+        else if(d[o]==0xca&&d[o+1]==0xfe&&d[o+2]==0xba&&d[o+3]==0xbe)
+            r.embedded.push_back({"Mach-O/JVM",o,0,false,"SUSPECTED",0.25,"shared Mach-O/JVM magic at a non-zero file offset; format disambiguation deferred"});
+        else if(d[o]=='*'&&d[o+1]=='U'&&d[o+2]=='D'&&d[o+3]=='F')
+            r.embedded.push_back({"UDF",o,0,false,"SUSPECTED",0.25,"UDF descriptor marker at a non-zero file offset; volume geometry not parsed"});
+    }
+    if(d.size()>=512&&std::memcmp(d.data()+d.size()-512,"conectix",8)==0&&r.embedded.size()<512)
+        r.embedded.push_back({"VHD",d.size()-512,512,false,"SUSPECTED",0.35,"VHD footer marker at the file tail; disk geometry not parsed"});
     return r;
 }
 }
@@ -170,6 +187,19 @@ std::vector<Finding> detect_common(std::span<const std::uint8_t>d,const PeInfo&p
         }
     }
     if(godot_marker_finding){godot_marker_finding->fields["marker_count"]=std::to_string(godot_marker_count);godot_marker_finding->fields["ranges_rendered"]=std::to_string(godot_marker_finding->ranges.size());}
+    std::set<std::string> layered_kinds;std::size_t layered_count=0;std::size_t rendered=0;
+    Finding layered;layered.kind="polyglot_hint";layered.family="Layered/polyglot format markers";layered.state="SUSPECTED";layered.confidence=0.35;
+    for(const auto&e:scan.embedded){
+        if(e.offset==0)continue;
+        if(e.kind!="ZIP"&&e.kind!="PE"&&e.kind!="ELF"&&e.kind!="PDF"&&e.kind!="Mach-O"&&e.kind!="Mach-O/JVM"&&e.kind!="UDF"&&e.kind!="VHD"&&e.kind!="PYZ"&&e.kind!="GodotPCK")continue;
+        ++layered_count;layered_kinds.insert(e.kind);
+        if(rendered<32){layered.ranges.push_back(file_offset_range(e.offset,e.size,e.kind+" marker"));++rendered;}
+    }
+    if(layered_kinds.size()>=2){
+        layered.evidence={"multiple independent format markers occur at non-zero offsets or the file tail","offsets are reported in the current input file coordinate space; no embedded format is treated as validated by this hint"};
+        layered.negative_evidence={"markers may be opaque data or decoys; run the corresponding bounded parser before extraction","polyglot detection does not authorize runtime execution or automatic materialization"};
+        layered.fields["candidate_count"]=std::to_string(layered_count);layered.fields["distinct_format_count"]=std::to_string(layered_kinds.size());layered.fields["ranges_rendered"]=std::to_string(rendered);layered.fields["offset_space"]="current_input_file";layered.fields["detection_basis"]="read-only prefix scan capped at 16 MiB plus the final 512-byte VHD footer";layered.fields["candidate_limit"]="512 embedded markers";layered.suggested_actions={"validate:embedded-format-geometry","inspect:offsets-and-overlays"};out.push_back(std::move(layered));
+    }
     return out;
 }
 }
