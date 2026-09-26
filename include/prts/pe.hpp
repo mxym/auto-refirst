@@ -15,6 +15,16 @@ struct PeInitInfo { bool has_crt_section=false; bool references_initterm=false; 
 struct PeSection { std::string name; std::uint32_t rva=0,vsize=0,raw_offset=0,raw_size=0,used_size=0,characteristics=0; double entropy=0.0; };
 struct PeImportFunction { std::string name; std::uint16_t ordinal=0; bool by_ordinal=false; std::uint16_t hint=0; };
 struct PeImportModule { std::string name; std::uint32_t descriptor_rva=0,iat_rva=0; std::vector<PeImportFunction> functions; };
+// Delay-load descriptors use the same bounded thunk/name geometry as ordinary
+// imports, but are resolved by the helper on first call rather than at image
+// load.  The parser records only file-backed evidence and never resolves the
+// helper's search path.
+struct PeDelayImportModule {
+    std::string name;
+    std::uint32_t descriptor_rva=0,module_handle_rva=0,iat_rva=0,int_rva=0,bound_iat_rva=0,unload_iat_rva=0;
+    bool rva_based=false;
+    std::vector<PeImportFunction> functions;
+};
 struct PeExport { std::string name; std::string forwarder; std::uint32_t rva=0; std::uint16_t ordinal=0; };
 struct PeDirectoryInfo { bool present=false; std::uint32_t rva=0,size=0; };
 struct PeLoadConfigInfo { bool present=false; std::uint32_t rva=0,size=0; std::uint32_t guard_flags=0; std::uint64_t security_cookie=0; std::uint64_t seh_table=0; std::uint64_t seh_count=0; };
@@ -26,6 +36,9 @@ struct PeInfo {
     std::uint64_t overlay_offset=0,overlay_size=0;
     std::vector<PeSection> sections;
     std::vector<PeImportModule> imports;
+    std::vector<PeDelayImportModule> delay_imports;
+    bool delay_imports_parse_complete=true;
+    std::string delay_imports_error;
     std::vector<PeExport> exports;
     PeTlsInfo tls;
     PeExceptionInfo exception;
@@ -43,4 +56,5 @@ PeInfo parse_pe(const std::filesystem::path& p);
 std::string pe_machine_name(std::uint16_t machine);
 std::string pe_subsystem_name(std::uint16_t subsystem);
 Finding pe_forwarder_finding(const PeInfo& info);
+Finding pe_delay_import_finding(const PeInfo& info);
 }

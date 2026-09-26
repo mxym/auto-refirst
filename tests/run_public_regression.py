@@ -221,6 +221,9 @@ def p0_formats(binary: pathlib.Path, td: pathlib.Path) -> None:
     cp=run([sys.executable,ROOT/"tests/test_dotnet_loader_contract.py",binary],timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log("[PASS P0] bounded CLR bootstrap import contract and custom-host mismatch boundaries")
+    cp=run([sys.executable,ROOT/"tests/test_pe_delay_imports.py",binary],timeout=180)
+    assert "[PASS]" in cp.stdout,cp.stdout
+    log("[PASS P0] bounded PE delay-load descriptors/thunks and malformed boundaries")
     cp=run([sys.executable,ROOT/"tests/test_wasm_producers.py",binary],timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log("[PASS P0] bounded WebAssembly producers metadata evidence and malformed/oversized boundaries")
@@ -610,3 +613,4 @@ def main() -> int:
 
 
 if __name__=="__main__": raise SystemExit(main())
+

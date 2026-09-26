@@ -1447,7 +1447,7 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
         }
         report.input_snapshot=mapped.snapshot();
         report.pe=prts::parse_pe(mapped.bytes());
-        if(report.pe.valid){report.authenticode=prts::analyze_authenticode(mapped.bytes(),report.pe);if(report.authenticode.present||report.authenticode.state=="FAILED"){report.findings.push_back(prts::authenticode_finding(report.authenticode));if(auto f=prts::authenticode_extension_payload_finding(report.authenticode))report.findings.push_back(std::move(*f));}if(std::any_of(report.pe.exports.begin(),report.pe.exports.end(),[](const auto&e){return !e.forwarder.empty();}))report.findings.push_back(prts::pe_forwarder_finding(report.pe));}
+        if(report.pe.valid){report.authenticode=prts::analyze_authenticode(mapped.bytes(),report.pe);if(report.authenticode.present||report.authenticode.state=="FAILED"){report.findings.push_back(prts::authenticode_finding(report.authenticode));if(auto f=prts::authenticode_extension_payload_finding(report.authenticode))report.findings.push_back(std::move(*f));}if(std::any_of(report.pe.exports.begin(),report.pe.exports.end(),[](const auto&e){return !e.forwarder.empty();}))report.findings.push_back(prts::pe_forwarder_finding(report.pe));if(!report.pe.delay_imports.empty()||!report.pe.delay_imports_parse_complete)report.findings.push_back(prts::pe_delay_import_finding(report.pe));}
         if(!report.pe.valid){report.elf=prts::parse_elf(mapped.bytes());if(!report.elf.valid)report.macho=prts::parse_macho(mapped.bytes());}
         report.static_scan=prts::scan_static(mapped.bytes());
         report.unreal=prts::detect_unreal_container(mapped.bytes(),input);
