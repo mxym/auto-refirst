@@ -68,6 +68,38 @@ def main():
         assert len(rs)==2 and rs[1]['asar']['valid'];g=graph(rs);assert g['truncated'] and g['nodes']==2 and g['materialized_files']==1
         assert any('depth limit reached' in w for w in g['warnings']) and not any(r['wasm']['valid'] for r in rs)
 
+        # Depth zero is a static root-only contract: the root is parsed, but no
+        # extracted child is admitted or materialized.
+        root0=td/'depth-zero.bin';root0.write_bytes(outer)
+        rs=reports(root0,'--extract','--recursive','--artifact-depth=0')
+        assert len(rs)==1 and rs[0]['asar']['valid']
+        g=graph(rs);assert g['nodes']==1 and g['materialized_files']==0 and not g['edges']
+        assert g['truncated'] and any('depth limit reached' in w for w in g['warnings'])
+        assert not any(r['wasm']['valid'] for r in rs)
+
+        # The directory bounded-child path applies the same depth gate even
+        # though directory orchestration is not recursive graph transport. The
+        # extractor may still write/hash the candidate; it must not admit or
+        # analyze it as a graph node.
+        d0=td/'directory-depth-zero';d0.mkdir();(d0/'outer.bin').write_bytes(make_asar([('main.js',inner)]))
+        djson=load_json(d0,'--artifact-depth=0')
+        assert isinstance(djson,dict) and djson['reports']
+        droot=next(r for r in djson['reports'] if pathlib.Path(r['input']).name=='outer.bin')
+        dg=droot['artifact_graph'];assert dg['enabled'] and dg['nodes']==1 and dg['truncated']
+        assert dg['materialized_files']==1 and dg['admitted_bytes']==0
+        assert any(e['state']=='SKIPPED_DEPTH' for e in dg['edges']) and not any(e['state']=='ANALYZED_STATIC' for e in dg['edges'])
+
+        # SHA de-duplication precedes the node budget in directory child
+        # admission. Two identical HIGH ASAR members consume one node and the
+        # second remains visible as DUPLICATE_SKIPPED instead of NODE_LIMIT.
+        ddup=td/'directory-duplicate-budget';ddup.mkdir()
+        (ddup/'root.asar').write_bytes(make_asar([('main.js',WASM),('preload.js',WASM)]))
+        ddup_json=load_json(ddup,'--artifact-nodes=2')
+        ddup_root=next(r for r in ddup_json['reports'] if pathlib.Path(r['input']).name=='root.asar')
+        ddg=ddup_root['artifact_graph'];assert ddg['nodes']==2 and ddg['deduplicated']==1 and not ddg['truncated']
+        assert any(e['state']=='DUPLICATE_SKIPPED' for e in ddg['edges'])
+        assert not any(e['state']=='SKIPPED_NODE_LIMIT' for e in ddg['edges'])
+
         # Byte budget is checked before extraction: the root output directory is never created.
         root3=td/'bytes.bin';root3.write_bytes(outer)
         rs=reports(root3,'--extract','--recursive',f'--artifact-bytes={len(inner)-1}')
