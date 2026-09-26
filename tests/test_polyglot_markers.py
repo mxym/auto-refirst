@@ -57,6 +57,14 @@ def main() -> None:
     late.extend(b"%PDF-1.7\n\0\0\0\0" + bytes.fromhex("cffaedfe"))
     assert not any(f["family"] == "Layered/polyglot format markers"
                    for f in analyze(binary, bytes(late))["findings"])
+    capped = bytearray(minimal_pe())
+    capped.extend(bytes.fromhex("cffaedfe"))
+    for _ in range(600):
+        capped.extend(b"%PDF-1.7\n\0\0\0\0")
+    cap_finding = next(f for f in analyze(binary, bytes(capped))["findings"]
+                       if f["family"] == "Layered/polyglot format markers")
+    assert cap_finding["fields"]["candidate_count"] == "512"
+    assert cap_finding["fields"]["ranges_rendered"] == "32"
     print("[PASS] bounded layered/polyglot markers: multi-format offsets, coordinate evidence, single-marker negative")
 
 
