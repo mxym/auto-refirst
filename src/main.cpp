@@ -94,6 +94,10 @@ struct Options {
     bool run_all=false;
     bool help=false;
     bool version=false;
+    // Opt-in machine-readable diagnostics for command failures. Successful
+    // report output remains byte-for-byte compatible with the default path.
+    bool json_errors=false;
+    std::string parse_error;
     std::string search;
     bool search_ignore_case=false;
     std::string wxid;
@@ -132,11 +136,56 @@ enum class ExitCode : int {
 
 constexpr int exit_code(ExitCode code){return static_cast<int>(code);}
 
+std::string cli_json_escape(std::string_view value){
+    std::string out;
+    out.reserve(value.size()+8);
+    for(unsigned char c:value){
+        switch(c){
+        case '\\': out += "\\\\"; break;
+        case '"': out += "\\\""; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if(c<0x20){
+                char buf[7];std::snprintf(buf,sizeof(buf),"\\u%04x",static_cast<unsigned int>(c));out += buf;
+            }else out.push_back(static_cast<char>(c));
+        }
+    }
+    return out;
+}
+
+bool g_json_errors=false;
+
+const char* cli_error_kind(ExitCode code){
+    switch(code){
+    case ExitCode::Usage: return "usage";
+    case ExitCode::Input: return "input";
+    case ExitCode::Internal: return "internal";
+    default: return "error";
+    }
+}
+
+int emit_cli_error(ExitCode code,std::string_view stage,std::string_view message,bool json_errors,std::string_view path={}){
+    if(json_errors){
+        std::cerr << "{\n  \"error_schema_version\": \"1.0\",\n  \"error\": {\n"
+                  << "    \"kind\": \"" << cli_error_kind(code) << "\",\n"
+                  << "    \"code\": " << exit_code(code) << ",\n"
+                  << "    \"stage\": \"" << cli_json_escape(stage) << "\",\n"
+                  << "    \"message\": \"" << cli_json_escape(message) << "\"";
+        if(!path.empty())std::cerr << ",\n    \"path\": \"" << cli_json_escape(path) << "\"";
+        std::cerr << "\n  }\n}\n";
+    }else{
+        std::cerr << message << "\n";
+    }
+    std::cerr.flush();
+    return std::cerr ? exit_code(code) : exit_code(ExitCode::Internal);
+}
+
 int finish_standard_output(ExitCode code){
     std::cout.flush();
     if(!std::cout){
-        std::cerr<<"standard output write failed\n";
-        return exit_code(ExitCode::Internal);
+        return emit_cli_error(ExitCode::Internal,"output","standard output write failed",g_json_errors);
     }
     return exit_code(code);
 }
@@ -161,6 +210,7 @@ void print_help(std::ostream& o){
       << "  -h, --help                 Show this help and exit\n"
       << "  --version                  Show version and exit\n"
       << "  --json                     Emit structured JSON\n"
+      << "  --json-errors              Emit a stable JSON error envelope on stderr for exit codes 2/3/4\n"
       << "  --json-envelope            With --json, wrap file/report-set output in a stable reports[] object\n"
       << "  --report-lang=en|zh        Human-readable report language\n"
       << "  --extract                  Additionally materialize full/bulk static artifacts and heavy maps\n"
@@ -565,39 +615,39 @@ std::vector<ArtifactCandidate> extracted_artifacts(const prts::AnalysisReport&r)
 }
 
 bool parse_options(int argc,char**argv,Options&opt){
+    auto fail=[&](std::string message){opt.parse_error=std::move(message);return false;};
     for(int i=2;i<argc;++i){
         std::string arg=argv[i];
         if(arg=="-h"||arg=="--help")opt.help=true;
         else if(arg=="--version")opt.version=true;
         else if(arg=="--json")opt.json=true;
+        else if(arg=="--json-errors")opt.json_errors=true;
         else if(arg=="--json-envelope")opt.json_envelope=true;
-        else if(arg.rfind("--report-lang=",0)==0){auto v=arg.substr(14);if(v=="en")opt.report_language=prts::ReportLanguage::English;else if(v=="zh")opt.report_language=prts::ReportLanguage::Chinese;else{std::cerr<<"unsupported report language (use en or zh): "<<v<<"\n";return false;}}
+        else if(arg.rfind("--report-lang=",0)==0){auto v=arg.substr(14);if(v=="en")opt.report_language=prts::ReportLanguage::English;else if(v=="zh")opt.report_language=prts::ReportLanguage::Chinese;else return fail("unsupported report language (use en or zh): "+v);}
         else if(arg=="--extract")opt.extract=true;
         else if(arg=="--recursive")opt.recursive=true;
         else if(arg=="--run"){opt.run_requested=true;opt.run_mode="auto";}
         else if(arg=="--apply")opt.apply=true;
         else if(arg=="--run-all")opt.run_all=true;
         else if(arg=="--search-ignore-case")opt.search_ignore_case=true;
-        else if(arg.rfind("--search=",0)==0){opt.search=arg.substr(9);if(opt.search.empty()){std::cerr<<"--search requires non-empty text\n";return false;}}
+        else if(arg.rfind("--search=",0)==0){opt.search=arg.substr(9);if(opt.search.empty())return fail("--search requires non-empty text");}
         else if(arg.rfind("--wxid=",0)==0)opt.wxid=arg.substr(7);
         else if(arg.rfind("--run=",0)==0){opt.run_requested=true;opt.run_mode=arg.substr(6);}
-        else if(arg.rfind("--timeout=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(10),v)||v==0||v>3600000){std::cerr<<"invalid timeout (1..3600000 ms): "<<arg<<"\n";return false;}opt.timeout_ms=static_cast<std::uint32_t>(v);}
-        else if(arg.rfind("--max-depth=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(12),v)||v>1024){std::cerr<<"invalid directory max depth (0..1024): "<<arg<<"\n";return false;}opt.directory_max_depth=static_cast<std::uint32_t>(v);}
-        else if(arg.rfind("--max-runtime-targets=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(22),v)||v==0||v>100000){std::cerr<<"invalid max runtime targets (1..100000): "<<arg<<"\n";return false;}opt.max_runtime_targets=static_cast<std::uint32_t>(v);}
-        else if(arg.rfind("--total-runtime-budget=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(23),v)||v==0||v>86400000){std::cerr<<"invalid total runtime budget (1..86400000 ms): "<<arg<<"\n";return false;}opt.total_runtime_budget_ms=v;}
-        else if(arg.rfind("--artifact-depth=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(17),v)||v>32){std::cerr<<"invalid artifact depth (0..32): "<<arg<<"\n";return false;}opt.artifact_max_depth=static_cast<std::uint32_t>(v);}
-        else if(arg.rfind("--artifact-nodes=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(17),v)||v==0||v>1000000){std::cerr<<"invalid artifact node limit (1..1000000): "<<arg<<"\n";return false;}opt.artifact_max_nodes=static_cast<std::uint32_t>(v);}
-        else if(arg.rfind("--artifact-bytes=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(17),v)||v==0){std::cerr<<"invalid artifact byte limit: "<<arg<<"\n";return false;}opt.artifact_max_bytes=v;}
-        else if(arg.rfind("--artifact-root=",0)==0){auto v=arg.substr(16);if(v.empty()){std::cerr<<"--artifact-root requires a non-empty path\n";return false;}opt.artifact_root_cli=cli_path(v);}
-        else {std::cerr<<"unknown option: "<<arg<<"\n";return false;}
+        else if(arg.rfind("--timeout=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(10),v)||v==0||v>3600000)return fail("invalid timeout (1..3600000 ms): "+arg);opt.timeout_ms=static_cast<std::uint32_t>(v);}
+        else if(arg.rfind("--max-depth=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(12),v)||v>1024)return fail("invalid directory max depth (0..1024): "+arg);opt.directory_max_depth=static_cast<std::uint32_t>(v);}
+        else if(arg.rfind("--max-runtime-targets=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(22),v)||v==0||v>100000)return fail("invalid max runtime targets (1..100000): "+arg);opt.max_runtime_targets=static_cast<std::uint32_t>(v);}
+        else if(arg.rfind("--total-runtime-budget=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(23),v)||v==0||v>86400000)return fail("invalid total runtime budget (1..86400000 ms): "+arg);opt.total_runtime_budget_ms=v;}
+        else if(arg.rfind("--artifact-depth=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(17),v)||v>32)return fail("invalid artifact depth (0..32): "+arg);opt.artifact_max_depth=static_cast<std::uint32_t>(v);}
+        else if(arg.rfind("--artifact-nodes=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(17),v)||v==0||v>1000000)return fail("invalid artifact node limit (1..1000000): "+arg);opt.artifact_max_nodes=static_cast<std::uint32_t>(v);}
+        else if(arg.rfind("--artifact-bytes=",0)==0){std::uint64_t v=0;if(!parse_u64_arg(arg.substr(17),v)||v==0)return fail("invalid artifact byte limit: "+arg);opt.artifact_max_bytes=v;}
+        else if(arg.rfind("--artifact-root=",0)==0){auto v=arg.substr(16);if(v.empty())return fail("--artifact-root requires a non-empty path");opt.artifact_root_cli=cli_path(v);}
+        else return fail("unknown option: "+arg);
     }
     if(opt.run_requested&&opt.run_mode.empty())opt.run_mode="auto";
-    if(opt.run_requested&&opt.run_mode!="auto"&&opt.run_mode!="trace"&&opt.run_mode!="unpack"&&opt.run_mode!="python-probe"){
-        std::cerr<<"unsupported run mode: "<<opt.run_mode<<"\n";return false;
-    }
-    if(opt.apply&&!opt.run_requested){std::cerr<<"--apply requires --run; static analysis never authorizes writeback\n";return false;}
-    if(opt.run_all&&!opt.run_requested){std::cerr<<"--run-all requires --run\n";return false;}
-    if(opt.apply&&(opt.run_mode=="trace"||opt.run_mode=="python-probe")){std::cerr<<"--apply is incompatible with --run="<<opt.run_mode<<"; use bare --run --apply for validated reconstruction/install\n";return false;}
+    if(opt.run_requested&&opt.run_mode!="auto"&&opt.run_mode!="trace"&&opt.run_mode!="unpack"&&opt.run_mode!="python-probe")return fail("unsupported run mode: "+opt.run_mode);
+    if(opt.apply&&!opt.run_requested)return fail("--apply requires --run; static analysis never authorizes writeback");
+    if(opt.run_all&&!opt.run_requested)return fail("--run-all requires --run");
+    if(opt.apply&&(opt.run_mode=="trace"||opt.run_mode=="python-probe"))return fail("--apply is incompatible with --run="+opt.run_mode+"; use bare --run --apply for validated reconstruction/install");
     return true;
 }
 
@@ -1940,8 +1990,8 @@ void execute_directory_runtime(prts::DirectoryPlan&plan,std::vector<prts::Analys
 
 int analyze_directory_spooled(const std::filesystem::path&input,const Options&opt){
     const auto begin=std::chrono::steady_clock::now();auto plan=prts::inventory_directory(input,opt.directory_max_depth);plan.max_runtime_targets=opt.max_runtime_targets;plan.total_runtime_budget_ms=opt.total_runtime_budget_ms;plan.per_target_timeout_ms=opt.timeout_ms;plan.run_all=opt.run_all;
-    if(plan.candidates.empty()){for(const auto&s:plan.traversal_skips)std::cerr<<prts::path_utf8(s.path)<<": "<<s.reason<<"\n";std::cerr<<"no regular input files found\n";return exit_code(ExitCode::Input);}
-    DirectoryReportSpool spool;if(!spool.ready()){std::cerr<<spool.error()<<"\n";return exit_code(ExitCode::Internal);}
+    if(plan.candidates.empty()){if(opt.json_errors)return emit_cli_error(ExitCode::Input,"input_inventory","no regular input files found",opt.json_errors,prts::path_utf8(input));for(const auto&s:plan.traversal_skips)std::cerr<<prts::path_utf8(s.path)<<": "<<s.reason<<"\n";std::cerr<<"no regular input files found\n";return exit_code(ExitCode::Input);}
+    DirectoryReportSpool spool;if(!spool.ready())return emit_cli_error(ExitCode::Internal,"directory_spool",spool.error(),opt.json_errors);
     Options static_opt=opt;static_opt.run_requested=false;static_opt.run_mode.clear();static_opt.apply=false;static_opt.run_all=false;static_opt.recursive=false;
     const bool bounded_artifacts=!opt.extract;
     prts::DirectoryArtifactRendering artifact_rendering;
@@ -1957,7 +2007,7 @@ int analyze_directory_spooled(const std::filesystem::path&input,const Options&op
     artifact_rendering.detail_retrieval_command="auto-refirst <file-from-directory_plan.file_states> --json";
     std::uint64_t artifact_bytes_used=0,artifact_files_used=0;
     std::vector<prts::DirectoryReportIndex> compact;compact.reserve(plan.candidates.size());std::vector<prts::AnalysisReport> retained;std::uint64_t spool_elapsed_ms=0;std::size_t successful_inputs=0;
-    auto spool_report=[&](const prts::AnalysisReport&r,const prts::DirectoryCandidate&c,const prts::DirectoryReportIndex&idx){std::string why;auto st=std::chrono::steady_clock::now();const bool ok=spool.add(r.input,directory_report_detail_priority(c,idx),[&](std::ostream&out){if(opt.json)prts::render_json(out,r);else out<<prts::render_text(r,opt.report_language);},why);spool_elapsed_ms=sat_add(spool_elapsed_ms,static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-st).count()));if(!ok)std::cerr<<why<<"\n";return ok;};
+    auto spool_report=[&](const prts::AnalysisReport&r,const prts::DirectoryCandidate&c,const prts::DirectoryReportIndex&idx){std::string why;auto st=std::chrono::steady_clock::now();const bool ok=spool.add(r.input,directory_report_detail_priority(c,idx),[&](std::ostream&out){if(opt.json)prts::render_json(out,r);else out<<prts::render_text(r,opt.report_language);},why);spool_elapsed_ms=sat_add(spool_elapsed_ms,static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-st).count()));if(!ok){if(opt.json_errors)emit_cli_error(ExitCode::Internal,"directory_spool",why,opt.json_errors,prts::path_utf8(input));else std::cerr<<why<<"\n";}return ok;};
     for(auto&c:plan.candidates){
         if(!c.readable)continue;
         auto st=std::chrono::steady_clock::now();Options candidate_opt=static_opt;bool forced_deferred=false,unsafe_prior_root=false;
@@ -1974,16 +2024,16 @@ int analyze_directory_spooled(const std::filesystem::path&input,const Options&op
         if(bounded_artifacts){
             if(unsafe_prior_root){artifact_rendering.partial=true;++artifact_rendering.deferred_candidate_count;++artifact_rendering.unknown_omitted_candidate_count;note_directory_artifact_deferred(r,0,0,"automatic directory materialization was refused because the pre-existing product artifact root was unsafe to reset");}
             else{
-                DirectoryArtifactTreeStats stats;std::string artifact_error;if(!inspect_directory_artifact_tree(artifact_root,stats,artifact_error,true)){std::cerr<<artifact_error<<"\n";return exit_code(ExitCode::Internal);}
+                DirectoryArtifactTreeStats stats;std::string artifact_error;if(!inspect_directory_artifact_tree(artifact_root,stats,artifact_error,true))return emit_cli_error(ExitCode::Internal,"artifact_invariant",artifact_error,opt.json_errors);
                 if(forced_deferred){
-                    if(stats.files||stats.bytes){std::cerr<<"internal directory artifact invariant failed: suppressed candidate still materialized output\n";return exit_code(ExitCode::Internal);}
-                    std::string cleanup_error;if(!reset_directory_artifact_root(artifact_root,cleanup_error)){std::cerr<<cleanup_error<<"\n";return exit_code(ExitCode::Internal);}
+                    if(stats.files||stats.bytes)return emit_cli_error(ExitCode::Internal,"artifact_invariant","internal directory artifact invariant failed: suppressed candidate still materialized output",opt.json_errors);
+                    std::string cleanup_error;if(!reset_directory_artifact_root(artifact_root,cleanup_error))return emit_cli_error(ExitCode::Internal,"artifact_invariant",cleanup_error,opt.json_errors);
                     artifact_rendering.partial=true;++artifact_rendering.deferred_candidate_count;++artifact_rendering.unknown_omitted_candidate_count;note_directory_artifact_deferred(r,0,0,"automatic materialization was deferred after the directory aggregate budget was exhausted");
                 }else if(stats.bytes>remaining_bytes||stats.files>remaining_files){
                     artifact_rendering.partial=true;++artifact_rendering.deferred_candidate_count;artifact_rendering.known_omitted_bytes=sat_add(artifact_rendering.known_omitted_bytes,stats.bytes);artifact_rendering.known_omitted_files=sat_add(artifact_rendering.known_omitted_files,stats.files);
-                    std::string cleanup_error;if(!reset_directory_artifact_root(artifact_root,cleanup_error)){std::cerr<<cleanup_error<<"\n";return exit_code(ExitCode::Internal);}
+                    std::string cleanup_error;if(!reset_directory_artifact_root(artifact_root,cleanup_error))return emit_cli_error(ExitCode::Internal,"artifact_invariant",cleanup_error,opt.json_errors);
                     Options retry_opt=static_opt;retry_opt.suppress_auto_materialization=true;retry_opt.suppress_auto_child_analysis=true;retry_opt.extract_budget_bytes=0;retry_opt.extract_budget_files=0;retry_opt.artifact_max_bytes=0;retry_opt.artifact_max_nodes=0;
-                    r=analyze_file(c.path,retry_opt);DirectoryArtifactTreeStats retry_stats;if(!inspect_directory_artifact_tree(artifact_root,retry_stats,artifact_error,true)){std::cerr<<artifact_error<<"\n";return exit_code(ExitCode::Internal);}if(retry_stats.files||retry_stats.bytes){std::cerr<<"internal directory artifact invariant failed: rollback reanalysis still materialized output\n";return exit_code(ExitCode::Internal);}if(!reset_directory_artifact_root(artifact_root,cleanup_error)){std::cerr<<cleanup_error<<"\n";return exit_code(ExitCode::Internal);}
+                    r=analyze_file(c.path,retry_opt);DirectoryArtifactTreeStats retry_stats;if(!inspect_directory_artifact_tree(artifact_root,retry_stats,artifact_error,true))return emit_cli_error(ExitCode::Internal,"artifact_invariant",artifact_error,opt.json_errors);if(retry_stats.files||retry_stats.bytes)return emit_cli_error(ExitCode::Internal,"artifact_invariant","internal directory artifact invariant failed: rollback reanalysis still materialized output",opt.json_errors);if(!reset_directory_artifact_root(artifact_root,cleanup_error))return emit_cli_error(ExitCode::Internal,"artifact_invariant",cleanup_error,opt.json_errors);
                     c.artifact_materialization_state="DEFERRED";c.artifact_materialization_reason="candidate automatic output exceeded the remaining directory aggregate byte/file allowance and was atomically rolled back";note_directory_artifact_deferred(r,stats.files,stats.bytes,c.artifact_materialization_reason);
                 }else{
                     artifact_bytes_used=sat_add(artifact_bytes_used,stats.bytes);artifact_files_used=sat_add(artifact_files_used,stats.files);c.artifact_materialized_bytes=stats.bytes;c.artifact_materialized_files=stats.files;
@@ -2005,17 +2055,17 @@ int analyze_directory_spooled(const std::filesystem::path&input,const Options&op
         const bool runtime_retention=retain_directory_runtime_report(r,c,opt);
         if(prts::directory_report_requires_post_relationship_retention(r)||runtime_retention)retained.push_back(std::move(r));else if(!spool_report(r,c,idx))return exit_code(ExitCode::Internal);
     }
-    if(!successful_inputs){std::cerr<<"no readable regular input files found\n";return exit_code(ExitCode::Input);}
+    if(!successful_inputs)return emit_cli_error(ExitCode::Input,"analysis","no readable regular input files found",opt.json_errors,prts::path_utf8(input));
     prts::build_directory_relationships(plan,compact);
     integrate_directory_godot_semantics(plan,compact,retained,static_opt,bounded_artifacts?&artifact_bytes_used:nullptr,bounded_artifacts?&artifact_files_used:nullptr,bounded_artifacts?&artifact_rendering:nullptr);
     artifact_rendering.materialized_bytes=artifact_bytes_used;artifact_rendering.materialized_files=artifact_files_used;
     artifact_rendering.partial=artifact_rendering.partial||artifact_rendering.deferred_candidate_count!=0;
     artifact_rendering.reason=bounded_artifacts?(artifact_rendering.partial?"one or more automatic artifact outputs or derivatives were deferred/refused to preserve the directory aggregate hard bound":"all automatic artifact outputs fit the default directory aggregate hard bound"):"explicit --extract requested the established per-file materialization behavior; no default directory aggregate cap is claimed";
     std::map<std::string,std::size_t> compact_by_input;for(std::size_t i=0;i<compact.size();++i)compact_by_input[directory_report_key(compact[i].input)]=i;std::set<std::string> retained_inputs;for(const auto&r:retained)retained_inputs.insert(directory_report_key(r.input));
-    for(const auto&r:compact)if(r.post_relationship_mutated&&!retained_inputs.count(directory_report_key(r.input))){std::cerr<<"internal directory retention invariant failed: relationship-mutated report was not retained: "<<prts::path_utf8(r.input)<<"\n";return exit_code(ExitCode::Internal);}
+    for(const auto&r:compact)if(r.post_relationship_mutated&&!retained_inputs.count(directory_report_key(r.input)))return emit_cli_error(ExitCode::Internal,"directory_retention","internal directory retention invariant failed: relationship-mutated report was not retained: "+prts::path_utf8(r.input),opt.json_errors,prts::path_utf8(input));
     for(auto&r:retained){
         const auto it=compact_by_input.find(directory_report_key(r.input));
-        if(it==compact_by_input.end()){std::cerr<<"retained report has no compact index\n";return exit_code(ExitCode::Internal);}
+        if(it==compact_by_input.end())return emit_cli_error(ExitCode::Internal,"directory_retention","retained report has no compact index",opt.json_errors,prts::path_utf8(input));
         prts::apply_directory_report_index_mutations(r,compact[it->second]);
         r.analysis_guidance=prts::build_analysis_guidance(r);
     }
@@ -2027,7 +2077,7 @@ int analyze_directory_spooled(const std::filesystem::path&input,const Options&op
         auto&idx=compact[compact_by_input.at(key)];
         const bool mutated=idx.post_relationship_mutated;
         const auto candidate=std::find_if(plan.candidates.begin(),plan.candidates.end(),[&](const auto&c){return directory_report_key(c.path)==key;});
-        if(candidate==plan.candidates.end()){std::cerr<<"retained report has no candidate\n";return exit_code(ExitCode::Internal);}
+        if(candidate==plan.candidates.end())return emit_cli_error(ExitCode::Internal,"directory_retention","retained report has no candidate",opt.json_errors,prts::path_utf8(input));
         if(mutated||candidate->runtime_selected){idx=prts::make_directory_report_index(r);idx.post_relationship_mutated=mutated;}
         if(!spool_report(r,*candidate,idx))return exit_code(ExitCode::Internal);
         r=prts::AnalysisReport{};
@@ -2039,11 +2089,14 @@ int analyze_directory_spooled(const std::filesystem::path&input,const Options&op
         if(it!=compact_by_input.end())final_priorities[key]=directory_report_detail_priority(c,compact[it->second]);
     }
     std::string selection_error;
-    if(!spool.finalize_selection(final_priorities,selection_error)){std::cerr<<selection_error<<"\n";return exit_code(ExitCode::Internal);}
+    if(!spool.finalize_selection(final_priorities,selection_error))return emit_cli_error(ExitCode::Internal,"directory_spool",selection_error,opt.json_errors,prts::path_utf8(input));
 
     std::map<std::string,std::size_t> rank;for(std::size_t i=0;i<plan.candidates.size();++i)rank[directory_report_key(plan.candidates[i].path)]=i;
     std::stable_sort(spool.records().begin(),spool.records().end(),[&](const auto&a,const auto&b){auto ai=rank.find(directory_report_key(a.input)),bi=rank.find(directory_report_key(b.input));auto av=ai==rank.end()?std::numeric_limits<std::size_t>::max():ai->second,bv=bi==rank.end()?std::numeric_limits<std::size_t>::max():bi->second;return av<bv;});
-    if(spool.records().size()!=compact.size()){std::cerr<<"internal directory retention invariant failed: report spool/index cardinality mismatch\n";return exit_code(ExitCode::Internal);}std::string spool_error;if(!spool.validate(spool_error)){std::cerr<<spool_error<<"\n";return exit_code(ExitCode::Internal);}spool.annotate_plan(plan);
+    if(spool.records().size()!=compact.size())return emit_cli_error(ExitCode::Internal,"directory_retention","internal directory retention invariant failed: report spool/index cardinality mismatch",opt.json_errors,prts::path_utf8(input));
+    std::string spool_error;
+    if(!spool.validate(spool_error))return emit_cli_error(ExitCode::Internal,"directory_spool",spool_error,opt.json_errors,prts::path_utf8(input));
+    spool.annotate_plan(plan);
     const auto raw_elapsed=static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-begin).count());const auto elapsed=raw_elapsed>spool_elapsed_ms?raw_elapsed-spool_elapsed_ms:0;auto summary=prts::summarize_directory(plan,compact,elapsed);auto rendering=spool.rendering();
     rendering.retained_full_reports_peak=retained_report_peak;
     rendering.model_retention_policy=opt.run_requested?"runtime-eligible and relationship-dependent reports; no aggregate model-byte cap is claimed":"relationship-dependent reports only";
@@ -2059,8 +2112,8 @@ int analyze_directory_spooled(const std::filesystem::path&input,const Options&op
 
     if(rendering.partial){summary.partial=true;summary.partial_reasons.push_back("bounded default report rendering deferred "+std::to_string(rendering.full_reports_deferred)+" of "+std::to_string(rendering.full_report_count)+" complete per-file reports; compact state remains present for every admitted file");}
     if(artifact_rendering.partial){summary.partial=true;summary.partial_reasons.push_back("bounded default artifact materialization deferred or refused one or more automatic outputs under the shared directory aggregate byte/file budget");}
-    if(opt.json){auto paths=spool.selected_paths();if(!prts::render_directory_json_spooled(std::cout,plan,summary,paths,rendering,artifact_rendering,spool_error)){std::cerr<<spool_error<<"\n";return exit_code(ExitCode::Internal);}}
-    else if(!render_directory_text_spooled(plan,summary,spool.records(),rendering,artifact_rendering,spool_error)){std::cerr<<spool_error<<"\n";return exit_code(ExitCode::Internal);}
+    if(opt.json){auto paths=spool.selected_paths();if(!prts::render_directory_json_spooled(std::cout,plan,summary,paths,rendering,artifact_rendering,spool_error))return emit_cli_error(ExitCode::Internal,"directory_render",spool_error,opt.json_errors,prts::path_utf8(input));}
+    else if(!render_directory_text_spooled(plan,summary,spool.records(),rendering,artifact_rendering,spool_error))return emit_cli_error(ExitCode::Internal,"directory_render",spool_error,opt.json_errors,prts::path_utf8(input));
     return finish_standard_output(ExitCode::Success);
 }
 
@@ -2078,30 +2131,38 @@ int main(int argc,char**argv){
     auto utf8_storage=windows_utf8_args();std::vector<char*> utf8_argv;if(!utf8_storage.empty()){utf8_argv.reserve(utf8_storage.size()+1);for(auto&x:utf8_storage)utf8_argv.push_back(x.data());utf8_argv.push_back(nullptr);argc=static_cast<int>(utf8_storage.size());argv=utf8_argv.data();}
 #endif
     if(argc>=2&&std::string(argv[1])=="--internal-cpython-probe")return prts::cpython_probe_child_main();
+    bool json_errors_requested=false;
+    for(int i=1;i<argc;++i)if(std::string_view(argv[i])=="--json-errors")json_errors_requested=true;
+    g_json_errors=json_errors_requested;
     try {
-    if(argc<2){std::cerr<<"usage: auto-refirst <file|directory> [--run] [--apply] [--json] [--extract] [options]\nTry 'auto-refirst --help' for details.\n";return exit_code(ExitCode::Usage);}
-    const std::string first=argv[1];if(first=="-h"||first=="--help"){print_help(std::cout);return finish_standard_output(ExitCode::Success);}if(first=="--version"){print_version(std::cout);return finish_standard_output(ExitCode::Success);}if(!first.empty()&&first.front()=='-'){std::cerr<<"unknown option: "<<first<<"\n";return exit_code(ExitCode::Usage);}
-    Options opt;if(!parse_options(argc,argv,opt))return exit_code(ExitCode::Usage);if(opt.help){print_help(std::cout);return finish_standard_output(ExitCode::Success);}if(opt.version){print_version(std::cout);return finish_standard_output(ExitCode::Success);}
-    if(opt.json_envelope&&!opt.json){std::cerr<<"--json-envelope requires --json\n";return exit_code(ExitCode::Usage);}
-    if(opt.json_envelope&&!opt.search.empty()){std::cerr<<"--json-envelope is for analysis reports, not --search JSON Lines output\n";return exit_code(ExitCode::Usage);}
-    const std::filesystem::path input=cli_path(argv[1]);std::error_code ec;const auto input_status=std::filesystem::status(input,ec);if(ec||input_status.type()==std::filesystem::file_type::not_found){std::cerr<<"cannot access input"<<(ec?": "+prts::error_message_utf8(ec):std::string())<<"\n";return exit_code(ExitCode::Input);}const bool is_dir=input_status.type()==std::filesystem::file_type::directory;if(!is_dir&&input_status.type()!=std::filesystem::file_type::regular){std::cerr<<"input is neither a regular file nor a directory\n";return exit_code(ExitCode::Input);}
+    if(argc<2)return emit_cli_error(ExitCode::Usage,"argument_parsing","usage: auto-refirst <file|directory> [--run] [--apply] [--json] [--extract] [options]; try 'auto-refirst --help' for details",json_errors_requested);
+    const std::string first=argv[1];if(first=="-h"||first=="--help"){print_help(std::cout);return finish_standard_output(ExitCode::Success);}if(first=="--version"){print_version(std::cout);return finish_standard_output(ExitCode::Success);}if(!first.empty()&&first.front()=='-')return emit_cli_error(ExitCode::Usage,"argument_parsing","unknown option: "+first,json_errors_requested);
+    Options opt;if(!parse_options(argc,argv,opt))return emit_cli_error(ExitCode::Usage,"argument_parsing",opt.parse_error.empty()?"invalid command-line options":opt.parse_error,opt.json_errors||json_errors_requested);
+    json_errors_requested=opt.json_errors;
+    g_json_errors=opt.json_errors;
+    if(opt.help){print_help(std::cout);return finish_standard_output(ExitCode::Success);}if(opt.version){print_version(std::cout);return finish_standard_output(ExitCode::Success);}
+    if(opt.json_envelope&&!opt.json)return emit_cli_error(ExitCode::Usage,"argument_parsing","--json-envelope requires --json",opt.json_errors);
+    if(opt.json_envelope&&!opt.search.empty())return emit_cli_error(ExitCode::Usage,"argument_parsing","--json-envelope is for analysis reports, not --search JSON Lines output",opt.json_errors);
+    const std::filesystem::path input=cli_path(argv[1]);std::error_code ec;const auto input_status=std::filesystem::status(input,ec);if(ec||input_status.type()==std::filesystem::file_type::not_found){const auto message="cannot access input"+(ec?": "+prts::error_message_utf8(ec):std::string());return emit_cli_error(ExitCode::Input,"input_access",message,opt.json_errors,prts::path_utf8(input));}const bool is_dir=input_status.type()==std::filesystem::file_type::directory;if(!is_dir&&input_status.type()!=std::filesystem::file_type::regular)return emit_cli_error(ExitCode::Input,"input_access","input is neither a regular file nor a directory",opt.json_errors,prts::path_utf8(input));
     if(!opt.artifact_root_cli.empty()){
-        if(is_dir){std::cerr<<"--artifact-root is single-file only; directory analysis needs distinct product-owned roots per input\n";return exit_code(ExitCode::Usage);}
-        if(opt.recursive&&opt.extract){std::cerr<<"--artifact-root is not yet compatible with --extract --recursive because recursive graph nodes require distinct roots\n";return exit_code(ExitCode::Usage);}
-        if(!opt.search.empty()){std::cerr<<"--artifact-root is not used by --search\n";return exit_code(ExitCode::Usage);}
-        std::string artifact_error;std::filesystem::path resolved;if(!prepare_user_artifact_root(input,opt.artifact_root_cli,resolved,artifact_error)){std::cerr<<artifact_error<<"\n";return exit_code(ExitCode::Usage);}opt.artifact_root_override=std::move(resolved);
+        if(is_dir)return emit_cli_error(ExitCode::Usage,"argument_validation","--artifact-root is single-file only; directory analysis needs distinct product-owned roots per input",opt.json_errors,prts::path_utf8(input));
+        if(opt.recursive&&opt.extract)return emit_cli_error(ExitCode::Usage,"argument_validation","--artifact-root is not yet compatible with --extract --recursive because recursive graph nodes require distinct roots",opt.json_errors,prts::path_utf8(input));
+        if(!opt.search.empty())return emit_cli_error(ExitCode::Usage,"argument_validation","--artifact-root is not used by --search",opt.json_errors,prts::path_utf8(input));
+        std::string artifact_error;std::filesystem::path resolved;if(!prepare_user_artifact_root(input,opt.artifact_root_cli,resolved,artifact_error))return emit_cli_error(ExitCode::Usage,"artifact_root_validation",artifact_error,opt.json_errors,opt.artifact_root_cli.string());opt.artifact_root_override=std::move(resolved);
     }
-    if(opt.run_mode=="trace")std::cerr<<"warning: --run=trace is DEPRECATED; prefer bare --run for automatic deep non-destructive analysis\n";
-    else if(opt.run_mode=="unpack")std::cerr<<"warning: --run=unpack is DEPRECATED and is non-destructive; prefer bare --run, and add --apply only when you explicitly authorize validated installation\n";
-    else if(opt.run_mode=="python-probe")std::cerr<<"warning: --run=python-probe is a DEPRECATED forced-debug compatibility mode; bare --run routes the probe automatically when it can answer an unresolved question\n";
-    if(!opt.search.empty()){prts::SearchOptions so;so.needle=opt.search;so.ignore_case=opt.search_ignore_case;so.recursive=true;so.max_depth=opt.directory_max_depth;so.json_lines=opt.json;auto st=prts::search_tree_streaming(input,so);if(!opt.json)std::cout<<"Search complete: files="<<st.files<<" bytes="<<st.bytes<<" matches="<<st.matches<<"\n";if(!st.files){std::cerr<<"no readable regular input files found\n";return finish_standard_output(ExitCode::Input);}return finish_standard_output(st.matches?ExitCode::Success:ExitCode::SearchNoMatch);}
-    if(opt.recursive&&opt.extract&&opt.run_requested){std::cerr<<"recursive extracted-artifact analysis remains static-only; run root inputs without --extract --recursive so extracted children are never executed automatically\n";return exit_code(ExitCode::Usage);}
-    if(is_dir&&opt.run_mode=="unpack"){std::cerr<<"deprecated --run=unpack is single-file compatibility only; for a directory use --run or --run --apply explicitly\n";return exit_code(ExitCode::Usage);}
+    if(!opt.json_errors){
+        if(opt.run_mode=="trace")std::cerr<<"warning: --run=trace is DEPRECATED; prefer bare --run for automatic deep non-destructive analysis\n";
+        else if(opt.run_mode=="unpack")std::cerr<<"warning: --run=unpack is DEPRECATED and is non-destructive; prefer bare --run, and add --apply only when you explicitly authorize validated installation\n";
+        else if(opt.run_mode=="python-probe")std::cerr<<"warning: --run=python-probe is a DEPRECATED forced-debug compatibility mode; bare --run routes the probe automatically when it can answer an unresolved question\n";
+    }
+    if(!opt.search.empty()){prts::SearchOptions so;so.needle=opt.search;so.ignore_case=opt.search_ignore_case;so.recursive=true;so.max_depth=opt.directory_max_depth;so.json_lines=opt.json;auto st=prts::search_tree_streaming(input,so);if(!opt.json)std::cout<<"Search complete: files="<<st.files<<" bytes="<<st.bytes<<" matches="<<st.matches<<"\n";if(!st.files)return emit_cli_error(ExitCode::Input,"search","no readable regular input files found",opt.json_errors,prts::path_utf8(input));return finish_standard_output(st.matches?ExitCode::Success:ExitCode::SearchNoMatch);}
+    if(opt.recursive&&opt.extract&&opt.run_requested)return emit_cli_error(ExitCode::Usage,"argument_validation","recursive extracted-artifact analysis remains static-only; run root inputs without --extract --recursive so extracted children are never executed automatically",opt.json_errors,prts::path_utf8(input));
+    if(is_dir&&opt.run_mode=="unpack")return emit_cli_error(ExitCode::Usage,"argument_validation","deprecated --run=unpack is single-file compatibility only; for a directory use --run or --run --apply explicitly",opt.json_errors,prts::path_utf8(input));
     if(is_dir&&!(opt.recursive&&opt.extract))return analyze_directory_default(input,opt);
     std::vector<std::filesystem::path> files;
     if(is_dir){auto inv=prts::inventory_directory(input,opt.directory_max_depth);for(const auto&c:inv.candidates)if(c.readable)files.push_back(c.path);}
     else files.push_back(input);
-    if(files.empty()){std::cerr<<"no regular input files found\n";return exit_code(ExitCode::Input);}
+    if(files.empty())return emit_cli_error(ExitCode::Input,"input_inventory","no regular input files found",opt.json_errors,prts::path_utf8(input));
 
     std::vector<prts::AnalysisReport> reports;
     const bool artifact_graph_mode=opt.recursive&&opt.extract;
@@ -2165,7 +2226,7 @@ int main(int argc,char**argv){
         }
     }
 
-    if(!successful_root_inputs){std::cerr<<"no readable regular input files found\n";return exit_code(ExitCode::Input);}
+    if(!successful_root_inputs)return emit_cli_error(ExitCode::Input,"analysis","no readable regular input files found",opt.json_errors,prts::path_utf8(input));
     if(opt.json){
         if(opt.json_envelope)render_report_set_json(std::cout,reports);
         else if(reports.size()==1)std::cout<<prts::render_json(reports.front());
@@ -2177,10 +2238,8 @@ int main(int argc,char**argv){
     }
     return finish_standard_output(ExitCode::Success);
     } catch(const std::exception& e) {
-        std::cerr << "internal fatal error: " << e.what() << "\n";
-        return exit_code(ExitCode::Internal);
+        return emit_cli_error(ExitCode::Internal,"execution",std::string("internal fatal error: ")+e.what(),json_errors_requested);
     } catch(...) {
-        std::cerr << "internal fatal error: unknown exception\n";
-        return exit_code(ExitCode::Internal);
+        return emit_cli_error(ExitCode::Internal,"execution","internal fatal error: unknown exception",json_errors_requested);
     }
 }

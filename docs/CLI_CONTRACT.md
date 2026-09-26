@@ -22,6 +22,24 @@ Runtime observations are represented in the text or JSON report. A target exit, 
 
 `--json-envelope` is an opt-in transport normalization and requires `--json`. For single-file and recursive artifact analysis it emits an object containing top-level `report_schema_version` and `reports`; directory analysis already has an envelope and retains its existing directory fields. The option does not change the child report schema or imply a schema-version bump. It is rejected with `--search`, whose JSON mode remains JSON Lines.
 
+
+`--json-errors` is an opt-in failure-diagnostics transport. It does not change successful stdout and does not imply `--json`. For CLI-level usage errors, input/preflight failures, directory orchestration invariant failures, and uncaught fatal exceptions, the process writes exactly one JSON object to stderr and keeps stdout empty when failure occurs before report emission. The object has this stable shape:
+
+```json
+{
+  "error_schema_version": "1.0",
+  "error": {
+    "kind": "usage|input|internal",
+    "code": 2,
+    "stage": "argument_parsing",
+    "message": "...",
+    "path": "..."
+  }
+}
+```
+
+`path` is omitted when no input path is available. `error.code` is always equal to the process exit code (`2`, `3`, or `4`). Exit code `1` (`--search` completed with no match) is a normal negative result and does not produce an error envelope. If stderr itself cannot be written, the process still follows the existing fatal output-write rule and returns `4`; callers should treat an unavailable stderr stream as transport failure.
+
 ## Directory resource scope
 
 Static and explicitly authorized runtime directory analysis share the same report transport budget: 16 MiB of complete inline reports, 8 MiB per report, and 24 MiB of temporary report payloads including deferred cache and the active writer. Final cross-file priorities reselect available cached reports without repeating extraction or target execution. `cache_evicted_reports` counts payloads discarded to maintain the disk bound; their compact file states remain present, but final priority changes cannot recover discarded bytes. `priorities_finalized`, `reports_reselected` and `spool_resident_bytes` describe this final selection.
