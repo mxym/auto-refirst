@@ -390,43 +390,36 @@ add_executable(auto_refirst_public_fixture_crypto EXCLUDE_FROM_ALL tests/public/
 add_executable(auto_refirst_public_fixture_runtime_child EXCLUDE_FROM_ALL tests/public/runtime_child.c)
 add_executable(auto_refirst_public_fixture_runtime_parent EXCLUDE_FROM_ALL tests/public/runtime_parent.c)
 
-foreach(_public_target
-        auto_refirst_public_mapped_file_snapshot_unit
-        auto_refirst_public_directory_report_spool_unit
-        auto_refirst_public_model_trust_unit
-        auto_refirst_public_python_bytecode_unit
-        auto_refirst_public_flutter_codec_unit
-        auto_refirst_public_path_utf8_unit
-        auto_refirst_public_nuitka_unit
-        auto_refirst_public_static_scan_unit
-        auto_refirst_public_pyinstaller_reference_unit
-        auto_refirst_public_unity_registration_profile_unit
-        auto_refirst_public_unity_metadata_usage_codec_unit
-        auto_refirst_public_unity_engine_version_unit
-        auto_refirst_public_unity_method_dispatch_profile_unit
-        auto_refirst_public_unity_generic_class_profile_unit
-        auto_refirst_public_fixture_ordinary
-        auto_refirst_public_fixture_crypto
-        auto_refirst_public_fixture_runtime_child
-        auto_refirst_public_fixture_runtime_parent)
+# Keep the target map in one place so every public helper receives the same
+# platform encoding policy. Adding a helper to one list but not the other used
+# to silently skip either UTF-8 flags or strict warnings.
+set(AUTO_REFIRST_PUBLIC_UNIT_TARGETS
+    auto_refirst_public_mapped_file_snapshot_unit
+    auto_refirst_public_directory_report_spool_unit
+    auto_refirst_public_model_trust_unit
+    auto_refirst_public_python_bytecode_unit
+    auto_refirst_public_flutter_codec_unit
+    auto_refirst_public_path_utf8_unit
+    auto_refirst_public_nuitka_unit
+    auto_refirst_public_static_scan_unit
+    auto_refirst_public_pyinstaller_reference_unit
+    auto_refirst_public_unity_registration_profile_unit
+    auto_refirst_public_unity_metadata_usage_codec_unit
+    auto_refirst_public_unity_engine_version_unit
+    auto_refirst_public_unity_method_dispatch_profile_unit
+    auto_refirst_public_unity_generic_class_profile_unit)
+set(AUTO_REFIRST_PUBLIC_TARGETS
+    ${AUTO_REFIRST_PUBLIC_UNIT_TARGETS}
+    auto_refirst_public_fixture_ordinary
+    auto_refirst_public_fixture_crypto
+    auto_refirst_public_fixture_runtime_child
+    auto_refirst_public_fixture_runtime_parent)
+
+foreach(_public_target IN LISTS AUTO_REFIRST_PUBLIC_TARGETS)
     auto_refirst_enable_msvc_utf8(${_public_target})
 endforeach()
 
-foreach(_public_target
-        auto_refirst_public_mapped_file_snapshot_unit
-        auto_refirst_public_directory_report_spool_unit
-        auto_refirst_public_model_trust_unit
-        auto_refirst_public_python_bytecode_unit
-        auto_refirst_public_flutter_codec_unit
-        auto_refirst_public_path_utf8_unit
-        auto_refirst_public_nuitka_unit
-        auto_refirst_public_static_scan_unit
-        auto_refirst_public_pyinstaller_reference_unit
-        auto_refirst_public_unity_registration_profile_unit
-        auto_refirst_public_unity_metadata_usage_codec_unit
-        auto_refirst_public_unity_engine_version_unit
-        auto_refirst_public_unity_method_dispatch_profile_unit
-        auto_refirst_public_unity_generic_class_profile_unit)
+foreach(_public_target IN LISTS AUTO_REFIRST_PUBLIC_UNIT_TARGETS)
     if(MSVC)
         target_compile_options(${_public_target} PRIVATE /W4 /permissive- /EHsc)
     else()
