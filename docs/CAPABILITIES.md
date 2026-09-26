@@ -8,6 +8,7 @@
 
 - DOS/NT/COFF/Optional Header、节表、入口、导入/导出、TLS、Load Config 等结构验证。
 - Authenticode `WIN_CERTIFICATE`、PKCS#7、PE image digest、签名者/证书元数据、RFC3161 时间戳、EKU、page hash 与嵌套签名证据。
+- 对安全目录中的私有企业 OID + 大型 OCTET STRING 提供低置信度载荷线索：只在已验证的 PE Certificate Table file-offset 范围内做有界 DER 遍历（16 MiB、4096 节点、16 层、32 条），输出 `FILE_OFFSET` 证据和后续人工检查建议；不把它当成代码、签名信任或自动提取结论。
 - x64 常见执行前置条件、手工解析器、反调试与运行时物化相关证据。
 - Windows 运行时路径集成 libPeConv，用于受控的进程映像/重建工作流。
 
