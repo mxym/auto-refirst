@@ -70,6 +70,23 @@ The root is bound to the input path by an ownership marker; unrelated existing d
 
 See [docs/CAPABILITIES.md](docs/CAPABILITIES.md) for detailed boundaries.
 
+## Optional Qt drag-and-drop workspace
+
+Enable the optional Qt Widgets client when a desktop sample queue is useful:
+
+```sh
+cmake -S . -B build-gui -DAUTO_REFIRST_BUILD_QT_UI=ON
+cmake --build build-gui --target auto_refirst_gui --parallel
+./build-gui/auto-refirst-gui
+```
+
+The client reuses the CLI and exposes its static, runtime, directory-budget,
+artifact-budget, search and `wxid` options across Basic and Advanced tabs.
+Runtime execution and replacement are off by default and require confirmation.
+It supports Chinese/English labels, drag-and-drop queues, cancellation,
+timeouts, readable summaries, next-step hints, JSON reports and report-folder
+opening. See [docs/GUI.md](docs/GUI.md) for the build and integration contract.
+
 ## RC.2 progress
 
 Included in the public capability contract:

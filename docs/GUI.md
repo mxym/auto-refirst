@@ -24,11 +24,14 @@ time with an explicit dependency message.
 
 The client locates `auto-refirst` beside the GUI executable (or uses the
 `AUTO_REFIRST_CLI` environment override for development). There is no CLI
-path picker in the product UI. It invokes the CLI once per queue item with:
+path picker in the product UI. Normal analysis invokes the CLI once per queue item with:
 
 ```text
 auto-refirst <file-or-directory> --json --json-envelope --json-errors
 ```
+
+Search mode replaces `--json-envelope` with `--search=TEXT` because the CLI
+returns JSON Lines; the GUI wraps those hits into the same report view.
 
 The **Basic** tab maps static preparation, recursive artifact reports,
 runtime mode, replacement authorization, report language, and the per-item

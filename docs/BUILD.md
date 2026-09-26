@@ -85,8 +85,10 @@ cmake --build build-gui --target auto_refirst_gui --parallel
 
 Windows 多配置生成器在 build 命令增加 `--config Release`。界面会串行调用
 现有 `auto-refirst` CLI，使用 `--json --json-envelope --json-errors`，可选
-`--extract`，并提供拖放队列、取消、超时、报告摘要和限制提示。它不提供
-`--run`/`--apply` 入口。无 Qt 的机器保持 `AUTO_REFIRST_BUILD_QT_UI=OFF`，或
+`--extract`、`--run`、`--apply`、目录预算、工件预算、搜索和 `wxid`，并提供
+拖放队列、取消、超时、报告摘要、下一步提示和限制提示。运行时与写回默认关闭，
+开启前需要确认；界面支持中英切换。无 Qt 的机器保持
+`AUTO_REFIRST_BUILD_QT_UI=OFF`，或
 运行不依赖 Qt 的 `python3 tests/check_qt_ui_contract.py`。
 
 ## Sanitizer smoke
