@@ -42,6 +42,8 @@ python3 tests/run_public_regression.py --binary build/auto-refirst --tier all
 ```
 
 Windows 多配置生成器需要将 `--binary` 指向实际配置目录中的 executable。
+回归 runner 会按主机可用 CPU 数量并行构建独立的 public helper target，最多使用 4
+个并发构建作业；低核主机至少保留 1 个作业，避免固定的双作业上限拖慢本地或托管构建。
 
 候选发布构建应显式启用 warnings-as-errors，并要求 binary 内嵌的完整 commit
 与 clean source 精确一致：
