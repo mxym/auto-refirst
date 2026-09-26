@@ -322,6 +322,9 @@ def p0_cli_exit_contract(binary:pathlib.Path) -> None:
     cp=run([sys.executable,ROOT/"tests/test_cli_exit_contract.py",binary],env=env,timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log("[PASS P0] CLI exit taxonomy + source-generated root/open and mixed-directory failures")
+    cp=run([sys.executable,ROOT/"tests/test_cli_json_errors.py",binary],env=env,timeout=180)
+    assert "[PASS]" in cp.stdout,cp.stdout
+    log("[PASS P0] opt-in --json-errors stderr envelope + clean stdout/error transport")
     cp=run([sys.executable,ROOT/"tests/test_preprocessing_contract.py",binary],env=env,timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log(cp.stdout.strip())

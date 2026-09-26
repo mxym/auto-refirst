@@ -14,6 +14,7 @@ auto-refirst <file|directory> [options]
 -h, --help
 --version
 --json
+--json-errors
 --json-envelope
 --report-lang=en|zh
 --extract
@@ -35,6 +36,11 @@ auto-refirst file --extract --recursive --json
 默认静态模式可自动物化有界高价值工件。`--extract` 增加完整容器/resource 展开和重型静态分析。递归工件模式不会执行子工件。
 
 `--json` 的现有输出形状保持兼容：单文件通常是一个 report object，`--extract --recursive` 在产生多个 report 时是顶层 array，而目录分析使用带 `reports` 的 directory envelope。需要稳定集合传输层的调用方可显式使用 `--json --json-envelope`：单文件与递归工件图都统一为 `{ "report_schema_version": "1.0", "reports": [...] }`；目录 JSON 本来就是 envelope，因此保持其现有 directory 字段和 `reports` 数组。该选项是 opt-in，不改变既有 `--json` 输出，也不提升 `report_schema_version`。`--json-envelope` 必须与 `--json` 一起使用，且不适用于 `--search` 的 JSON Lines 模式。
+
+
+`--json-errors` 是一个 opt-in 的失败诊断传输选项。它不会改变成功分析的 stdout；当命令行参数、输入预检、目录编排不变量或顶层异常导致退出码为 `2/3/4` 时，CLI 会在 stderr 写入一个单独的 JSON object：`error_schema_version` 固定为 `1.0`，`error` 固定包含 `kind`、`code`、`stage`、`message`，输入相关错误还包含 `path`。`error.code` 与进程退出码一致，stdout 在失败预检时保持为空。该选项不等价于 `--json`，可单独使用；`--search` 的无匹配仍然是退出码 `1`，不产生错误 envelope。
+
+`--json-errors` is an opt-in failure-diagnostics transport. It leaves successful report stdout unchanged. When command-line validation, input preflight, directory orchestration invariants, or an uncaught top-level exception produces exit code `2`, `3`, or `4`, the CLI writes one JSON object to stderr: `error_schema_version` is `1.0`, and `error` always contains `kind`, `code`, `stage`, and `message`; input failures also include `path`. `error.code` equals the process exit code, and stdout stays empty for preflight failures. The option does not imply `--json` and can be used alone; a `--search` no-match result remains exit code `1` without an error envelope.
 
 单文件输入默认写入 `<input>.auto-refirst/`。如果输入位于只读介质、系统目录或不希望产生旁路文件的位置，可显式迁移整个产物树：
 

@@ -107,7 +107,7 @@
 - root/current-input offset basis；
 - relation / source provenance；
 - SHA-256 去重；
-- depth/node/byte budgets；
+- depth/node/byte budgets；目录候选子报告遵守同一深度门控，已哈希的重复子工件先去重再消耗节点/字节接纳预算；
 - HIGH-priority child static re-analysis；
 - symlink/reparse/path traversal 防护。
 
