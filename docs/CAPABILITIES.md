@@ -10,7 +10,7 @@
 
 - DOS/NT/COFF/Optional Header、节表、入口、导入/导出、TLS、Load Config 等结构验证。
 - Authenticode `WIN_CERTIFICATE`、PKCS#7、PE image digest、签名者/证书元数据、RFC3161 时间戳、EKU、page hash 与嵌套签名证据。
-- 对安全目录中的私有企业 OID + 大型 OCTET STRING 提供低置信度载荷线索：只在已验证的 PE Certificate Table file-offset 范围内做有界 DER 遍历（16 MiB、4096 节点、16 层、32 条），输出 `FILE_OFFSET` 证据和后续人工检查建议；不把它当成代码、签名信任或自动提取结论。
+- 对安全目录中的私有企业 OID + 大型 OCTET STRING 提供低置信度载荷线索：只在已验证的 PE Certificate Table file-offset 范围内做有界 DER 遍历（16 MiB、4096 节点、16 层、32 条），输出 `FILE_OFFSET` 证据，并在 AUTO_CORE/`--extract` 预算内原样物化为 `BULK` 不透明证书载荷工件；不把它当成代码、签名信任或嵌套格式结论，不自动递归解释、解密或执行。
 - 对 PE 导出表中指向导出目录的字符串提供有界 forwarder/API-set 关系线索：验证模块与符号/ordinal 几何，输出 `RVA`/`CURRENT_INPUT_IMAGE` 范围、API-set 与部分状态；只复用既有有界导出字符串解析，不解析系统 API-set 主机映射，也不宣称运行时 DLL 已被解析。
 - 对 PE `IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT` 提供有界 delay-load 关系线索：验证 RVA/VA 属性、DLL 名称、INT/IAT thunk 与 ordinal/name 几何，输出 `PE delay-load imports` finding 和 `RVA`/`CURRENT_INPUT_IMAGE` 范围；目录或 thunk 截断时保留 `PARTIAL`。delay-load helper 的首次调用、failure hook、搜索路径和最终 DLL 身份均不从静态描述器猜测。
 - x64 常见执行前置条件、手工解析器、反调试与运行时物化相关证据。
