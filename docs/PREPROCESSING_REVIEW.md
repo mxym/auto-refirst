@@ -48,6 +48,7 @@
 | P2 · 已实现 | Wasm relocatable metadata | 对 `linking` 与 `reloc.*` custom section 做有界版本、subsection、目标 section 和 relocation entry geometry 检查；合法 linking 版本可标记 relocatable module，unsupported/truncated metadata 保留核心模块确认并显式报告 `FAILED`/`PARTIAL`，不推断完整链接语义。 |
 | P2 · 已实现 | PE export forwarder/API-set triage | 对已验证导出目录内的 forwarder 字符串做有界 module/symbol/ordinal/API-set 几何整理；畸形目标降为 `PARTIAL`，不猜 API-set host、不模拟 loader 搜索路径、不执行 DLL。 |
 | P2 · 已实现 | CLR/native boundary triage | 对 PE COR20、native entry flag/RVA、OEP、MethodDef body、P/Invoke 及非 CLR 原生导入/导出面做静态边界整理；MethodDef body 进一步区分 RVA 缺失、RVA 不可映射和 tiny/fat IL 几何无效，标出疑似改写/裁剪的托管方法；VMProtect/自定义 loader 常见的托管-原生分界保留 `CONFIRMED`/`LIKELY`/`PARTIAL`，所有运行时解析保持明确拒绝。 |
+| P2 · 已实现 | .NET MethodDef body map | JSON 与 `.NET symbols.csv` 输出 MethodDef 元数据行、IL body/header/code 的 file-offset、长度和 file-backed 状态；下游可以直接按 token 与当前输入偏移复核异常方法，不需要重新猜测 RVA 到文件范围的映射。 |
 | P2 · 已实现 | PE custom-loader surface | 组合 resolver imports、重定位目录、TLS 预入口和入口段权限的独立信号，输出低置信度手动映射/反射式 loader 路由；单一 API、单独重定位目录和普通插件宿主形状不升级，保持静态-only。 |
 | P2 · 已实现 | .NET managed resources surface | 将已验证 `ManifestResource` 的嵌入 payload 与外部 `AssemblyRef`/`File`/`ExportedType` 实现关系交接给报告，并在预算内原样物化嵌入字节接入递归子工件图，保留文件偏移和静态-only 边界，优先提示内嵌 DLL/配置/二进制资源。 |
 | P2 · 已实现 | .NET single-file bundle materialization | 在 v2/v6 manifest/member geometry 已闭合后，按 AUTO_CORE/`--extract` 预算物化未压缩 managed assembly、native runtime、deps/runtimeconfig 与 symbols 成员，注册到现有静态子工件图；v6 压缩成员明确保留为待解压边界，不执行应用、不伪造 Brotli 结果。 |
