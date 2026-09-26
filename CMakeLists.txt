@@ -143,6 +143,7 @@ add_executable(auto_refirst
     src/detect/antidebug.cpp
     src/detect/execution_prerequisite.cpp
     src/detect/manual_resolver.cpp
+    src/detect/pe_loader_surface.cpp
     src/detect/crypto.cpp
     src/detect/golang.cpp
     src/detect/rust.cpp
