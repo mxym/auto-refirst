@@ -57,6 +57,8 @@ struct DotNetBoundaryInfo {
     std::uint64_t native_entry_file_offset=0,pe_entry_file_offset=0;
     std::string clr_section,native_entry_section,pe_entry_section;
     std::uint32_t managed_method_count=0,non_file_backed_method_count=0,pinvoke_method_count=0;
+    std::uint32_t suspicious_rva_absent_method_count=0,rva_unmapped_method_count=0,body_geometry_invalid_method_count=0;
+    std::uint32_t zero_code_method_count=0,native_impl_method_count=0,runtime_impl_method_count=0;
     std::uint32_t native_import_module_count=0,native_import_count=0,native_export_count=0;
     std::vector<DotNetBoundaryMethod> bridge_methods;
     std::vector<DotNetBoundaryDependency> dependencies;

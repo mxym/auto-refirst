@@ -15,6 +15,10 @@ namespace prts { namespace {
 constexpr std::size_t kDependencyCap=96;
 constexpr std::size_t kBridgeMethodCap=128;
 constexpr std::uint32_t kExecutable=0x20000000u;
+constexpr std::uint16_t kMethodAbstract=0x0400u;
+constexpr std::uint16_t kImplCodeTypeMask=0x0003u;
+constexpr std::uint16_t kImplForwardRef=0x0010u;
+constexpr std::uint16_t kImplInternalCall=0x1000u;
 
 std::uint32_t le32(std::span<const std::uint8_t> data,std::size_t offset){
     if(offset>data.size()||data.size()-offset<4)return 0;
@@ -135,17 +139,33 @@ DotNetBoundaryInfo analyze_dotnet_boundary(std::span<const std::uint8_t> data,
             ++out.pinvoke_method_count;
             if(!method.import_module.empty())add_dependency(out,{"PInvoke",method.import_module,method.import_name,method.token,method.metadata_row_offset});
         }
-        if(!method.rva)continue;
+        const auto impl_code=static_cast<std::uint16_t>(method.impl_flags&kImplCodeTypeMask);
+        if(impl_code==1)++out.native_impl_method_count;
+        else if(impl_code==3)++out.runtime_impl_method_count;
+        const bool externally_defined=method.pinvoke||(method.flags&kMethodAbstract)!=0||(method.impl_flags&(kImplForwardRef|kImplInternalCall))!=0||impl_code==3;
+        if(!method.rva){
+            if(!externally_defined&&(impl_code==0||impl_code==2)){
+                ++out.suspicious_rva_absent_method_count;
+                if(out.bridge_methods.size()<kBridgeMethodCap){
+                    DotNetBoundaryMethod bridge;bridge.token=method.token;bridge.rva=0;bridge.body_file_backed=false;bridge.pinvoke=method.pinvoke;bridge.type_name=method.type_name;bridge.name=method.name;bridge.import_module=method.import_module;bridge.import_name=method.import_name;bridge.state="METHOD_RVA_ABSENT_SUSPICIOUS";out.bridge_methods.push_back(std::move(bridge));
+                }else out.truncated=true;
+            }
+            continue;
+        }
         if(!method.body_file_backed){
             ++out.non_file_backed_method_count;
+            const auto method_file=rva_file_offset(pe,method.rva,data.size());
+            if(method_file)++out.body_geometry_invalid_method_count;else ++out.rva_unmapped_method_count;
             if(out.bridge_methods.size()<kBridgeMethodCap){
-                DotNetBoundaryMethod bridge;bridge.token=method.token;bridge.rva=method.rva;bridge.body_file_backed=false;bridge.pinvoke=method.pinvoke;bridge.type_name=method.type_name;bridge.name=method.name;bridge.import_module=method.import_module;bridge.import_name=method.import_name;bridge.state="METHOD_BODY_UNRESOLVED";
-                if(const auto method_file=rva_file_offset(pe,method.rva,data.size())){
+                DotNetBoundaryMethod bridge;bridge.token=method.token;bridge.rva=method.rva;bridge.body_file_backed=false;bridge.pinvoke=method.pinvoke;bridge.type_name=method.type_name;bridge.name=method.name;bridge.import_module=method.import_module;bridge.import_name=method.import_name;bridge.state=method_file?"METHOD_BODY_GEOMETRY_INVALID":"METHOD_RVA_UNMAPPED";
+                if(method_file){
                     bridge.file_offset=*method_file;
                     if(out.ranges.size()<32)out.ranges.push_back(file_offset_range(*method_file,1,"MethodDef RVA / unresolved body",CoordinateBasis::CURRENT_INPUT_FILE));
                 }
                 out.bridge_methods.push_back(std::move(bridge));
             }else out.truncated=true;
+        }else if(method.code_size==0){
+            ++out.zero_code_method_count;
         }
     }
 
@@ -196,12 +216,17 @@ Finding dotnet_boundary_finding(const DotNetBoundaryInfo& info){
         if(info.entry_rva_diverges)finding.evidence.push_back("CLR native entry RVA diverges from the PE optional-header entry RVA; loader/stub and native bridge are separate coordinates");
     }else finding.negative_evidence.push_back("COR20 native-entry flag is absent; no native CLR entrypoint is promoted from the managed entry token");
     if(info.non_file_backed_method_count)finding.evidence.push_back(std::to_string(info.non_file_backed_method_count)+" MethodDef RVA(s) have no bounded IL body; native/malformed bridge remains unresolved");
+    if(info.suspicious_rva_absent_method_count)finding.evidence.push_back(std::to_string(info.suspicious_rva_absent_method_count)+" non-abstract, non-P/Invoke MethodDef(s) declare IL/optimized-IL semantics but have no RVA; this is a bounded modified/stripped-body surface");
+    if(info.body_geometry_invalid_method_count)finding.evidence.push_back(std::to_string(info.body_geometry_invalid_method_count)+" MethodDef RVA(s) map to file-backed bytes but fail the bounded tiny/fat IL body geometry check");
+    if(info.rva_unmapped_method_count)finding.negative_evidence.push_back(std::to_string(info.rva_unmapped_method_count)+" MethodDef RVA(s) cannot be mapped to current file-backed PE bytes");
+    if(info.zero_code_method_count)finding.negative_evidence.push_back(std::to_string(info.zero_code_method_count)+" file-backed IL body(ies) declare zero code bytes; IL semantics were not decoded");
+    if(info.native_impl_method_count||info.runtime_impl_method_count)finding.evidence.push_back("MethodImpl code-type surface: native="+std::to_string(info.native_impl_method_count)+" runtime="+std::to_string(info.runtime_impl_method_count)+"; implementation kind is metadata evidence only");
     if(info.pinvoke_method_count)finding.evidence.push_back(std::to_string(info.pinvoke_method_count)+" bounded P/Invoke method(s) expose an external native dependency surface");
     if(info.native_import_module_count||info.native_export_count)finding.evidence.push_back("PE native surface: "+std::to_string(info.native_import_module_count)+" non-CLR import module(s), "+std::to_string(info.native_export_count)+" export(s)");
     if(info.truncated)finding.negative_evidence.push_back("dependency or bridge-method sample was capped; omitted entries are not evidence of absence");
     if(!info.error.empty())finding.negative_evidence.push_back(info.error);
-    finding.fields["boundary_kind"]=info.boundary_kind;finding.fields["clr_rva"]=hex_u32(info.clr_rva);finding.fields["native_entry_rva"]=hex_u32(info.native_entry_rva);finding.fields["managed_methods"]=std::to_string(info.managed_method_count);finding.fields["non_file_backed_methods"]=std::to_string(info.non_file_backed_method_count);finding.fields["pinvoke_methods"]=std::to_string(info.pinvoke_method_count);finding.fields["native_import_modules"]=std::to_string(info.native_import_module_count);finding.fields["native_imports"]=std::to_string(info.native_import_count);finding.fields["native_exports"]=std::to_string(info.native_export_count);finding.fields["runtime_resolution"]="NOT_PERFORMED";finding.fields["execution_refusal"]="static preprocessing never executes CLR/native payloads";
-    finding.ranges=info.ranges;finding.suggested_actions={"inspect:CLR EntryPointTokenOrRVA and PE OEP at reported file offsets","resolve P/Invoke/PE import modules against supplied DLL artifacts","treat unresolved MethodDef bodies as bridge candidates; do not infer recovered native logic"};
+    finding.fields["boundary_kind"]=info.boundary_kind;finding.fields["clr_rva"]=hex_u32(info.clr_rva);finding.fields["native_entry_rva"]=hex_u32(info.native_entry_rva);finding.fields["managed_methods"]=std::to_string(info.managed_method_count);finding.fields["non_file_backed_methods"]=std::to_string(info.non_file_backed_method_count);finding.fields["suspicious_rva_absent_methods"]=std::to_string(info.suspicious_rva_absent_method_count);finding.fields["rva_unmapped_methods"]=std::to_string(info.rva_unmapped_method_count);finding.fields["body_geometry_invalid_methods"]=std::to_string(info.body_geometry_invalid_method_count);finding.fields["zero_code_methods"]=std::to_string(info.zero_code_method_count);finding.fields["native_impl_methods"]=std::to_string(info.native_impl_method_count);finding.fields["runtime_impl_methods"]=std::to_string(info.runtime_impl_method_count);finding.fields["pinvoke_methods"]=std::to_string(info.pinvoke_method_count);finding.fields["native_import_modules"]=std::to_string(info.native_import_module_count);finding.fields["native_imports"]=std::to_string(info.native_import_count);finding.fields["native_exports"]=std::to_string(info.native_export_count);finding.fields["runtime_resolution"]="NOT_PERFORMED";finding.fields["execution_refusal"]="static preprocessing never executes CLR/native payloads";
+    finding.ranges=info.ranges;finding.suggested_actions={"inspect:CLR EntryPointTokenOrRVA and PE OEP at reported file offsets","resolve P/Invoke/PE import modules against supplied DLL artifacts","inspect MethodDef RVA/body geometry anomalies before trusting managed control flow","treat unresolved MethodDef bodies as bridge candidates; do not infer recovered native logic"};
     return finding;
 }
 

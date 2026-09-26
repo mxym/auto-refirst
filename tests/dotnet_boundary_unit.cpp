@@ -30,8 +30,8 @@ int main(){
     prts::DotNetMethod bridge;bridge.token=0x06000001;bridge.rva=0x1150;bridge.name="NativeThunk";bridge.type_name="Bridge";bridge.body_file_backed=false;dotnet.methods.push_back(bridge);
     prts::DotNetMethod pinvoke;pinvoke.token=0x06000002;pinvoke.name="Load";pinvoke.type_name="Bridge";pinvoke.pinvoke=true;pinvoke.import_module="kernel32.dll";pinvoke.import_name="LoadLibraryW";dotnet.methods.push_back(pinvoke);
     auto mixed=prts::analyze_dotnet_boundary(data,pe,dotnet);
-    if(mixed.state!="CONFIRMED"||mixed.boundary_kind!="MIXED_NATIVE_MANAGED_BOUNDARY"||!mixed.native_entry_file_backed||!mixed.native_entry_executable||!mixed.entry_rva_diverges||mixed.non_file_backed_method_count!=1||mixed.pinvoke_method_count!=1||mixed.dependencies.empty())return 1;
-    auto finding=prts::dotnet_boundary_finding(mixed);if(finding.state!="CONFIRMED"||finding.fields["runtime_resolution"]!="NOT_PERFORMED"||finding.fields["clr_rva"]!="0x1000"||finding.ranges.empty())return 2;
+    if(mixed.state!="CONFIRMED"||mixed.boundary_kind!="MIXED_NATIVE_MANAGED_BOUNDARY"||!mixed.native_entry_file_backed||!mixed.native_entry_executable||!mixed.entry_rva_diverges||mixed.non_file_backed_method_count!=1||mixed.body_geometry_invalid_method_count!=1||mixed.pinvoke_method_count!=1||mixed.dependencies.empty()||mixed.bridge_methods.front().state!="METHOD_BODY_GEOMETRY_INVALID")return 1;
+    auto finding=prts::dotnet_boundary_finding(mixed);if(finding.state!="CONFIRMED"||finding.fields["runtime_resolution"]!="NOT_PERFORMED"||finding.fields["clr_rva"]!="0x1000"||finding.fields["body_geometry_invalid_methods"]!="1"||finding.ranges.empty())return 2;
 
     auto resources=dotnet;
     prts::DotNetResource embedded;embedded.rid=1;embedded.name="payload.dll";embedded.embedded=true;embedded.size_known=true;embedded.data_offset=0x380;embedded.size=64;
@@ -51,6 +51,8 @@ int main(){
     auto malformed=pe;malformed.clr.rva=0x4f00;malformed.clr.size=0x80;auto failed=prts::analyze_dotnet_boundary(data,malformed,dotnet);if(failed.state!="FAILED"||failed.boundary_kind!="UNRESOLVED_BOUNDARY")return 3;
 
     auto dependency=base_pe();dependency.clr.rva=0x1000;dependency.clr.size=0x40;auto managed=dotnet;managed.entry_point_native=false;managed.clr_flags=0;managed.entry_point_token_or_rva=0x06000001;auto managed_data=clr_header();managed_data[0x200+16]=0;auto likely=prts::analyze_dotnet_boundary(managed_data,dependency,managed);if(likely.state!="LIKELY"||likely.boundary_kind!="MANAGED_NATIVE_DEPENDENCY_SURFACE")return 4;
+
+    auto modified=managed;prts::DotNetMethod missing;missing.token=0x06000003;missing.name="Replaced";missing.type_name="Bridge";missing.impl_flags=0;missing.flags=0x0010;modified.methods.push_back(missing);auto modified_result=prts::analyze_dotnet_boundary(managed_data,dependency,modified);if(modified_result.suspicious_rva_absent_method_count!=1||modified_result.bridge_methods.empty()||modified_result.bridge_methods.back().state!="METHOD_RVA_ABSENT_SUSPICIOUS")return 11;auto modified_finding=prts::dotnet_boundary_finding(modified_result);if(modified_finding.fields["suspicious_rva_absent_methods"]!="1")return 12;
 
     auto absent=base_pe();absent.clr.present=false;auto no_clr=prts::analyze_dotnet_boundary(data,absent,dotnet);if(no_clr.candidate||no_clr.state!="ABSENT")return 5;
     std::cout<<"PASS\n";return 0;
