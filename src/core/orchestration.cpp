@@ -351,6 +351,10 @@ DirectoryReportIndex make_directory_report_index(const AnalysisReport& r){
     x.elf_valid=r.elf.valid;x.elf_type=r.elf.type;x.elf_entry=r.elf.entry;x.elf_interpreter=r.elf.interpreter;x.elf_soname=r.elf.abi.soname;x.elf_soname_file_offset=r.elf.abi.soname_file_offset;x.elf_needed=r.elf.needed;
     x.mono_runtime_export_surface=exact_mono_runtime_exports(r);
     x.pyinstaller_valid=r.pyinstaller.valid;x.godot_valid=r.godot.valid;x.apk_valid=r.apk.valid;x.jar_valid=r.jar.valid;x.nuitka_valid=r.nuitka.valid;x.cpython_runtime_present=!r.cpython_runtimes.empty();x.implicit_high_priority_count=r.implicit_exec.high_priority_count;
+    x.wasm_valid=r.wasm.valid;
+    constexpr std::size_t kMaxCompactWasmImports=2048,kMaxCompactWasmExports=4096;
+    for(const auto&i:r.wasm.imports)if(i.kind=="function"&&x.wasm_imports.size()<kMaxCompactWasmImports)x.wasm_imports.push_back({i.module,i.name});
+    for(const auto&e:r.wasm.exports)if(e.kind=="function"){if(x.wasm_exports.size()<kMaxCompactWasmExports)x.wasm_exports.push_back(e.name);else x.wasm_exports_truncated=true;}
     x.unreal_iostore_toc_valid=r.unreal.iostore.toc_valid;x.unreal_iostore_pair_valid=r.unreal.iostore.pair_valid;x.unreal_iostore_encrypted=r.unreal.iostore.encrypted;
     for(const auto&p:r.unreal.iostore.partitions)x.unreal_iostore_partitions.push_back({p.path,p.index,p.required_bytes,p.state});
     x.interpreter_boundary_confirmed=r.interpreter_boundary.state=="CONFIRMED";x.interpreter_external_program_argument=r.interpreter_boundary.external_program_argument_required;x.interpreter_program_buffer_chain=r.interpreter_boundary.program_buffer_chain_confirmed;x.interpreter_exact_program_target_bound=r.interpreter_boundary.exact_program_target_bound;x.interpreter_boundary_kind=r.interpreter_boundary.boundary_kind;x.interpreter_host_role=r.interpreter_boundary.host_role;x.interpreter_target_role=r.interpreter_boundary.target_role;x.interpreter_semantic_requirement=r.interpreter_boundary.semantic_requirement;x.interpreter_runtime_family=r.interpreter_boundary.runtime_family;x.interpreter_exact_program_target_state=r.interpreter_boundary.exact_program_target_state;
@@ -621,6 +625,44 @@ void build_directory_relationships(DirectoryPlan& plan,std::vector<DirectoryRepo
         if(r.pe_valid){
             std::set<std::string> modules;for(const auto&m:r.pe_imports){auto mod=lower_ascii(m.name);if(mod.empty()||!modules.insert(mod).second)continue;auto it=pe_basename.find(mod);if(it==pe_basename.end())continue;auto matches=it->second;matches.erase(std::remove(matches.begin(),matches.end(),src),matches.end());plan.relationship_candidate_lookups+=matches.size();if(matches.size()>1){emit_ambiguous(r.input,matches,"pe_loader_dependency",plan.candidates[src].role,"validated PE import descriptor exact module reference has multiple validated DLL targets","PE import table","current_input_file:IMPORT_MODULE("+m.name+")","R2_STRUCTURAL_RELATION","STRUCTURAL","PE import target set is ambiguous; automatic loader target priority is refused");continue;}if(matches.empty())continue;const auto dst=matches.front();const auto&desc=*std::find_if(r.pe_imports.begin(),r.pe_imports.end(),[&](const auto&x){return lower_ascii(x.name)==mod;});auto x=make_relation(r.input,plan.candidates[dst].path,true,"pe_loader_dependency","BOUNDED",plan.candidates[src].role,plan.candidates[dst].role,"validated PE import descriptor module name + one validated in-directory PE DLL target","PE import table","current_input_file:RVA="+hx(desc.descriptor_rva)+":IMPORT_MODULE("+desc.name+")","artifact_basename:"+path_utf8(plan.candidates[dst].path.filename()),"directory candidate set only; Windows loader/SxS/search order is not asserted",true,"validated PE import metadata references exactly one in-directory validated DLL target; runtime loader selection remains unobserved");emit(std::move(x),0,8,false);}
             for(const auto&mod:r.dotnet_pinvoke_modules){auto it=pe_basename.find(mod);if(it==pe_basename.end())continue;auto matches=it->second;matches.erase(std::remove(matches.begin(),matches.end(),src),matches.end());plan.relationship_candidate_lookups+=matches.size();if(matches.size()>1){emit_ambiguous(r.input,matches,"dotnet_pinvoke_dependency",plan.candidates[src].role,"validated ECMA-335 P/Invoke module reference has multiple validated DLL targets",".NET ImplMap/PInvoke metadata","current_input_file:ECMA-335 PInvoke("+mod+")","R2_STRUCTURAL_RELATION","STRUCTURAL","P/Invoke target set is ambiguous; automatic native target priority is refused");continue;}if(matches.empty())continue;const auto dst=matches.front();auto x=make_relation(r.input,plan.candidates[dst].path,true,"dotnet_pinvoke_dependency","BOUNDED",plan.candidates[src].role,plan.candidates[dst].role,"validated ECMA-335 P/Invoke module reference + one validated in-directory PE DLL target",".NET ImplMap/PInvoke metadata","current_input_file:ECMA-335 PInvoke("+mod+")","artifact_basename:"+path_utf8(plan.candidates[dst].path.filename()),"directory candidate set only; CLR/native loader resolution is not asserted",true,"validated .NET P/Invoke metadata references exactly one in-directory validated DLL target; runtime loader selection remains unobserved");emit(std::move(x),0,8,false);}
+        }
+    }
+
+    // WebAssembly imports are exact source metadata, but module resolution is a
+    // runtime/environment concern. Close only the bounded case where the import
+    // module names exactly one supplied Wasm sibling and that sibling exports the
+    // requested function. This improves routing without claiming loader success.
+    auto wasm_module_matches=[](const std::filesystem::path&path,std::string_view module){
+        auto m=lower_ascii(std::string(module));
+        auto file=lower_ascii(path_utf8(path.filename()));
+        auto stem=lower_ascii(path_utf8(path.stem()));
+        return !m.empty()&&(m==file||m==stem||m+".wasm"==file);
+    };
+    for(const auto&r:reports){
+        if(!r.wasm_valid)continue;
+        const auto source=index.find(path_key(r.input));
+        if(source==index.end())continue;
+        for(const auto&imp:r.wasm_imports){
+            if(imp.module.empty()||imp.name.empty())continue;
+            std::vector<std::size_t> targets;
+            for(std::size_t i=0;i<reports.size();++i){
+                const auto target_index=index.find(path_key(reports[i].input));
+                if(target_index==index.end()||target_index->second==source->second||!reports[i].wasm_valid||!wasm_module_matches(reports[i].input,imp.module))continue;
+                ++plan.relationship_candidate_lookups;
+                if(std::find(reports[i].wasm_exports.begin(),reports[i].wasm_exports.end(),imp.name)!=reports[i].wasm_exports.end())targets.push_back(i);
+            }
+            std::sort(targets.begin(),targets.end());targets.erase(std::unique(targets.begin(),targets.end()),targets.end());
+            if(targets.size()!=1)continue;
+            const auto target=targets.front();
+            const auto target_index=index.find(path_key(reports[target].input));
+            if(target_index==index.end())continue;
+            auto x=make_relation(r.input,reports[target].input,true,"wasm_import_module_dependency","BOUNDED",plan.candidates[source->second].role,plan.candidates[target_index->second].role,
+                "validated WebAssembly import module/name + one supplied Wasm sibling whose function export matches exactly",
+                "WebAssembly import/export sections","current_input_file:import("+imp.module+"!"+imp.name+")",
+                "current_input_file:export("+imp.name+")","supplied directory candidate set only; WebAssembly module search/instantiation success is not asserted",true,
+                "validated Wasm import closes to one supplied module/export target; prioritize the target for static review while retaining runtime resolution uncertainty");
+            x.first_relation_role="reference_consumer";x.second_relation_role="reference_target";
+            emit(std::move(x),0,8,false);
         }
     }
 

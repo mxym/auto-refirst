@@ -160,6 +160,11 @@ struct DirectoryUnrealPartitionFact {
     std::string state;
 };
 
+struct DirectoryWasmImportFact {
+    std::string module;
+    std::string name;
+};
+
 // Compact cross-file evidence view.  It intentionally contains only facts
 // consumed by directory relationship/ranking/summary logic; the owning full
 // AnalysisReport may be serialized and released before cross-file analysis.
@@ -188,6 +193,10 @@ struct DirectoryReportIndex {
     bool jar_valid=false;
     bool nuitka_valid=false;
     bool cpython_runtime_present=false;
+    bool wasm_valid=false;
+    bool wasm_exports_truncated=false;
+    std::vector<DirectoryWasmImportFact> wasm_imports;
+    std::vector<std::string> wasm_exports;
 
     // AW compact interpreter/program-boundary facts.  These are role/guidance
     // facts only; they never upgrade AR relationship evidence.
