@@ -142,15 +142,21 @@ DotNetInfo detect_dotnet(std::span<const std::uint8_t>d,const PeInfo&pe,const st
     out.resources.reserve(out.table_rows[40]);for(std::uint32_t rid=1;rid<=out.table_rows[40];rid++){auto x=toff[40]+std::size_t(rid-1)*rs[40];DotNetResource a;a.rid=rid;a.token=token(40,rid);a.offset=u32(d,x);a.flags=u32(d,x+4);x+=8;auto ni=idxval(d,x,sw),ic=idxval(d,x,coded(out.table_rows,{38,35,39},2));a.implementation_token=coded_token(ic,{38,35,39,-1},2);switch(a.implementation_token>>24){case 35:a.implementation_kind="AssemblyRef";break;case 38:a.implementation_kind="File";break;case 39:a.implementation_kind="ExportedType";break;default:break;}if(!getstr(ni,a.name,"ManifestResource.Name"))return out;if(!a.implementation_token&&out.resources_size&&a.offset+4<=out.resources_size){auto ro=std::size_t(out.resources_offset+a.offset);auto n=u32(d,ro);if(n<=out.resources_size-a.offset-4&&ro+4+n<=d.size()){a.embedded=true;a.size_known=true;a.data_offset=ro+4;a.size=n;}else out.anomalies.push_back("embedded ManifestResource length exceeds CLR resources directory: "+a.name);}else if((a.implementation_token>>24)==35){auto rr=a.implementation_token&0xffffff;if(rr&&rr<=out.assembly_refs.size())a.implementation=out.assembly_refs[rr-1].name;}out.resources.push_back(std::move(a));}
 
     // Bounded MethodDef body geometry for implicit-init localization only. This does not decode or execute IL.
+    const auto body_range_file_backed=[&](std::uint32_t rva,std::uint64_t total,std::size_t&offset){
+        const auto mapped=rvaoff(pe,rva,d.size());if(!mapped||total>d.size()-*mapped)return false;
+        if(rva<pe.headers_size){offset=*mapped;return true;}
+        for(const auto&s:pe.sections){const auto span=std::max(s.vsize,s.raw_size);if(rva<s.rva||std::uint64_t(rva)>=std::uint64_t(s.rva)+span)continue;const auto delta=std::uint64_t(rva)-s.rva;if(delta>s.raw_size||total>std::uint64_t(s.raw_size)-delta)return false;offset=*mapped;return true;}
+        return false;
+    };
     for(auto&m:out.methods){
         if(!m.rva)continue;
         auto bo=rvaoff(pe,m.rva,d.size());if(!bo)continue;
         const auto first=d[*bo];
         if((first&0x3u)==0x2u){
-            const auto n=std::uint64_t(first>>2);if(*bo+1<=d.size()&&n<=d.size()-(*bo+1)){m.body_file_backed=true;m.body_file_offset=*bo;m.body_header_size=1;m.code_file_offset=*bo+1;m.code_size=n;}
+            const auto n=std::uint64_t(first>>2);std::size_t body_offset=0;if(body_range_file_backed(m.rva,1+n,body_offset)){m.body_file_backed=true;m.body_file_offset=body_offset;m.body_header_size=1;m.code_file_offset=body_offset+1;m.code_size=n;}
         }else if((first&0x3u)==0x3u){
             if(*bo+12>d.size())continue;
-            const auto fs=u16(d,*bo);const auto dwords=std::uint32_t(fs>>12);if(dwords<3||dwords>15)continue;const auto hs=std::uint64_t(dwords)*4;const auto n=std::uint64_t(u32(d,*bo+4));if(hs<=d.size()-*bo&&n<=d.size()-(*bo+hs)){m.body_file_backed=true;m.body_file_offset=*bo;m.body_header_size=hs;m.code_file_offset=*bo+hs;m.code_size=n;}
+            const auto fs=u16(d,*bo);const auto dwords=std::uint32_t(fs>>12);if(dwords<3||dwords>15)continue;const auto hs=std::uint64_t(dwords)*4;const auto n=std::uint64_t(u32(d,*bo+4));std::size_t body_offset=0;if(body_range_file_backed(m.rva,hs+n,body_offset)){m.body_file_backed=true;m.body_file_offset=body_offset;m.body_header_size=hs;m.code_file_offset=body_offset+hs;m.code_size=n;}
         }
     }
     bool managed_entry_method_supported=false;

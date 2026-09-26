@@ -1005,6 +1005,8 @@ std::string render_text(const AnalysisReport& r) {
         if(b.native_entrypoint)o << " RVA 0x" << std::hex << b.native_entry_rva << std::dec << " file+0x" << b.native_entry_file_offset
                                 << " backed=" << (b.native_entry_file_backed?"yes":"no") << " executable=" << (b.native_entry_executable?"yes":"no");
         o << "\n  methods: total=" << b.managed_method_count << " unresolved_body=" << b.non_file_backed_method_count
+          << " rva_absent_suspicious=" << b.suspicious_rva_absent_method_count << " rva_unmapped=" << b.rva_unmapped_method_count
+          << " body_geometry_invalid=" << b.body_geometry_invalid_method_count << " zero_code=" << b.zero_code_method_count
           << " pinvoke=" << b.pinvoke_method_count << " native_import_modules=" << b.native_import_module_count
           << " native_imports=" << b.native_import_count << " native_exports=" << b.native_export_count << "\n"
           << "  runtime resolution: NOT_PERFORMED; CLR/native payload is never executed by preprocessing\n";
@@ -1551,6 +1553,9 @@ void render_dotnet_boundary_json(std::ostream&o,const AnalysisReport&r,bool comp
       << ",\"native_entry_executable\":" << (b.native_entry_executable?"true":"false")
       << ",\"native_entry_section\":\"" << esc(b.native_entry_section) << "\",\"entry_rva_diverges\":" << (b.entry_rva_diverges?"true":"false")
       << ",\"managed_method_count\":" << b.managed_method_count << ",\"non_file_backed_method_count\":" << b.non_file_backed_method_count
+      << ",\"suspicious_rva_absent_method_count\":" << b.suspicious_rva_absent_method_count << ",\"rva_unmapped_method_count\":" << b.rva_unmapped_method_count
+      << ",\"body_geometry_invalid_method_count\":" << b.body_geometry_invalid_method_count << ",\"zero_code_method_count\":" << b.zero_code_method_count
+      << ",\"native_impl_method_count\":" << b.native_impl_method_count << ",\"runtime_impl_method_count\":" << b.runtime_impl_method_count
       << ",\"pinvoke_method_count\":" << b.pinvoke_method_count << ",\"native_import_module_count\":" << b.native_import_module_count
       << ",\"native_import_count\":" << b.native_import_count << ",\"native_export_count\":" << b.native_export_count
       << ",\"truncated\":" << (b.truncated?"true":"false") << ",\"execution_refusal\":\"static_only_runtime_not_performed\"";

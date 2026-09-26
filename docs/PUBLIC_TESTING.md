@@ -10,7 +10,7 @@ P0 校验：
 - PE/ELF/JVM/DEX/Wasm/Lua/Hermes 静态格式边界；
 - PE Authenticode extension triage：合成 private-enterprise OID + 大 OCTET STRING 正例，短值、公共 OID、截断 DER 负例，以及 32 条候选输出上限；范围必须标为当前输入 `FILE_OFFSET`，不混用 RVA；正例还校验报告中的受预算约束原始载荷物化和精确字节，不执行嵌套内容；
 - PE export forwarder/API-set triage：合成普通模块、API-set 与畸形目标，验证只在已有有界导出解析产生 finding，范围为 `RVA`/`CURRENT_INPUT_IMAGE`，畸形目标为 `PARTIAL`，无 forwarder 样本不产生该 finding；
-- PE/CLR bootstrap import contract：合成标准 `mscoree.dll` bootstrap、无 CLR 目录、有限 host API 与 EXE/DLL 入口错配，验证 `PARTIAL` 边界、RVA 坐标和静态-only 运行时字段；无 CLR/无 mscoree 的输入不产生 finding；
+- PE/CLR bootstrap import contract：合成标准 `mscoree.dll` bootstrap、无 CLR 目录、有限 host API 与 EXE/DLL 入口错配，验证 `PARTIAL` 边界、RVA 坐标和静态-only 运行时字段；.NET boundary unit 另覆盖 file-backed RVA 但 tiny/fat IL 几何无效、无 RVA 的疑似 IL 方法以及对应分类字段；无 CLR/无 mscoree 的输入不产生 finding；
 - PE custom-loader surface：合成 `LoadLibraryA`/`GetProcAddress` 低导入面与合法重定位块的路由正例，以及缺少/损坏重定位几何的相似负例；验证 `SUSPECTED` 低置信度、RVA 范围和 `NOT_ATTEMPTED_STATIC_ONLY`，不把普通 resolver 导入单独升级为手动映射；
 - .NET managed resources unit：用独立构造的 `ManifestResource` 内嵌/`AssemblyRef`/`File` 外部关系验证 `CONFIRMED` 资源计数、精确 `FILE_OFFSET` 范围和 `NOT_ATTEMPTED_STATIC_ONLY` 语义；再验证原样资源物化、输出字节、文件预算拒绝和清理；不执行或解码资源 payload；
 - PE delay-load triage：合成 RVA-based descriptor、DLL/name thunk 与目录边界截断样本，验证 `PE delay-load imports` 的 descriptor/function 计数、`RVA`/`CURRENT_INPUT_IMAGE` 范围、`NOT_ATTEMPTED_STATIC_ONLY` 以及损坏输入的 `PARTIAL`；无 delay directory 样本不产生该 finding；
