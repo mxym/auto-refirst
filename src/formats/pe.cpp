@@ -7,6 +7,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -66,6 +67,82 @@ PeInfo parse_pe(std::span<const std::uint8_t>d){
     // Imports.
     if(dirs[1].rva&&dirs[1].size){auto io=rva_off(out,dirs[1].rva,d.size());if(io){for(std::size_t idx=0;idx<4096;idx++){auto p=*io+idx*20;if(p+20>d.size())break;std::uint32_t oft=0,name_rva=0,ft=0,tds=0,fc=0;rd(d,p,oft);rd(d,p+4,tds);rd(d,p+8,fc);rd(d,p+12,name_rva);rd(d,p+16,ft);if(!oft&&!name_rva&&!ft)break;auto no=rva_off(out,name_rva,d.size());if(!no)break;PeImportModule m;m.name=zstr(d,*no);m.descriptor_rva=dirs[1].rva+static_cast<std::uint32_t>(idx*20);m.iat_rva=ft;auto tr=oft?oft:ft;auto to=rva_off(out,tr,d.size());if(to){const std::size_t w=out.pe64?8:4;for(std::size_t j=0;j<65536;j++){std::uint64_t tv=0;if(out.pe64){if(!rd(d,*to+j*w,tv))break;}else{std::uint32_t x=0;if(!rd(d,*to+j*w,x))break;tv=x;}if(!tv)break;PeImportFunction fn;const std::uint64_t ordmask=out.pe64?0x8000000000000000ull:0x80000000ull;if(tv&ordmask){fn.by_ordinal=true;fn.ordinal=static_cast<std::uint16_t>(tv&0xffff);}else if(tv<=0xffffffffull){auto hn=rva_off(out,static_cast<std::uint32_t>(tv),d.size());if(hn){rd(d,*hn,fn.hint);fn.name=zstr(d,*hn+2);}}m.functions.push_back(std::move(fn));}}out.imports.push_back(std::move(m));}}}
 
+    // Delay-load imports (IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT).  Descriptor
+    // fields are DWORDs; IMAGE_DELAY_IMPORT_ATTRIBUTE_RVA selects RVA based
+    // fields, otherwise they are image VAs.  Keep every conversion bounded by
+    // the validated section map and cap descriptors/thunks like ordinary
+    // imports.  A delay helper resolves a module lazily at runtime, so this
+    // plane records metadata only and never guesses the eventual DLL path.
+    if(dirs[13].rva&&dirs[13].size){
+        auto dio=rva_off(out,dirs[13].rva,d.size());
+        const std::uint64_t dend=dio?std::min<std::uint64_t>(d.size(),std::uint64_t(*dio)+dirs[13].size):0;
+        bool terminated=false;
+        std::size_t delay_thunks=0;
+        constexpr std::size_t max_delay_thunks=1u<<20;
+        if(!dio){out.delay_imports_parse_complete=false;out.delay_imports_error="delay-import directory is not file-backed";}
+        else for(std::size_t idx=0;idx<4096;idx++){
+            const auto p=std::uint64_t(*dio)+idx*32;
+            if(p+32>dend){out.delay_imports_parse_complete=false;if(out.delay_imports_error.empty())out.delay_imports_error="truncated delay-import descriptor table";break;}
+            std::uint32_t attrs=0,name=0,mod=0,iat=0,intab=0,bound=0,unload=0,stamp=0;
+            rd(d,p,attrs);rd(d,p+4,name);rd(d,p+8,mod);rd(d,p+12,iat);rd(d,p+16,intab);rd(d,p+20,bound);rd(d,p+24,unload);rd(d,p+28,stamp);
+            if(!attrs&&!name&&!mod&&!iat&&!intab&&!bound&&!unload&&!stamp){terminated=true;break;}
+            PeDelayImportModule m;m.descriptor_rva=dirs[13].rva+static_cast<std::uint32_t>(idx*32);m.rva_based=(attrs&1u)!=0;
+            bool malformed=(attrs&~1u)!=0;
+            auto to_rva=[&](std::uint32_t v)->std::optional<std::uint32_t>{
+                if(!v)return std::uint32_t(0);
+                if(m.rva_based)return v;
+                if(v<out.image_base||std::uint64_t(v)-out.image_base>0xffffffffull)return std::nullopt;
+                return static_cast<std::uint32_t>(std::uint64_t(v)-out.image_base);
+            };
+            auto to_rva64=[&](std::uint64_t v)->std::optional<std::uint32_t>{
+                if(!v)return std::uint32_t(0);
+                if(m.rva_based){if(v>0xffffffffull)return std::nullopt;return static_cast<std::uint32_t>(v);}
+                if(v<out.image_base||v-out.image_base>0xffffffffull)return std::nullopt;
+                return static_cast<std::uint32_t>(v-out.image_base);
+            };
+            const auto name_rva=to_rva(name),mod_rva=to_rva(mod),iat_rva=to_rva(iat),int_rva=to_rva(intab),bound_rva=to_rva(bound),unload_rva=to_rva(unload);
+            if(!name_rva||!*name_rva){malformed=true;} else if(auto no=rva_off(out,*name_rva,d.size()))m.name=zstr(d,*no); else malformed=true;
+            if(m.name.empty())malformed=true;
+            if(mod&&!mod_rva)malformed=true;
+            if(iat&&!iat_rva)malformed=true;
+            if(intab&&!int_rva)malformed=true;
+            if(bound&&!bound_rva)malformed=true;
+            if(unload&&!unload_rva)malformed=true;
+            m.module_handle_rva=mod_rva.value_or(0);m.iat_rva=iat_rva.value_or(0);m.int_rva=int_rva.value_or(0);m.bound_iat_rva=bound_rva.value_or(0);m.unload_iat_rva=unload_rva.value_or(0);
+            if(m.module_handle_rva&&!rva_off(out,m.module_handle_rva,d.size()))malformed=true;
+            if(m.iat_rva&&!rva_off(out,m.iat_rva,d.size()))malformed=true;
+            if(m.int_rva&&!rva_off(out,m.int_rva,d.size()))malformed=true;
+            if(m.bound_iat_rva&&!rva_off(out,m.bound_iat_rva,d.size()))malformed=true;
+            if(m.unload_iat_rva&&!rva_off(out,m.unload_iat_rva,d.size()))malformed=true;
+            if(!m.iat_rva||!m.int_rva)malformed=true;
+            const auto lookup_rva=m.int_rva?m.int_rva:m.iat_rva;
+            bool table_terminated=false;
+            if(lookup_rva){
+                if(auto to=rva_off(out,lookup_rva,d.size())){
+                    const std::size_t w=out.pe64?8:4;const std::uint64_t om=out.pe64?0x8000000000000000ull:0x80000000ull;
+                    for(std::size_t j=0;j<65536;j++){
+                        std::uint64_t tv=0;const auto at=std::uint64_t(*to)+j*w;
+                        if(at>std::numeric_limits<std::size_t>::max()||!rd(d,static_cast<std::size_t>(at),tv)){malformed=true;break;}
+                        if(!tv){table_terminated=true;break;}
+                        PeImportFunction fn;
+                        if(tv&om){fn.by_ordinal=true;fn.ordinal=static_cast<std::uint16_t>(tv&0xffffu);}
+                        else {
+                            std::uint32_t nr=0;
+                            auto q=to_rva64(tv);if(!q){malformed=true;break;}nr=*q;
+                            if(auto hn=rva_off(out,nr,d.size())){rd(d,*hn,fn.hint);fn.name=zstr(d,*hn+2);if(fn.name.empty())malformed=true;}else malformed=true;
+                        }
+                        if(delay_thunks>=max_delay_thunks){malformed=true;break;}
+                        ++delay_thunks;m.functions.push_back(std::move(fn));
+                    }
+                } else malformed=true;
+            } else malformed=true;
+            if(!table_terminated){malformed=true;if(out.delay_imports_error.empty())out.delay_imports_error="unterminated delay-import thunk table";}
+            if(malformed){out.delay_imports_parse_complete=false;if(out.delay_imports_error.empty())out.delay_imports_error="malformed delay-import descriptor or thunk geometry";}
+            out.delay_imports.push_back(std::move(m));
+        }
+        if(!terminated&&out.delay_imports_error.empty()){out.delay_imports_parse_complete=false;out.delay_imports_error="delay-import descriptor terminator not found within directory";}
+    }
+
     // Exports.
     if(dirs[0].rva&&dirs[0].size){auto eo=rva_off(out,dirs[0].rva,d.size());if(eo&&*eo+40<=d.size()){std::uint32_t base=0,nfunc=0,nname=0,fr=0,nr=0,orva=0;rd(d,*eo+16,base);rd(d,*eo+20,nfunc);rd(d,*eo+24,nname);rd(d,*eo+28,fr);rd(d,*eo+32,nr);rd(d,*eo+36,orva);nfunc=std::min<std::uint32_t>(nfunc,1u<<20);nname=std::min<std::uint32_t>(nname,1u<<20);auto fo=rva_off(out,fr,d.size()),no=rva_off(out,nr,d.size()),oo2=rva_off(out,orva,d.size());std::map<std::uint16_t,std::string>names;if(no&&oo2){for(std::uint32_t i=0;i<nname;i++){std::uint32_t sr=0;std::uint16_t oi=0;if(!rd(d,*no+i*4,sr)||!rd(d,*oo2+i*2,oi))break;auto so2=rva_off(out,sr,d.size());if(so2)names[oi]=zstr(d,*so2);}}if(fo){for(std::uint32_t i=0;i<nfunc;i++){std::uint32_t rv=0;if(!rd(d,*fo+i*4,rv))break;if(!rv)continue;PeExport e;e.rva=rv;e.ordinal=static_cast<std::uint16_t>(base+i);auto ni=names.find(static_cast<std::uint16_t>(i));if(ni!=names.end())e.name=ni->second;if(rv>=dirs[0].rva&&rv<dirs[0].rva+dirs[0].size){auto fwd=rva_off(out,rv,d.size());if(fwd)e.forwarder=zstr(d,*fwd);}out.exports.push_back(std::move(e));}}}}
 
@@ -118,5 +195,42 @@ Finding pe_forwarder_finding(const PeInfo&pe){
     if(malformed){f.state="PARTIAL";f.negative_evidence.push_back("one or more export-directory strings had malformed forwarder target geometry");}
     f.fields["forwarder_count"]=std::to_string(total);f.fields["validated_forwarders"]=std::to_string(valid);f.fields["malformed_forwarders"]=std::to_string(malformed);f.fields["target_module_count"]=std::to_string(modules.size());f.fields["api_set_forwarders"]=std::to_string(api_set);f.fields["ordinal_forwarders"]=std::to_string(ordinal_targets);f.fields["ranges_rendered"]=std::to_string(std::min<std::size_t>(rendered,64));f.fields["load_resolution"]="NOT_ATTEMPTED_STATIC_ONLY";
     f.suggested_actions={"inventory sibling DLL candidates before runtime tracing","resolve API-set contracts against the exact target Windows build","inspect forwarded targets before choosing hook/breakpoint locations"};return f;
+}
+Finding pe_delay_import_finding(const PeInfo&pe){
+    Finding f;f.kind="loader_relation";f.family="PE delay-load imports";
+    f.state=pe.delay_imports_parse_complete?"CONFIRMED":"PARTIAL";
+    std::size_t functions=0,ranges=0,rva_based=0,va_based=0,module_handles=0,bound_tables=0,unload_tables=0;
+    std::string libraries,symbols;
+    auto append_limited=[](std::string&dst,std::string_view value){if(value.empty()||dst.size()>=4096)return;const auto room=4096-dst.size();if(!dst.empty())dst.push_back(';');dst.append(value.substr(0,room>1?room-1:0));};
+    for(const auto&m:pe.delay_imports){
+        functions+=m.functions.size();if(m.rva_based)++rva_based;else ++va_based;
+        if(m.module_handle_rva)++module_handles;
+        if(m.bound_iat_rva)++bound_tables;
+        if(m.unload_iat_rva)++unload_tables;
+        append_limited(libraries,m.name);
+        for(const auto&fn:m.functions){
+            std::string target=m.name+"!"+(fn.by_ordinal?("#"+std::to_string(fn.ordinal)):fn.name);
+            append_limited(symbols,target);
+        }
+        if(ranges<64)f.ranges.push_back(rva_range(m.descriptor_rva,32,"delay-import descriptor "+m.name));
+        ++ranges;
+    }
+    f.evidence={"the PE delay-import directory contained bounded descriptors and thunk/name geometry","the descriptor attribute records whether the helper fields are RVA-based or image-VA based"};
+    f.negative_evidence={"delay-load metadata means the helper may resolve a module on first call; it does not prove that a call occurred","the Windows delay-load helper's search path, failure hook, and eventual DLL identity were not resolved","no target code was executed and no import table was rewritten"};
+    if(!pe.delay_imports_parse_complete&&!pe.delay_imports_error.empty())f.negative_evidence.push_back(pe.delay_imports_error);
+    f.fields["descriptor_count"]=std::to_string(pe.delay_imports.size());
+    f.fields["function_count"]=std::to_string(functions);
+    f.fields["rva_based_descriptors"]=std::to_string(rva_based);
+    f.fields["va_based_descriptors"]=std::to_string(va_based);
+    f.fields["module_handle_count"]=std::to_string(module_handles);
+    f.fields["bound_iat_count"]=std::to_string(bound_tables);
+    f.fields["unload_iat_count"]=std::to_string(unload_tables);
+    f.fields["libraries"]=libraries;
+    f.fields["symbols"]=symbols;
+    f.fields["ranges_rendered"]=std::to_string(std::min<std::size_t>(ranges,64));
+    f.fields["parse_complete"]=pe.delay_imports_parse_complete?"true":"false";
+    f.fields["load_resolution"]="NOT_ATTEMPTED_STATIC_ONLY";
+    f.suggested_actions={"inspect delay-load helper and failure-hook paths before assuming a dependency is loaded","compare delayed DLL names against sibling files and the target deployment environment","trace first-call resolution only after static descriptor and thunk geometry is recorded"};
+    return f;
 }
 }
