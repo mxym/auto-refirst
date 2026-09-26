@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
 project(AutoRefirst VERSION 0.1.0 LANGUAGES C CXX)
+include(GNUInstallDirs)
+
+# The desktop drag-and-drop client is deliberately opt-in.  Keeping Qt out of
+# the default graph preserves the small, dependency-free CLI build used by
+# headless CI and reverse-engineering scripts.
+option(AUTO_REFIRST_BUILD_QT_UI "Build the optional Qt Widgets drag-and-drop UI" OFF)
 
 set(AUTO_REFIRST_PRODUCT_VERSION "0.1.0-rc.2" CACHE STRING "Product version reported by auto-refirst --version")
 if(NOT AUTO_REFIRST_PRODUCT_VERSION MATCHES "^[0-9A-Za-z.+-]+$")
@@ -236,6 +242,44 @@ else()
 endif()
 auto_refirst_enable_warnings_as_errors(auto_refirst)
 
+if(AUTO_REFIRST_BUILD_QT_UI)
+  # Prefer the current Qt 6 Widgets API, while allowing distributions that
+  # still ship Qt 5 to build the same source.  No Qt package is discovered or
+  # linked unless the user explicitly enables this option.
+  find_package(Qt6 COMPONENTS Widgets QUIET)
+  if(Qt6Widgets_FOUND)
+    set(_auto_refirst_qt_widgets_target Qt6::Widgets)
+    set(_auto_refirst_qt_version "Qt6")
+  else()
+    find_package(Qt5 COMPONENTS Widgets QUIET)
+    if(Qt5Widgets_FOUND)
+      set(_auto_refirst_qt_widgets_target Qt5::Widgets)
+      set(_auto_refirst_qt_version "Qt5")
+    endif()
+  endif()
+  if(NOT _auto_refirst_qt_widgets_target)
+    message(FATAL_ERROR
+      "AUTO_REFIRST_BUILD_QT_UI=ON requires Qt6 Widgets (preferred) or Qt5 Widgets; "
+      "install the development package or configure with -DAUTO_REFIRST_BUILD_QT_UI=OFF")
+  endif()
+  add_executable(auto_refirst_gui tools/qt_gui/main.cpp)
+  set_target_properties(auto_refirst_gui PROPERTIES OUTPUT_NAME "auto-refirst-gui")
+  target_link_libraries(auto_refirst_gui PRIVATE ${_auto_refirst_qt_widgets_target})
+  target_compile_features(auto_refirst_gui PRIVATE cxx_std_20)
+  target_compile_definitions(auto_refirst_gui PRIVATE AUTO_REFIRST_QT_VERSION="${_auto_refirst_qt_version}")
+  target_include_directories(auto_refirst_gui PRIVATE include)
+  auto_refirst_enable_msvc_utf8(auto_refirst_gui)
+  if(MSVC)
+    target_compile_options(auto_refirst_gui PRIVATE /W4 /permissive- /EHsc)
+    target_compile_definitions(auto_refirst_gui PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+    set_property(TARGET auto_refirst_gui PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  else()
+    target_compile_options(auto_refirst_gui PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  auto_refirst_enable_warnings_as_errors(auto_refirst_gui)
+  install(TARGETS auto_refirst_gui RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
 target_compile_definitions(auto_refirst PRIVATE AES256=1 ZYDIS_STATIC_BUILD=1 ZYAN_STATIC_BUILD=1)
 
 if(WIN32)
@@ -261,7 +305,6 @@ if(WIN32)
 endif()
 
 
-include(GNUInstallDirs)
 install(TARGETS auto_refirst RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES README.md README_EN.md LICENSE NOTICE THIRD_PARTY_NOTICES.md
         DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/auto-refirst)
@@ -286,6 +329,11 @@ if(Python3_Interpreter_FOUND)
               --build-dir "${CMAKE_CURRENT_BINARY_DIR}"
               ${_auto_refirst_install_check_config_args}
       DEPENDS auto_refirst auto_refirst_public_provenance_check
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      USES_TERMINAL VERBATIM)
+
+  add_custom_target(auto_refirst_public_qt_ui_contract_check
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_qt_ui_contract.py"
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
       USES_TERMINAL VERBATIM)
 endif()
