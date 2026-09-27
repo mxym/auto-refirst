@@ -16,12 +16,23 @@ struct AsarEntry {
     std::string integrity_algorithm,integrity_sha256;
     std::uint64_t integrity_block_size=0,integrity_block_count=0;
 };
+struct AsarScriptReference {
+    std::string kind;
+    std::string source_path;
+    std::string target_path;
+    std::string call_kind;
+    std::string literal;
+    std::uint64_t source_byte=0;
+    std::uint64_t target_offset=0,target_size=0;
+    bool target_unpacked=false;
+};
 struct AsarInfo {
     bool valid=false;
     std::filesystem::path archive_path;
     std::uint64_t header_size=0,data_offset=0,packed_bytes=0,trailing_bytes=0;
     std::uint64_t file_count=0,directory_count=0,link_count=0,packed_file_count=0,unpacked_file_count=0,integrity_count=0;
     std::vector<AsarEntry> entries;
+    std::vector<AsarScriptReference> script_references;
     std::vector<std::string> interesting_paths;
     bool package_json_valid=false;
     std::string package_name,package_version,package_main,package_main_resolved;

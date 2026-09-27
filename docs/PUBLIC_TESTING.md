@@ -14,6 +14,7 @@ P0 校验：
 - PE custom-loader surface：合成 `LoadLibraryA`/`GetProcAddress` 低导入面与合法重定位块的路由正例，以及缺少/损坏重定位几何的相似负例；验证 `SUSPECTED` 低置信度、RVA 范围和 `NOT_ATTEMPTED_STATIC_ONLY`，不把普通 resolver 导入单独升级为手动映射。手工解析器的无 `.pdata` 回退由入口节有界窗口和完整 PEB/export/FNV-1a32 结构门控，另用替换乘法常量的样本验证 `MODIFIED_OR_UNKNOWN_NAME_HASH` 分支；两类结果保持 `SUSPECTED`，窗口不被当作函数边界；
 - 原生 IAT/代码 hook 面：合成入口窗口对 IAT 槽的写入、同函数 `GetProcAddress` bridge、单独写入、仅 bridge、无关截断输入，验证 `LIKELY`/`SUSPECTED` 边界、精确 IAT 目标、RVA 范围和 `NOT_RESOLVED_STATIC_ONLY`，不执行样本；
 - 嵌套 PE 加载路线：合成带资源目录、资源提取导入和写出/启动桥的父 PE，并嵌入一个可精确闭合的子 PE，验证 `Embedded executable loader route` 与 `pe_embedded_loader_route` 为 `ROUTE_HINT`、`R1_ROUTING_HINT`、不参与优先级提升；无资源目录、无桥接 API、无子 PE 的相似样本不产生路线，资源身份和参数流保持未解析；
+- ASAR 脚本成员路线：合成 `fetch('app.wasm')`、`require('./addon.node')`、注释/字符串诱饵、动态变量/拼接、相对目录路径和缺失 unpacked 兄弟样本；验证唯一直接字符串引用进入 AUTO_CORE、目标通过 Wasm/native 格式校验并生成 `BOUNDED`/`R2_STRUCTURAL_RELATION`，动态或缺失目标只保留 `LOCATED_NOT_MATERIALIZED`，不宣称运行时加载；
 - .NET managed resources unit：用独立构造的 `ManifestResource` 内嵌/`AssemblyRef`/`File` 外部关系验证 `CONFIRMED` 资源计数、精确 `FILE_OFFSET` 范围和 `NOT_ATTEMPTED_STATIC_ONLY` 语义；再验证原样资源物化、输出字节、文件预算拒绝和清理；不执行或解码资源 payload；
 - PE delay-load triage：合成 RVA-based descriptor、DLL/name thunk 与目录边界截断样本，验证 `PE delay-load imports` 的 descriptor/function 计数、`RVA`/`CURRENT_INPUT_IMAGE` 范围、`NOT_ATTEMPTED_STATIC_ONLY` 以及损坏输入的 `PARTIAL`；无 delay directory 样本不产生该 finding；
 - 分层/Polyglot 静态线索：合成 PE 外壳后接 PDF、Mach-O 与 ZIP 标记，验证至少两种非零偏移格式才产生 `Layered/polyglot format markers`，范围为当前输入 `FILE_OFFSET`，单一诱饵标记、截断 marker 与 16 MiB 前缀上限之外的 marker 均不提升；
