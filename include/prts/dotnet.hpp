@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -115,6 +116,10 @@ struct DotNetExtractResult {
 };
 DotNetInfo detect_dotnet(std::span<const std::uint8_t>data,const PeInfo&pe,const std::filesystem::path&path={});
 Finding dotnet_finding(const DotNetInfo&info);
+// Reports a bounded managed loader/reflection surface when independently
+// resolved metadata references form a dynamic-code or payload-loading shape.
+// The result is static triage only; a MemberRef does not prove call reachability.
+std::optional<Finding> dotnet_dynamic_surface_finding(const DotNetInfo&info);
 Finding dotnet_resources_finding(const DotNetInfo&info);
 DotNetResourceExtractResult extract_dotnet_resources(std::span<const std::uint8_t>data,const DotNetInfo&info,const std::filesystem::path&out,bool core_only,std::uint64_t max_output_bytes,std::uint32_t max_output_files);
 DotNetExtractResult extract_dotnet_symbols(const DotNetInfo&info,const std::filesystem::path&out);

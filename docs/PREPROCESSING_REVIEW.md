@@ -48,6 +48,7 @@
 | P2 · 已实现 | Wasm relocatable metadata | 对 `linking` 与 `reloc.*` custom section 做有界版本、subsection、目标 section 和 relocation entry geometry 检查；合法 linking 版本可标记 relocatable module，unsupported/truncated metadata 保留核心模块确认并显式报告 `FAILED`/`PARTIAL`，不推断完整链接语义。 |
 | P2 · 已实现 | PE export forwarder/API-set triage | 对已验证导出目录内的 forwarder 字符串做有界 module/symbol/ordinal/API-set 几何整理；畸形目标降为 `PARTIAL`，不猜 API-set host、不模拟 loader 搜索路径、不执行 DLL。 |
 | P2 · 已实现 | CLR/native boundary triage | 对 PE COR20、native entry flag/RVA、OEP、MethodDef body、P/Invoke 及非 CLR 原生导入/导出面做静态边界整理；MethodDef body 进一步区分 RVA 缺失、RVA 不可映射和 tiny/fat IL 几何无效，标出疑似改写/裁剪的托管方法；VMProtect/自定义 loader 常见的托管-原生分界保留 `CONFIRMED`/`LIKELY`/`PARTIAL`，所有运行时解析保持明确拒绝。 |
+| P2 · 已实现 | .NET dynamic loader/reflection surface | 组合已验证 `MemberRef` 与 `P/Invoke` 中的程序集加载、metadata 解析、反射调用、动态生成、资源访问和原生加载桥接信号；至少两类独立信号才升级为 `SUSPECTED`/`LIKELY`，报告命中 token 和计数，明确不推出运行时可达、解密或执行。 |
 | P2 · 已实现 | .NET MethodDef body map | JSON 与 `.NET symbols.csv` 输出 MethodDef 元数据行、IL body/header/code 的 file-offset、长度和 file-backed 状态；下游可以直接按 token 与当前输入偏移复核异常方法，不需要重新猜测 RVA 到文件范围的映射。 |
 | P2 · 已实现 | PE custom-loader surface | 组合 resolver imports、重定位目录、TLS 预入口和入口段权限的独立信号，输出低置信度手动映射/反射式 loader 路由；单一 API、单独重定位目录和普通插件宿主形状不升级，保持静态-only。 |
 | P2 · 已实现 | 无 `.pdata` 与魔改名称哈希手工解析器 | 对没有可用 `RUNTIME_FUNCTION` 的 x64 PE，仅在入口可执行节的 8 KiB 有界窗口内复核完整 PEB → export 解析形状；FNV-1a32 走精确分支，算术/位运算替换的名称哈希输出 `MODIFIED_OR_UNKNOWN_NAME_HASH`，不凭静态目录强行分配 API 名称。结果标为 `SUSPECTED`/`ENTRY_SECTION_WINDOW`，不把窗口当作真实函数边界。 |

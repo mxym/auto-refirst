@@ -479,6 +479,12 @@ add_executable(auto_refirst_public_dotnet_boundary_unit EXCLUDE_FROM_ALL
 )
 target_include_directories(auto_refirst_public_dotnet_boundary_unit PRIVATE include)
 
+add_executable(auto_refirst_public_dotnet_dynamic_surface_unit EXCLUDE_FROM_ALL
+    tests/dotnet_dynamic_surface_unit.cpp
+    src/extract/dotnet.cpp
+)
+target_include_directories(auto_refirst_public_dotnet_dynamic_surface_unit PRIVATE include)
+
 add_executable(auto_refirst_public_fixture_ordinary EXCLUDE_FROM_ALL tests/public/ordinary.c)
 add_executable(auto_refirst_public_fixture_crypto EXCLUDE_FROM_ALL tests/public/crypto_tea.c)
 add_executable(auto_refirst_public_fixture_runtime_child EXCLUDE_FROM_ALL tests/public/runtime_child.c)
@@ -502,7 +508,8 @@ set(AUTO_REFIRST_PUBLIC_UNIT_TARGETS
     auto_refirst_public_unity_engine_version_unit
     auto_refirst_public_unity_method_dispatch_profile_unit
     auto_refirst_public_unity_generic_class_profile_unit
-    auto_refirst_public_dotnet_boundary_unit)
+    auto_refirst_public_dotnet_boundary_unit
+    auto_refirst_public_dotnet_dynamic_surface_unit)
 set(AUTO_REFIRST_PUBLIC_TARGETS
     ${AUTO_REFIRST_PUBLIC_UNIT_TARGETS}
     auto_refirst_public_fixture_ordinary
