@@ -23,7 +23,7 @@ def p64(buf: bytearray, offset: int, value: int) -> None:
     struct.pack_into("<Q", buf, offset, value)
 
 
-def manual_resolver_image() -> bytes:
+def manual_resolver_image(modified_hash: bool = False) -> bytes:
     """Create an inert x64 PE carrying only the resolver instruction shape."""
     image = bytearray(0x2200)
     image[:2] = b"MZ"
@@ -61,14 +61,19 @@ def manual_resolver_image() -> bytes:
 
     # PEB -> loader list -> PE/export directory geometry, FNV-1a32 loop,
     # indexed name/function table accesses and module-relative return.
-    code = bytes.fromhex(
+    code_hex = (
         "65488b042560000000"
         "488b4018 488b4020 8b403c 3d50450000 8b8088000000"
         "8b4818 8b4820 8b481c 8b4824"
         "b9c59d1c81 69c993010001"
         "4c8b00 4c8b4808 75fe"
-        "81f978563412 0fb70441 8b0481 4801c8 c3".replace(" ", "")
-    )
+        "81f978563412 0fb70441 8b0481 4801c8 c3"
+    ).replace(" ", "")
+    if modified_hash:
+        code_hex = code_hex.replace(
+            "b9c59d1c8169c993010001", "b97856341269c911223344"
+        )
+    code = bytes.fromhex(code_hex)
     image[0x200:0x200 + len(code)] = code
     return bytes(image)
 
@@ -101,6 +106,18 @@ def main() -> None:
     assert finding["ranges"] and all(
         item["coordinate_space"] == "RVA" for item in finding["ranges"]
     ), finding
+
+    modified_report = run(binary, manual_resolver_image(modified_hash=True))
+    modified = next(
+        (x for x in modified_report["findings"] if x.get("family") == "Manual API resolver"),
+        None,
+    )
+    assert modified is not None, modified_report["findings"]
+    assert modified["state"] == "SUSPECTED", modified
+    assert modified["variant"] == "x64 PEB/export/modified-name-hash/no-pdata-entry-window", modified
+    assert modified["fields"]["hash_algorithm"] == "MODIFIED_OR_UNKNOWN_NAME_HASH", modified
+    assert modified["fields"]["known_api_name_matches"] == "0", modified
+    assert modified["fields"]["target_identity_state"] == "MODIFIED_OR_UNKNOWN_HASH_NO_STATIC_API_NAME", modified
 
     damaged = bytearray(payload)
     damaged[0x200 + 0x2C] ^= 0x01  # FNV seed no longer passes the raw gate.

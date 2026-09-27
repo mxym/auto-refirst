@@ -8,6 +8,7 @@ extern "C" {
 #include <optional>
 #include <set>
 #include <sstream>
+#include <string>
 #include <string_view>
 
 namespace prts { namespace {
@@ -15,7 +16,8 @@ struct Decoded { std::uint32_t rva=0; ZydisDecodedInstruction zi{}; std::array<Z
 std::optional<std::size_t> rvaoff(const PeInfo&pe,std::uint32_t rva,std::size_t size){if(rva<pe.headers_size&&rva<size)return std::size_t(rva);for(const auto&s:pe.sections){auto span=std::max(s.vsize,s.raw_size);if(rva>=s.rva&&std::uint64_t(rva)-s.rva<span){auto d=std::uint64_t(rva)-s.rva;if(d>=s.raw_size)return{};auto o=std::uint64_t(s.raw_offset)+d;if(o<size)return static_cast<std::size_t>(o);}}return{};}
 ZydisRegister large(ZydisRegister r){return r==ZYDIS_REGISTER_NONE?r:ZydisRegisterGetLargestEnclosing(ZYDIS_MACHINE_MODE_LONG_64,r);}
 bool raw_contains(std::span<const std::uint8_t>s,std::initializer_list<std::uint8_t>q){return std::search(s.begin(),s.end(),q.begin(),q.end())!=s.end();}
-bool raw_candidate(std::span<const std::uint8_t>d,const PeInfo&pe,const PeRuntimeFunction&rf){if(rf.end_rva<=rf.begin_rva)return false;auto b=rvaoff(pe,rf.begin_rva,d.size()),e=rvaoff(pe,rf.end_rva-1,d.size());if(!b||!e||*e<*b)return false;auto s=d.subspan(*b,*e-*b+1);if(!raw_contains(s,{0x50,0x45,0x00,0x00})||!raw_contains(s,{0xc5,0x9d,0x1c,0x81})||!raw_contains(s,{0x93,0x01,0x00,0x01}))return false;for(std::size_t i=0;i+9<=s.size();++i){if(s[i]!=0x65)continue;std::size_t j=i+1;if(j<s.size()&&s[j]>=0x40&&s[j]<=0x4f)++j;if(j+7>s.size()||s[j]!=0x8b||(s[j+1]&0xc7)!=0x04||s[j+2]!=0x25)continue;if(s[j+3]==0x60&&s[j+4]==0&&s[j+5]==0&&s[j+6]==0)return true;}return false;}
+bool raw_shape_candidate(std::span<const std::uint8_t>d,const PeInfo&pe,const PeRuntimeFunction&rf){if(rf.end_rva<=rf.begin_rva)return false;auto b=rvaoff(pe,rf.begin_rva,d.size()),e=rvaoff(pe,rf.end_rva-1,d.size());if(!b||!e||*e<*b)return false;auto s=d.subspan(*b,*e-*b+1);if(!raw_contains(s,{0x50,0x45,0x00,0x00}))return false;for(std::size_t i=0;i+9<=s.size();++i){if(s[i]!=0x65)continue;std::size_t j=i+1;if(j<s.size()&&s[j]>=0x40&&s[j]<=0x4f)++j;if(j+7>s.size()||s[j]!=0x8b||(s[j+1]&0xc7)!=0x04||s[j+2]!=0x25)continue;if(s[j+3]==0x60&&s[j+4]==0&&s[j+5]==0&&s[j+6]==0)return true;}return false;}
+bool raw_candidate(std::span<const std::uint8_t>d,const PeInfo&pe,const PeRuntimeFunction&rf){if(!raw_shape_candidate(d,pe,rf))return false;auto b=rvaoff(pe,rf.begin_rva,d.size()),e=rvaoff(pe,rf.end_rva-1,d.size());if(!b||!e||*e<*b)return false;auto s=d.subspan(*b,*e-*b+1);return raw_contains(s,{0xc5,0x9d,0x1c,0x81})&&raw_contains(s,{0x93,0x01,0x00,0x01});}
 std::vector<Decoded> decode(std::span<const std::uint8_t>d,const PeInfo&pe,const PeRuntimeFunction&rf){std::vector<Decoded>out;if(rf.end_rva<=rf.begin_rva)return out;ZydisDecoder dec;if(!ZYAN_SUCCESS(ZydisDecoderInit(&dec,ZYDIS_MACHINE_MODE_LONG_64,ZYDIS_STACK_WIDTH_64)))return out;for(std::uint32_t cur=rf.begin_rva;cur<rf.end_rva&&out.size()<4096;){auto o=rvaoff(pe,cur,d.size());if(!o)return{};Decoded x;x.rva=cur;auto avail=std::min<std::size_t>(d.size()-*o,rf.end_rva-cur);if(!ZYAN_SUCCESS(ZydisDecoderDecodeFull(&dec,d.data()+*o,avail,&x.zi,x.ops.data()))||!x.zi.length)return{};out.push_back(x);cur+=x.zi.length;}return out;}
 std::optional<std::int64_t> disp(const ZydisDecodedOperand&o){if(o.type!=ZYDIS_OPERAND_TYPE_MEMORY)return{};return o.mem.disp.has_displacement?o.mem.disp.value:0;}
 bool mem_disp(const Decoded&x,std::int64_t want,std::uint16_t bits=0){for(std::uint8_t i=0;i<x.zi.operand_count_visible;i++){const auto&o=x.ops[i];auto q=disp(o);if(q&&*q==want&&(!bits||o.size==bits))return true;}return false;}
@@ -45,26 +47,147 @@ std::string hx(std::uint64_t v){std::ostringstream o;o<<"0x"<<std::hex<<v;return
 std::uint32_t fnv1a(std::string_view s){std::uint32_t h=0x811c9dc5u;for(unsigned char c:s){h^=c;h*=0x01000193u;}return h;}
 std::vector<std::string> known_hash_names(std::uint32_t h){static constexpr std::array<std::string_view,31> names={"LoadLibraryA","LoadLibraryW","GetProcAddress","VirtualAlloc","VirtualProtect","VirtualFree","VirtualAllocEx","VirtualProtectEx","WriteProcessMemory","CreateProcessA","CreateProcessW","ExitProcess","GetTickCount","GetTickCount64","QueryPerformanceCounter","IsDebuggerPresent","GetThreadContext","SetThreadContext","ResumeThread","CreateRemoteThread","NtAllocateVirtualMemory","NtProtectVirtualMemory","NtWriteVirtualMemory","NtUnmapViewOfSection","NtSetContextThread","NtResumeThread","LdrLoadDll","LdrGetProcedureAddress","RtlAllocateHeap","RtlFreeHeap","Sleep"};std::vector<std::string>out;for(auto n:names)if(fnv1a(n)==h)out.emplace_back(n);return out;}
 std::size_t first_after(const std::vector<Decoded>&v,std::size_t from,const auto&pred){for(std::size_t i=from;i<v.size();++i)if(pred(v[i]))return i;return v.size();}
-struct Sem { bool ok=false,arg_compare=false;std::uint32_t begin=0,end=0,peb_rva=0,hash_rva=0,eat_rva=0;std::optional<std::uint32_t> inline_hash; };
+struct Sem { bool ok=false,arg_compare=false;std::uint32_t begin=0,end=0,peb_rva=0,hash_rva=0,eat_rva=0;std::string hash_algorithm;std::optional<std::uint32_t> inline_hash; };
 Sem analyze(const std::vector<Decoded>&v,const PeRuntimeFunction&rf){Sem s;s.begin=rf.begin_rva;s.end=rf.end_rva;if(v.size()<20)return s;auto peb=first_after(v,0,[](const auto&x){return gs_abs60(x);});if(peb==v.size())return s;auto ldr=first_after(v,peb+1,[](const auto&x){return mem_disp(x,0x18,64);});auto list=first_after(v,ldr<v.size()?ldr+1:v.size(),[](const auto&x){return mem_disp(x,0x20,64);});auto peoff=first_after(v,list<v.size()?list+1:v.size(),[](const auto&x){return mem_disp(x,0x3c,32);});auto sig=first_after(v,peoff<v.size()?peoff+1:v.size(),[](const auto&x){return x.zi.mnemonic==ZYDIS_MNEMONIC_CMP&&has_imm(x,0x4550);});auto exp=first_after(v,sig<v.size()?sig+1:v.size(),[](const auto&x){return mem_disp(x,0x88,32);});if(ldr==v.size()||list==v.size()||peoff==v.size()||sig==v.size()||exp==v.size())return s;
  auto nname=first_after(v,exp+1,[](const auto&x){return mem_disp(x,0x18,32);});auto names=first_after(v,exp+1,[](const auto&x){return mem_disp(x,0x20,32);});auto funcs=first_after(v,exp+1,[](const auto&x){return mem_disp(x,0x1c,32);});auto ords=first_after(v,exp+1,[](const auto&x){return mem_disp(x,0x24,32);});if(nname==v.size()||names==v.size()||funcs==v.size()||ords==v.size())return s;
  auto seed=first_after(v,exp+1,[](const auto&x){return has_imm(x,0x811c9dc5u);});auto prime=first_after(v,seed<v.size()?seed+1:v.size(),[](const auto&x){return x.zi.mnemonic==ZYDIS_MNEMONIC_IMUL&&has_imm(x,0x01000193u);});if(seed==v.size()||prime==v.size())return s;std::size_t bytes=0,back=0;for(std::size_t i=(seed>8?seed-8:0);i<std::min(v.size(),prime+12);++i){for(std::uint8_t k=0;k<v[i].zi.operand_count_visible;k++)if(v[i].ops[k].type==ZYDIS_OPERAND_TYPE_MEMORY&&v[i].ops[k].size==8)++bytes;if(backward_branch(v[i]))++back;}if(bytes<2||!back)return s;
  auto cmp=first_after(v,prime+1,[](const auto&x){return x.zi.mnemonic==ZYDIS_MNEMONIC_CMP;});if(cmp==v.size())return s;for(std::uint8_t k=0;k<v[cmp].zi.operand_count_visible;k++)if(v[cmp].ops[k].type==ZYDIS_OPERAND_TYPE_REGISTER&&large(v[cmp].ops[k].reg.value)==ZYDIS_REGISTER_RCX)s.arg_compare=true;if(auto q=plain_imm(v[cmp]);q&&*q!=0x4550)s.inline_hash=static_cast<std::uint32_t>(*q);
- auto word=first_after(v,cmp+1,[](const auto&x){return indexed_mem(x,16);});auto dword=first_after(v,word<v.size()?word+1:v.size(),[](const auto&x){return indexed_mem(x,32);});auto ret=first_after(v,dword<v.size()?dword+1:v.size(),[](const auto&x){return x.zi.meta.category==ZYDIS_CATEGORY_RET;});if(word==v.size()||dword==v.size()||ret==v.size())return s;bool add=false;for(std::size_t i=dword+1;i<ret;i++)if(v[i].zi.mnemonic==ZYDIS_MNEMONIC_ADD&&v[i].zi.operand_count_visible&&v[i].ops[0].type==ZYDIS_OPERAND_TYPE_REGISTER&&large(v[i].ops[0].reg.value)==ZYDIS_REGISTER_RAX){add=true;s.eat_rva=v[i].rva;break;}if(!add)return s;s.ok=true;s.peb_rva=v[peb].rva;s.hash_rva=v[prime].rva;return s;}
+ auto word=first_after(v,cmp+1,[](const auto&x){return indexed_mem(x,16);});auto dword=first_after(v,word<v.size()?word+1:v.size(),[](const auto&x){return indexed_mem(x,32);});auto ret=first_after(v,dword<v.size()?dword+1:v.size(),[](const auto&x){return x.zi.meta.category==ZYDIS_CATEGORY_RET;});if(word==v.size()||dword==v.size()||ret==v.size())return s;bool add=false;for(std::size_t i=dword+1;i<ret;i++)if(v[i].zi.mnemonic==ZYDIS_MNEMONIC_ADD&&v[i].zi.operand_count_visible&&v[i].ops[0].type==ZYDIS_OPERAND_TYPE_REGISTER&&large(v[i].ops[0].reg.value)==ZYDIS_REGISTER_RAX){add=true;s.eat_rva=v[i].rva;break;}if(!add)return s;s.ok=true;s.hash_algorithm="FNV1A32";s.peb_rva=v[peb].rva;s.hash_rva=v[prime].rva;return s;}
+bool modified_hash_instruction(const Decoded&x){switch(x.zi.mnemonic){case ZYDIS_MNEMONIC_XOR:case ZYDIS_MNEMONIC_IMUL:case ZYDIS_MNEMONIC_ADD:case ZYDIS_MNEMONIC_SUB:case ZYDIS_MNEMONIC_ROL:case ZYDIS_MNEMONIC_ROR:case ZYDIS_MNEMONIC_SHL:case ZYDIS_MNEMONIC_SHR:return true;default:return false;}}
+Sem analyze_modified(const std::vector<Decoded>&v,const PeRuntimeFunction&rf){
+    Sem s;s.begin=rf.begin_rva;s.end=rf.end_rva;if(v.size()<20)return s;
+    auto peb=first_after(v,0,[](const auto&x){return gs_abs60(x);});if(peb==v.size())return s;
+    auto ldr=first_after(v,peb+1,[](const auto&x){return mem_disp(x,0x18,64);});
+    auto list=first_after(v,ldr<v.size()?ldr+1:v.size(),[](const auto&x){return mem_disp(x,0x20,64);});
+    auto peoff=first_after(v,list<v.size()?list+1:v.size(),[](const auto&x){return mem_disp(x,0x3c,32);});
+    auto sig=first_after(v,peoff<v.size()?peoff+1:v.size(),[](const auto&x){return x.zi.mnemonic==ZYDIS_MNEMONIC_CMP&&has_imm(x,0x4550);});
+    auto exp=first_after(v,sig<v.size()?sig+1:v.size(),[](const auto&x){return mem_disp(x,0x88,32);});
+    if(ldr==v.size()||list==v.size()||peoff==v.size()||sig==v.size()||exp==v.size())return s;
+    auto nname=first_after(v,exp+1,[](const auto&x){return mem_disp(x,0x18,32);});
+    auto names=first_after(v,exp+1,[](const auto&x){return mem_disp(x,0x20,32);});
+    auto funcs=first_after(v,exp+1,[](const auto&x){return mem_disp(x,0x1c,32);});
+    auto ords=first_after(v,exp+1,[](const auto&x){return mem_disp(x,0x24,32);});
+    if(nname==v.size()||names==v.size()||funcs==v.size()||ords==v.size())return s;
+    auto op=first_after(v,ords+1,[](const auto&x){return modified_hash_instruction(x);});if(op==v.size())return s;
+    auto cmp=first_after(v,op+1,[](const auto&x){return x.zi.mnemonic==ZYDIS_MNEMONIC_CMP;});if(cmp==v.size())return s;
+    for(std::size_t i=op;i<=cmp;++i)if(v[i].zi.mnemonic==ZYDIS_MNEMONIC_IMUL&&has_imm(v[i],0x01000193u))return s;
+    std::size_t reads=0,back=0;
+    for(std::size_t i=op;i<std::min(v.size(),cmp+1);++i){
+        for(std::uint8_t k=0;k<v[i].zi.operand_count_visible;k++){
+            const auto&o=v[i].ops[k];
+            if(o.type==ZYDIS_OPERAND_TYPE_MEMORY&&(o.size==8||o.size==64))++reads;
+        }
+        if(backward_branch(v[i]))++back;
+    }
+    if(reads<2||!back)return s;
+    auto word=first_after(v,cmp+1,[](const auto&x){return indexed_mem(x,16);});
+    auto dword=first_after(v,word<v.size()?word+1:v.size(),[](const auto&x){return indexed_mem(x,32);});
+    auto ret=first_after(v,dword<v.size()?dword+1:v.size(),[](const auto&x){return x.zi.meta.category==ZYDIS_CATEGORY_RET;});
+    if(word==v.size()||dword==v.size()||ret==v.size())return s;
+    bool add=false;
+    for(std::size_t i=dword+1;i<ret;i++)if(v[i].zi.mnemonic==ZYDIS_MNEMONIC_ADD&&v[i].zi.operand_count_visible&&v[i].ops[0].type==ZYDIS_OPERAND_TYPE_REGISTER&&large(v[i].ops[0].reg.value)==ZYDIS_REGISTER_RAX){add=true;s.eat_rva=v[i].rva;break;}
+    if(!add)return s;
+    s.ok=true;s.hash_algorithm="MODIFIED_OR_UNKNOWN_NAME_HASH";s.peb_rva=v[peb].rva;s.hash_rva=v[op].rva;
+    if(auto q=plain_imm(v[cmp]);q&&*q!=0x4550)s.inline_hash=static_cast<std::uint32_t>(*q);
+    return s;
+}
 }
 
 std::vector<Finding> detect_manual_resolvers(std::span<const std::uint8_t>d,const PeInfo&pe){
-    std::vector<Finding>out;if(!pe.valid||!pe.pe64||pe.machine!=0x8664)return out;
-    struct Hit{PeRuntimeFunction rf;Sem sem;std::vector<Decoded> ins;bool exact_function=false;};std::vector<Hit>hits;
-    if(pe.exception.present){for(const auto&rf:pe.exception.runtime_functions){if(!raw_candidate(d,pe,rf))continue;auto ins=decode(d,pe,rf);auto sem=analyze(ins,rf);if(sem.ok)hits.push_back({rf,sem,std::move(ins),true});}}
-    if(hits.empty()&&!pe.exception.present){if(auto rf=entry_section_window(pe,d.size())){const auto raw=raw_candidate(d,pe,*rf);auto ins=raw?decode(d,pe,*rf):std::vector<Decoded>{};auto sem=raw?analyze(ins,*rf):Sem{};if(sem.ok)hits.push_back({*rf,sem,std::move(ins),false});}}
+    std::vector<Finding>out;
+    if(!pe.valid||!pe.pe64||pe.machine!=0x8664)return out;
+    struct Hit{PeRuntimeFunction rf;Sem sem;std::vector<Decoded> ins;bool exact_function=false;};
+    std::vector<Hit>hits;
+    auto try_function=[&](const PeRuntimeFunction&rf,bool exact_boundary){
+        const bool fnv=raw_candidate(d,pe,rf);
+        const bool shape=fnv||raw_shape_candidate(d,pe,rf);
+        if(!shape)return;
+        auto ins=decode(d,pe,rf);
+        auto sem=fnv?analyze(ins,rf):analyze_modified(ins,rf);
+        if(sem.ok)hits.push_back({rf,std::move(sem),std::move(ins),exact_boundary});
+    };
+    if(pe.exception.present){
+        for(const auto&rf:pe.exception.runtime_functions)try_function(rf,true);
+    }
+    if(hits.empty()&&!pe.exception.present){
+        if(auto rf=entry_section_window(pe,d.size()))try_function(*rf,false);
+    }
     for(const auto&h:hits){
-        std::vector<std::pair<std::uint32_t,std::uint32_t>>calls;std::set<std::uint32_t>hashes;if(h.sem.inline_hash)hashes.insert(*h.sem.inline_hash);
-        auto collect_calls=[&](const std::vector<Decoded>&v){for(std::size_t i=0;i<v.size();++i){auto t=direct_call_target(v[i]);if(!t||*t!=h.rf.begin_rva)continue;if(auto q=nearest_rcx_imm(v,i)){calls.push_back({v[i].rva,*q});hashes.insert(*q);}}};
-        if(h.exact_function){for(const auto&rf:pe.exception.runtime_functions)collect_calls(decode(d,pe,rf));}else collect_calls(h.ins);
-        Finding f;f.kind="resolver";f.family="Manual API resolver";f.variant=h.exact_function?"x64 PEB/export/FNV1A32":"x64 PEB/export/FNV1A32/no-pdata-entry-window";f.state=h.exact_function?"CONFIRMED":"SUSPECTED";f.confidence=h.exact_function?0.90:0.68;f.evidence={"x64 code reads PEB from GS:[0x60], follows loader-list state and iterates loaded module bases","the same bounded function validates PE signatures and walks IMAGE_EXPORT_DIRECTORY name/count, ordinal and function tables","export names are hashed byte-wise with FNV-1a32 seed 0x811C9DC5 and prime 0x01000193 inside a bounded loop","a hash match indexes name-ordinal/function tables and returns a module-base-relative export address"};
-        if(h.exact_function)f.negative_evidence.push_back("manual export resolution is confirmed behavior; software intent is not inferred");else{f.evidence.push_back("the complete resolver shape was found in a bounded executable entry-section window");f.negative_evidence.push_back("the image has no validated PE exception-function boundary for this resolver; entry-window classification remains SUSPECTED");}
-        f.negative_evidence.push_back("module identity is not statically fixed when the resolver scans the loaded-module list; hash-to-name matches use a bounded known-API catalog and do not prove a unique exporting module");f.fields["platform"]="windows";f.fields["architecture"]="x64";f.fields["function_boundary_state"]=h.exact_function?"RUNTIME_FUNCTION":"ENTRY_SECTION_WINDOW";f.fields["module_enumeration"]="PEB_LDR_INMEMORY_LIST";f.fields["export_traversal"]="IMAGE_EXPORT_DIRECTORY_NAMES_ORDINALS_FUNCTIONS";f.fields["hash_algorithm"]="FNV1A32";f.fields["hash_seed"]="0x811c9dc5";f.fields["hash_prime"]="0x1000193";f.fields["resolver_function_rva"]=hx(h.rf.begin_rva);f.fields["peb_load_rva"]=hx(h.sem.peb_rva);f.fields["hash_loop_rva"]=hx(h.sem.hash_rva);f.fields["eat_target_rva"]=hx(h.sem.eat_rva);f.fields["module_identity_state"]="RUNTIME_MODULE_SCAN_NOT_STATICALLY_FIXED";f.fields["target_hash_count"]=std::to_string(hashes.size());f.fields["resolver_callsite_count"]=std::to_string(calls.size());std::ostringstream ledger;std::size_t mapped=0;for(auto q:hashes){if(ledger.tellp()>0)ledger<<"; ";ledger<<hx(q);auto names=known_hash_names(q);if(names.size()==1){ledger<<'='<<names[0];++mapped;}else if(names.size()>1){ledger<<"=AMBIGUOUS(";for(std::size_t i=0;i<names.size();++i){if(i)ledger<<'|';ledger<<names[i];}ledger<<')';}else ledger<<"=UNKNOWN";}if(!hashes.empty())f.fields["target_hash_ledger"]=ledger.str();f.fields["known_api_name_matches"]=std::to_string(mapped);f.fields["target_identity_state"]=hashes.empty()?"STRUCTURE_CONFIRMED_NO_STATIC_CALL_HASH":(mapped==hashes.size()?"ALL_HASHES_MATCH_BOUNDED_KNOWN_API_CATALOG":"PARTIAL_OR_UNKNOWN_HASH_NAMES");if(auto o=rvaoff(pe,h.rf.begin_rva,d.size()))f.ranges.push_back(rva_range(h.rf.begin_rva,h.rf.end_rva-h.rf.begin_rva,"manual PEB/export resolver function"));if(auto o=rvaoff(pe,h.sem.peb_rva,d.size()))f.ranges.push_back(rva_range(h.sem.peb_rva,9,"PEB GS:[0x60] loader-list origin"));if(auto o=rvaoff(pe,h.sem.hash_rva,d.size()))f.ranges.push_back(rva_range(h.sem.hash_rva,7,"FNV-1a32 export-name hash multiply"));for(std::size_t i=0;i<std::min<std::size_t>(calls.size(),16);++i)if(auto o=rvaoff(pe,calls[i].first,d.size()))f.ranges.push_back(rva_range(calls[i].first,5,"manual resolver callsite for hash "+hx(calls[i].second)));f.suggested_actions={"prioritize resolver function and recovered hash callsites","map unknown hashes against exports from the concrete runtime module set before assigning API identity"};out.push_back(std::move(f));
+        const bool fnv=h.sem.hash_algorithm=="FNV1A32";
+        const bool confirmed=fnv&&h.exact_function;
+        std::vector<std::pair<std::uint32_t,std::uint32_t>>calls;
+        std::set<std::uint32_t>hashes;
+        if(h.sem.inline_hash)hashes.insert(*h.sem.inline_hash);
+        auto collect_calls=[&](const std::vector<Decoded>&v){
+            for(std::size_t i=0;i<v.size();++i){
+                auto t=direct_call_target(v[i]);
+                if(!t||*t!=h.rf.begin_rva)continue;
+                if(auto q=nearest_rcx_imm(v,i)){calls.push_back({v[i].rva,*q});hashes.insert(*q);}
+            }
+        };
+        if(h.exact_function){
+            for(const auto&rf:pe.exception.runtime_functions)collect_calls(decode(d,pe,rf));
+        }else collect_calls(h.ins);
+
+        Finding f;
+        f.kind="resolver";
+        f.family="Manual API resolver";
+        if(fnv)f.variant=h.exact_function?"x64 PEB/export/FNV1A32":"x64 PEB/export/FNV1A32/no-pdata-entry-window";
+        else f.variant=h.exact_function?"x64 PEB/export/modified-name-hash":"x64 PEB/export/modified-name-hash/no-pdata-entry-window";
+        f.state=confirmed?"CONFIRMED":"SUSPECTED";
+        f.confidence=confirmed?0.90:(fnv?0.68:(h.exact_function?0.76:0.62));
+        f.evidence={
+            "x64 code reads PEB from GS:[0x60], follows loader-list state and iterates loaded module bases",
+            "the same bounded function validates PE signatures and walks IMAGE_EXPORT_DIRECTORY name/count, ordinal and function tables"
+        };
+        if(fnv)f.evidence.push_back("export names are hashed byte-wise with FNV-1a32 seed 0x811C9DC5 and prime 0x01000193 inside a bounded loop");
+        else f.evidence.push_back("a bounded export-name loop applies arithmetic/bitwise hash-state updates; the exact name-hash algorithm is modified or unknown");
+        f.evidence.push_back("a hash match indexes name-ordinal/function tables and returns a module-base-relative export address");
+        if(!h.exact_function){
+            f.evidence.push_back("the complete resolver shape was found in a bounded executable entry-section window");
+            f.negative_evidence.push_back("the image has no validated PE exception-function boundary for this resolver; entry-window classification remains SUSPECTED");
+        }else if(!fnv){
+            f.negative_evidence.push_back("the resolver has a validated function boundary, but its name-hash algorithm is modified or unknown; static API name assignment is withheld");
+        }else f.negative_evidence.push_back("manual export resolution is confirmed behavior; software intent is not inferred");
+        f.negative_evidence.push_back("module identity is not statically fixed when the resolver scans the loaded-module list; hash-to-name matches use a bounded known-API catalog and do not prove a unique exporting module");
+        f.fields["platform"]="windows";
+        f.fields["architecture"]="x64";
+        f.fields["function_boundary_state"]=h.exact_function?"RUNTIME_FUNCTION":"ENTRY_SECTION_WINDOW";
+        f.fields["module_enumeration"]="PEB_LDR_INMEMORY_LIST";
+        f.fields["export_traversal"]="IMAGE_EXPORT_DIRECTORY_NAMES_ORDINALS_FUNCTIONS";
+        f.fields["hash_algorithm"]=h.sem.hash_algorithm;
+        if(fnv){f.fields["hash_seed"]="0x811c9dc5";f.fields["hash_prime"]="0x1000193";}
+        f.fields["resolver_function_rva"]=hx(h.rf.begin_rva);
+        f.fields["peb_load_rva"]=hx(h.sem.peb_rva);
+        f.fields["hash_loop_rva"]=hx(h.sem.hash_rva);
+        f.fields["eat_target_rva"]=hx(h.sem.eat_rva);
+        f.fields["module_identity_state"]="RUNTIME_MODULE_SCAN_NOT_STATICALLY_FIXED";
+        f.fields["target_hash_count"]=std::to_string(hashes.size());
+        f.fields["resolver_callsite_count"]=std::to_string(calls.size());
+        std::ostringstream ledger;
+        std::size_t mapped=0;
+        for(auto q:hashes){
+            if(ledger.tellp()>0)ledger<<"; ";
+            ledger<<hx(q);
+            if(!fnv){ledger<<"=UNRESOLVED_MODIFIED_HASH";continue;}
+            auto names=known_hash_names(q);
+            if(names.size()==1){ledger<<'='<<names[0];++mapped;}
+            else if(names.size()>1){ledger<<"=AMBIGUOUS(";for(std::size_t i=0;i<names.size();++i){if(i)ledger<<'|';ledger<<names[i];}ledger<<')';}
+            else ledger<<"=UNKNOWN";
+        }
+        if(!hashes.empty())f.fields["target_hash_ledger"]=ledger.str();
+        f.fields["known_api_name_matches"]=std::to_string(fnv?mapped:0);
+        if(!fnv)f.fields["target_identity_state"]="MODIFIED_OR_UNKNOWN_HASH_NO_STATIC_API_NAME";
+        else f.fields["target_identity_state"]=hashes.empty()?"STRUCTURE_CONFIRMED_NO_STATIC_CALL_HASH":(mapped==hashes.size()?"ALL_HASHES_MATCH_BOUNDED_KNOWN_API_CATALOG":"PARTIAL_OR_UNKNOWN_HASH_NAMES");
+        if(auto o=rvaoff(pe,h.rf.begin_rva,d.size()))f.ranges.push_back(rva_range(h.rf.begin_rva,h.rf.end_rva-h.rf.begin_rva,"manual PEB/export resolver function"));
+        if(auto o=rvaoff(pe,h.sem.peb_rva,d.size()))f.ranges.push_back(rva_range(h.sem.peb_rva,9,"PEB GS:[0x60] loader-list origin"));
+        std::uint32_t hash_size=7;
+        for(const auto&x:h.ins)if(x.rva==h.sem.hash_rva){hash_size=x.zi.length;break;}
+        if(auto o=rvaoff(pe,h.sem.hash_rva,d.size()))f.ranges.push_back(rva_range(h.sem.hash_rva,hash_size,fnv?"FNV-1a32 export-name hash multiply":"modified/unknown export-name hash operation"));
+        for(std::size_t i=0;i<std::min<std::size_t>(calls.size(),16);++i)if(auto o=rvaoff(pe,calls[i].first,d.size()))f.ranges.push_back(rva_range(calls[i].first,5,"manual resolver callsite for hash "+hx(calls[i].second)));
+        if(fnv)f.suggested_actions={"prioritize resolver function and recovered hash callsites","map unknown hashes against exports from the concrete runtime module set before assigning API identity"};
+        else f.suggested_actions={"recreate the modified name-hash state against exports from the concrete runtime module set","prioritize recovered resolver callsites before assigning API identity"};
+        out.push_back(std::move(f));
     }
     return out;
 }
