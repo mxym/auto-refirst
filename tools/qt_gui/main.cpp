@@ -1063,6 +1063,7 @@ private:
             {"CLR bootstrap import contract", "CLR 启动导入关系"},
             {"Managed dynamic loader surface", "托管动态加载面"},
             {"Native import hook surface", "原生导入 Hook 面"},
+            {"Embedded executable loader route", "嵌套可执行文件加载路线"},
             {"Layered/polyglot format markers", "分层/多格式标记"},
             {"WebAssembly relocatable metadata", "WebAssembly 可重定位元数据"},
             {"Wasm import module dependency", "Wasm 导入模块依赖"},
@@ -1133,6 +1134,8 @@ private:
         if (raw.contains(QStringLiteral("inspect:iat-slot-writers-and-resolved-targets"), Qt::CaseInsensitive)) return QStringLiteral("检查 IAT 槽写入点和实际解析目标。");
         if (raw.contains(QStringLiteral("compare:disk-iAT-with-runtime-iAT"), Qt::CaseInsensitive)) return QStringLiteral("对比磁盘 IAT 与运行时 IAT 内容。");
         if (raw.contains(QStringLiteral("trace:loader-or-hook-initialization"), Qt::CaseInsensitive)) return QStringLiteral("只有需要运行时证据时，再跟踪加载器或 Hook 初始化链。");
+        if (raw.contains(QStringLiteral("inspect:embedded-child-loader-callsite"), Qt::CaseInsensitive)) return QStringLiteral("检查父文件中资源提取、写出或启动子文件的调用点。");
+        if (raw.contains(QStringLiteral("trace:resource-to-child-route-only-when-runtime-evidence-is-required"), Qt::CaseInsensitive)) return QStringLiteral("只有需要确认资源到子文件的实际路径时，再跟踪运行时路线。");
         if (raw.contains(QStringLiteral("--run=python-probe"), Qt::CaseInsensitive)) return QStringLiteral("如需确认 CPython 编译器行为，可启用 --run=python-probe。");
         if (raw.contains(QStringLiteral("--run"), Qt::CaseInsensitive)) return QStringLiteral("如需运行时证据，可启用 --run。");
         if (raw.contains(QStringLiteral("--extract"), Qt::CaseInsensitive)) return QStringLiteral("如需完整容器或重型静态展开，可启用 --extract。");
