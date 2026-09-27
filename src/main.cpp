@@ -823,6 +823,75 @@ std::vector<prts::NestedExecutableArtifactCandidate> nested_reuse_candidates(con
     return out;
 }
 
+struct NestedPeLoaderSurface {
+    bool resource=false;
+    bool sink=false;
+    bool launch=false;
+    bool module=false;
+    std::vector<std::string> resource_apis;
+    std::vector<std::string> sink_apis;
+    std::vector<std::string> launch_apis;
+    std::vector<std::string> module_apis;
+};
+
+std::string lower_ascii_copy(std::string value){
+    std::transform(value.begin(),value.end(),value.begin(),[](unsigned char c){return char(std::tolower(c));});
+    return value;
+}
+
+void append_unique_limited(std::vector<std::string>&values,const std::string&value){
+    if(value.empty()||std::find(values.begin(),values.end(),value)!=values.end()||values.size()>=32)return;
+    values.push_back(value);
+}
+
+std::string joined_names(const std::vector<std::string>&values){
+    std::string out;
+    for(const auto&value:values){if(!out.empty())out.push_back(',');out+=value;}
+    return out;
+}
+
+NestedPeLoaderSurface nested_pe_loader_surface(const prts::PeInfo&pe){
+    NestedPeLoaderSurface out;
+    if(!pe.valid||!pe.resources.present)return out;
+    for(const auto&module:pe.imports)for(const auto&function:module.functions){
+        if(function.by_ordinal||function.name.empty())continue;
+        const auto lower=lower_ascii_copy(function.name);
+        if(lower=="findresourcea"||lower=="findresourcew"||lower=="loadresource"||lower=="lockresource"||lower=="sizeofresource"){
+            out.resource=true;append_unique_limited(out.resource_apis,module.name+"!"+function.name);
+        }else if(lower=="writefile"||lower=="createfilea"||lower=="createfilew"||lower=="mapviewoffile"||lower=="writeprocessmemory"||lower=="ntwritevirtualmemory"||lower=="zwwritevirtualmemory"){
+            out.sink=true;append_unique_limited(out.sink_apis,module.name+"!"+function.name);
+        }else if(lower=="createprocessa"||lower=="createprocessw"||lower=="winexec"||lower=="shellexecutea"||lower=="shellexecutew"||lower=="shellexecuteexa"||lower=="shellexecuteexw"){
+            out.launch=true;append_unique_limited(out.launch_apis,module.name+"!"+function.name);
+        }else if(lower=="loadlibrarya"||lower=="loadlibraryw"||lower=="loadlibraryexa"||lower=="loadlibraryexw"||lower=="getprocaddress"||lower=="ldrloaddll"||lower=="ldrgetprocedureaddress"){
+            out.module=true;append_unique_limited(out.module_apis,module.name+"!"+function.name);
+        }
+    }
+    return out;
+}
+
+void add_nested_pe_loader_route(prts::AnalysisReport&report,const std::filesystem::path&input,const std::filesystem::path&child,const prts::NestedExecutableInfo&nested,const NestedPeLoaderSurface&surface){
+    if(child.empty()||nested.format!="PE"||!surface.resource||(surface.sink==false&&surface.launch==false&&surface.module==false))return;
+    for(const auto&prior:report.artifact_relationships)if(prior.kind=="pe_embedded_loader_route"&&same_regular_file(prior.first,input)&&same_regular_file(prior.second,child))return;
+    prts::ArtifactRelationship relation;relation.first=input;relation.second=child;relation.directed=true;relation.kind="pe_embedded_loader_route";relation.state="ROUTE_HINT";
+    relation.first_role="pe_loader";relation.second_role="embedded_executable";relation.first_relation_role="loader_candidate_source";relation.second_relation_role="embedded_payload_candidate";
+    relation.evidence_basis="the parent declares a PE resource directory and imports resource extraction APIs plus an independent write, launch, or module-loading bridge; the child bytes were closed by the exact nested-PE validator";
+    relation.evidence_source="PE resource-directory declaration + validated import table co-occurrence + nested PE header/table geometry + post-materialization size/SHA-256";
+    relation.source_coordinate="current_input_file:PE_IMPORTS;resource="+joined_names(surface.resource_apis)+";sink="+joined_names(surface.sink_apis)+";launch="+joined_names(surface.launch_apis)+";module="+joined_names(surface.module_apis);
+    relation.target_coordinate="current_input_file:FILE_OFFSET="+std::to_string(nested.parent_offset)+";size="+std::to_string(nested.exact_size);
+    relation.provenance_scope="one exact parent/child pair; resource identity, argument flow, call ordering, runtime reachability, and child execution remain unresolved";
+    relation.evidence_level="R1_ROUTING_HINT";relation.ambiguity="RESOURCE_ID_AND_ARGUMENT_FLOW_UNRESOLVED";relation.semantic_relevance="ROUTING";relation.priority_eligible=false;
+    relation.reason="resource extraction and a separate output/launch/module bridge make the validated embedded PE a bounded loader-route candidate";
+    report.artifact_relationships.push_back(std::move(relation));
+
+    prts::Finding finding;finding.kind="artifact_relationship";finding.family="Embedded executable loader route";finding.variant="pe_embedded_loader_route";finding.state="ROUTE_HINT";finding.confidence=.56;
+    finding.evidence={"the parent declares a PE resource directory and has bounded resource-extraction imports","the same parent also exposes an independent output, launch, or module-loading bridge","the child is a validated exact PE extent and was admitted as a static child artifact"};
+    finding.negative_evidence={"resource identity and the argument path from the resource API to this child were not recovered","import co-occurrence does not prove call order, runtime reachability, or child execution"};
+    finding.fields["parent"] = prts::path_utf8(input);finding.fields["child"] = prts::path_utf8(child);finding.fields["resource_apis"] = joined_names(surface.resource_apis);finding.fields["sink_apis"] = joined_names(surface.sink_apis);finding.fields["launch_apis"] = joined_names(surface.launch_apis);finding.fields["module_apis"] = joined_names(surface.module_apis);finding.fields["resource_identity"]="UNRESOLVED";finding.fields["argument_flow"]="UNRESOLVED";finding.fields["runtime_reachability"]="NOT_RESOLVED_STATIC_ONLY";finding.fields["priority_eligible"]="false";
+    finding.ranges.push_back(prts::file_offset_range(nested.parent_offset,nested.exact_size,"validated embedded PE extent on a loader route hint",prts::CoordinateBasis::CURRENT_INPUT_FILE,prts::path_utf8(input)));
+    finding.suggested_actions={"inspect:embedded-child-loader-callsite","trace:resource-to-child-route-only-when-runtime-evidence-is-required"};
+    report.findings.push_back(std::move(finding));
+}
+
 std::string joined_structured_paths(const prts::AnalysisReport&report,const prts::NestedExecutableReuseDecision&reuse){
     std::string out;std::size_t kept=0;for(const auto idx:reuse.matching_indexes){if(idx>=report.artifacts.size()||kept++>=8)break;if(!out.empty())out+=';';out+=prts::path_utf8(report.artifacts[idx].path);}if(reuse.matching_indexes.size()>8)out+=";...";return out;
 }
@@ -855,6 +924,8 @@ void materialize_nested_executables(prts::AnalysisReport&report,const std::files
     constexpr std::uint64_t kMaxAggregateChildBytes=64ull*1024*1024;
     const auto aggregate_limit=std::min({kMaxAggregateChildBytes,opt.artifact_max_bytes,extract_bytes_left});
     const auto one_child_limit=kMaxOneChildBytes;
+    const auto loader_surface=nested_pe_loader_surface(report.pe);
+    auto route_loader_child=[&](const std::filesystem::path&child,const prts::NestedExecutableInfo&nested){add_nested_pe_loader_route(report,input,child,nested,loader_surface);};
     std::uint32_t routed=0;std::uint64_t materialized_bytes=0;
     bool candidate_limit_noted=false;
     for(const auto&embedded:report.static_scan.embedded){
@@ -881,7 +952,7 @@ void materialize_nested_executables(prts::AnalysisReport&report,const std::files
             const auto parent_now=prts::sha256_file(input);auto f=finding();if(parent_now!=report.input_snapshot.sha256){f.state="LOCATED_NOT_MATERIALIZED";f.fields["validation_state"]="POST_VALIDATION_PARENT_CHANGED";f.fields["parent_unchanged"]="false";f.negative_evidence.push_back("parent SHA-256 changed before structured-member reuse");report.findings.push_back(std::move(f));continue;}
             auto&preferred=report.artifacts[reuse.preferred_index];const auto prior_priority=preferred.priority;if(reuse.priority_upgrade_required)preferred.priority="HIGH";
             f.state="CONFIRMED";f.fields["validation_state"]="VALIDATED_EXACT_REUSED";f.fields["parent_unchanged"]="true";f.fields["provenance_precedence"]="STRUCTURED_CONTAINER_MEMBER";f.fields["preferred_artifact_path"]=prts::path_utf8(preferred.path);f.fields["preferred_artifact_source"]=preferred.source;f.fields["preferred_relation"]=preferred.relation;f.fields["preferred_priority_before"]=prior_priority;f.fields["preferred_priority_after"]=preferred.priority;f.fields["structured_match_count"]=std::to_string(reuse.matching_indexes.size());f.fields["structured_match_paths"]=joined_structured_paths(report,reuse);f.fields["route_upgraded_to_high"]=reuse.priority_upgrade_required?"true":"false";
-            f.evidence={"AP exact PE/ELF validation independently corroborated bytes already owned by a validated structured container member","structured member provenance supersedes raw embedded-carve provenance, so no second payload file was written","the preferred existing member is routed HIGH through the existing static artifact graph; nested runtime execution remains disabled"};f.ranges.push_back(prts::file_offset_range(nested.parent_offset,nested.exact_size,"validated embedded executable exact extent (structured member reused)",prts::CoordinateBasis::CURRENT_INPUT_FILE,prts::path_utf8(input)));report.findings.push_back(std::move(f));continue;
+            f.evidence={"AP exact PE/ELF validation independently corroborated bytes already owned by a validated structured container member","structured member provenance supersedes raw embedded-carve provenance, so no second payload file was written","the preferred existing member is routed HIGH through the existing static artifact graph; nested runtime execution remains disabled"};f.ranges.push_back(prts::file_offset_range(nested.parent_offset,nested.exact_size,"validated embedded executable exact extent (structured member reused)",prts::CoordinateBasis::CURRENT_INPUT_FILE,prts::path_utf8(input)));route_loader_child(preferred.path,nested);report.findings.push_back(std::move(f));continue;
         }
 
         // A validated ASAR may exactly own the AP span even when AUTO_CORE policy did
@@ -895,7 +966,7 @@ void materialize_nested_executables(prts::AnalysisReport&report,const std::files
             const auto parent_before=prts::sha256_file(input);if(parent_before!=report.input_snapshot.sha256){f.state="LOCATED_NOT_MATERIALIZED";f.fields["validation_state"]="POST_VALIDATION_PARENT_CHANGED";f.fields["parent_unchanged"]="false";f.negative_evidence.push_back("parent SHA-256 changed before structured-member materialization");report.findings.push_back(std::move(f));continue;}
             prts::AsarExtractResult structured_extract;std::filesystem::path structured_path;std::string error;if(!materialize_exact_asar_member(report,data,nested,*asar_member,structured_extract,structured_path,error)){f.state="LOCATED_NOT_MATERIALIZED";f.fields["validation_state"]="VALIDATED_EXACT_STRUCTURED_MEMBER_WRITE_FAILED";f.negative_evidence.push_back(error);report.findings.push_back(std::move(f));continue;}
             const auto parent_now=prts::sha256_file(input);if(parent_now!=report.input_snapshot.sha256){std::error_code ec;std::filesystem::remove(structured_path,ec);f.state="LOCATED_NOT_MATERIALIZED";f.fields["validation_state"]="POST_WRITE_PROVENANCE_FAILED";f.fields["parent_unchanged"]="false";f.negative_evidence.push_back("parent SHA-256 changed during structured-member materialization");report.findings.push_back(std::move(f));continue;}
-            commit_exact_asar_member(report,input,structured_extract,structured_path);f.state="CONFIRMED";f.fields["validation_state"]="VALIDATED_EXACT_SUPERSEDED_BY_STRUCTURED_MEMBER";f.fields["parent_unchanged"]="true";f.fields["preferred_artifact_path"]=prts::path_utf8(structured_path);f.fields["preferred_priority_after"]="HIGH";f.fields["route_upgraded_to_high"]="true";f.evidence={"AP exact span matches one complete validated ASAR member identity by absolute offset and size","the member was omitted only by ASAR AUTO_CORE policy, so Electron ASAR provenance took over bounded materialization","no opaque raw-carve payload was written; the structured member is routed HIGH for static child analysis"};f.ranges.push_back(prts::file_offset_range(nested.parent_offset,nested.exact_size,"validated embedded executable exact extent (ASAR member takeover)",prts::CoordinateBasis::CURRENT_INPUT_FILE,prts::path_utf8(input)));report.findings.push_back(std::move(f));materialized_bytes=sat_add(materialized_bytes,nested.exact_size);extract_bytes_left=nested.exact_size>extract_bytes_left?0:extract_bytes_left-nested.exact_size;--extract_files_left;continue;
+            commit_exact_asar_member(report,input,structured_extract,structured_path);f.state="CONFIRMED";f.fields["validation_state"]="VALIDATED_EXACT_SUPERSEDED_BY_STRUCTURED_MEMBER";f.fields["parent_unchanged"]="true";f.fields["preferred_artifact_path"]=prts::path_utf8(structured_path);f.fields["preferred_priority_after"]="HIGH";f.fields["route_upgraded_to_high"]="true";f.evidence={"AP exact span matches one complete validated ASAR member identity by absolute offset and size","the member was omitted only by ASAR AUTO_CORE policy, so Electron ASAR provenance took over bounded materialization","no opaque raw-carve payload was written; the structured member is routed HIGH for static child analysis"};f.ranges.push_back(prts::file_offset_range(nested.parent_offset,nested.exact_size,"validated embedded executable exact extent (ASAR member takeover)",prts::CoordinateBasis::CURRENT_INPUT_FILE,prts::path_utf8(input)));route_loader_child(structured_path,nested);report.findings.push_back(std::move(f));materialized_bytes=sat_add(materialized_bytes,nested.exact_size);extract_bytes_left=nested.exact_size>extract_bytes_left?0:extract_bytes_left-nested.exact_size;--extract_files_left;continue;
         }
 
         if(!extract_files_left||nested.exact_size>aggregate_limit-materialized_bytes){
@@ -912,7 +983,7 @@ void materialize_nested_executables(prts::AnalysisReport&report,const std::files
             std::filesystem::remove(out,ec);f.state="LOCATED_NOT_MATERIALIZED";f.fields["validation_state"]="POST_WRITE_PROVENANCE_FAILED";f.fields["parent_unchanged"]=(parent_now==report.input_snapshot.sha256)?"true":"false";f.evidence.push_back("candidate closed to one exact PE/ELF extent");f.negative_evidence.push_back(parent_now!=report.input_snapshot.sha256?"parent SHA-256 changed during nested artifact materialization":"materialized child size/SHA-256 did not match the validated exact span");report.findings.push_back(std::move(f));continue;
         }
         f.state="CONFIRMED";f.fields["validation_state"]="VALIDATED_EXACT";f.fields["parent_unchanged"]="true";f.fields["output"]=prts::path_utf8(out);f.evidence={"self-describing executable header/table geometry closed to one unique file extent","only structurally declared file-backed bytes were materialized; arbitrary parent trailing bytes were not treated as PE/ELF overlay","materialized child registered HIGH for the existing static artifact graph; nested child execution remains disabled"};f.ranges.push_back(prts::file_offset_range(nested.parent_offset,nested.exact_size,"validated embedded executable exact extent",prts::CoordinateBasis::CURRENT_INPUT_FILE,prts::path_utf8(input)));report.findings.push_back(std::move(f));
-        register_artifact_file(report,out,"embedded_executable","nested_executable","Validated nested "+nested.format,input,"embedded_executable","HIGH",false,false,"VALIDATED_EXACT");
+        register_artifact_file(report,out,"embedded_executable","nested_executable","Validated nested "+nested.format,input,"embedded_executable","HIGH",false,false,"VALIDATED_EXACT");route_loader_child(out,nested);
         materialized_bytes=sat_add(materialized_bytes,nested.exact_size);extract_bytes_left=nested.exact_size>extract_bytes_left?0:extract_bytes_left-nested.exact_size;--extract_files_left;
     }
 }

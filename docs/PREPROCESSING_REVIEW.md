@@ -52,6 +52,7 @@
 | P2 · 已实现 | .NET MethodDef body map | JSON 与 `.NET symbols.csv` 输出 MethodDef 元数据行、IL body/header/code 的 file-offset、长度和 file-backed 状态；下游可以直接按 token 与当前输入偏移复核异常方法，不需要重新猜测 RVA 到文件范围的映射。 |
 | P2 · 已实现 | PE custom-loader surface | 组合 resolver imports、重定位目录、TLS 预入口和入口段权限的独立信号，输出低置信度手动映射/反射式 loader 路由；单一 API、单独重定位目录和普通插件宿主形状不升级，保持静态-only。 |
 | P2 · 已实现 | 原生 IAT/代码 hook 面 | 在有界 PE 函数或入口窗口内定位对精确 IAT 槽/可执行范围的文件内写入，并与同函数 loader/patch bridge 调用组合；保留写入指令、IAT 目标和未解析 hook 目标，不把导入或保护 API 单独当作 hook。 |
+| P2 · 已实现 | 嵌套 PE 加载路线 | 父 PE 资源目录、资源提取导入与独立写出/启动/模块加载桥和已验证嵌套 PE 同时成立时，生成 `ROUTE_HINT` 父子关系；资源身份、参数流、调用顺序和运行时执行保持未解析，不提升优先级。 |
 | P2 · 已实现 | 无 `.pdata` 与魔改名称哈希手工解析器 | 对没有可用 `RUNTIME_FUNCTION` 的 x64 PE，仅在入口可执行节的 8 KiB 有界窗口内复核完整 PEB → export 解析形状；FNV-1a32 走精确分支，算术/位运算替换的名称哈希输出 `MODIFIED_OR_UNKNOWN_NAME_HASH`，不凭静态目录强行分配 API 名称。结果标为 `SUSPECTED`/`ENTRY_SECTION_WINDOW`，不把窗口当作真实函数边界。 |
 | P2 · 已实现 | .NET managed resources surface | 将已验证 `ManifestResource` 的嵌入 payload 与外部 `AssemblyRef`/`File`/`ExportedType` 实现关系交接给报告，并在预算内原样物化嵌入字节接入递归子工件图，保留文件偏移和静态-only 边界，优先提示内嵌 DLL/配置/二进制资源。 |
 | P2 · 已实现 | .NET single-file bundle materialization | 在 v2/v6 manifest/member geometry 已闭合后，按 AUTO_CORE/`--extract` 预算物化未压缩 managed assembly、native runtime、deps/runtimeconfig 与 symbols 成员，注册到现有静态子工件图；v6 压缩成员明确保留为待解压边界，不执行应用、不伪造 Brotli 结果。 |
