@@ -39,6 +39,7 @@
 #include "prts/execution_prerequisite.hpp"
 #include "prts/manual_resolver.hpp"
 #include "prts/pe_loader_surface.hpp"
+#include "prts/native_hook_surface.hpp"
 #include "prts/runtime.hpp"
 #include "prts/renpy.hpp"
 #include "prts/rust.hpp"
@@ -1589,6 +1590,10 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
         if(report.pe.valid){
             const auto loader_surface=prts::analyze_pe_loader_surface(mapped.bytes(),report.pe);
             if(loader_surface.candidate)report.findings.push_back(prts::pe_loader_surface_finding(loader_surface));
+        }
+        if(report.pe.valid){
+            const auto hook_surface=prts::analyze_native_hook_surface(mapped.bytes(),report.pe);
+            if(auto finding=prts::native_hook_surface_finding(hook_surface))report.findings.push_back(std::move(*finding));
         }
 
         auto packed=prts::detect_packed_pe(report.pe,report.input_snapshot.size);
