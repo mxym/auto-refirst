@@ -1112,6 +1112,11 @@ private:
 
     QString actionLabel(const QString& raw) const {
         if (m_english || raw.isEmpty()) return raw;
+        if (raw == QStringLiteral("extract:dotnet-symbols-and-types")) return QStringLiteral("导出 .NET 符号和类型信息。");
+        if (raw == QStringLiteral("extract:dotnet-resources")) return QStringLiteral("展开 .NET 内嵌资源。");
+        if (raw.contains(QStringLiteral("inspect user TypeDef methods"), Qt::CaseInsensitive)) return QStringLiteral("优先检查用户 TypeDef 方法和已恢复签名。");
+        if (raw.contains(QStringLiteral("open in dnSpy/ILSpy/dotPeek"), Qt::CaseInsensitive)) return QStringLiteral("用 dnSpy、ILSpy 或 dotPeek 检查选定方法的 IL。");
+        if (raw.contains(QStringLiteral("inspect embedded DLL/EXE/config payloads"), Qt::CaseInsensitive)) return QStringLiteral("先检查已展开的 DLL、EXE 和配置资源。");
         if (raw.contains(QStringLiteral("prioritize the selector target/fallthrough"), Qt::CaseInsensitive)) return QStringLiteral("先复核选择器的目标路径、顺落路径或返回值，再继续深入分析。");
         if (raw.contains(QStringLiteral("record the concrete runtime CPUID value"), Qt::CaseInsensitive)) return QStringLiteral("只有需要动态确认时，再记录实际运行时的 CPUID 值。");
         if (raw.contains(QStringLiteral("prioritize the gated path/value"), Qt::CaseInsensitive)) return QStringLiteral("先复核门控路径或返回值，再继续深入分析。");
