@@ -233,6 +233,9 @@ def p0_formats(binary: pathlib.Path, td: pathlib.Path) -> None:
     cp=run([sys.executable,ROOT/"tests/test_asar_script_bridge.py",binary],timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log("[PASS P0] bounded ASAR literal-to-Wasm/native routing and dynamic/unpacked boundaries")
+    cp=run([sys.executable,ROOT/"tests/test_rust_evidence.py",binary],timeout=180)
+    assert "[PASS]" in cp.stdout,cp.stdout
+    log("[PASS P0] Rust symbol evidence versus marker-only evidence state")
     cp=run([sys.executable,ROOT/"tests/test_manual_resolver_fallback.py",binary],timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log("[PASS P0] bounded no-.pdata manual API resolver entry-window fallback")

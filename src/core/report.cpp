@@ -1755,6 +1755,18 @@ void render_json_impl(std::ostream& o,const AnalysisReport& r,bool automatic_chi
     o<<"],\"types_rendered\":"<<go_types.size()<<",\"types_truncated\":"<<(r.golang.types.size()>go_types.size()?"true":"false")<<",\"types\":[";for(std::size_t i=0;i<go_types.size();++i){const auto&t=*go_types[i];if(i)o<<',';o<<"{\"va\":"<<t.va<<",\"size\":"<<t.size<<",\"name\":\""<<esc(t.name)<<"\",\"kind\":\""<<esc(t.kind)<<"\",\"tflag\":"<<unsigned(t.tflag)<<",\"user_like\":"<<(t.user_like?"true":"false")<<",\"fields_rendered\":"<<std::min(t.fields.size(),kGoFieldRender)<<",\"fields_truncated\":"<<(t.fields.size()>kGoFieldRender?"true":"false")<<",\"fields\":[";for(std::size_t j=0;j<t.fields.size()&&j<kGoFieldRender;++j){const auto&sf=t.fields[j];if(j)o<<',';o<<"{\"name\":\""<<esc(sf.name)<<"\",\"type_name\":\""<<esc(sf.type_name)<<"\",\"type_va\":"<<sf.type_va<<",\"offset\":"<<sf.offset<<",\"embedded\":"<<(sf.embedded?"true":"false")<<",\"tag\":\""<<esc(sf.tag)<<"\"}";}o<<"]}";}
     o<<"],\"extraction\":{\"success\":"<<(r.golang_extract.success?"true":"false")<<",\"symbols_csv\":\""<<esc(path_utf8(r.golang_extract.symbols_csv))<<"\",\"symbol_count\":"<<r.golang_extract.symbol_count<<",\"types_csv\":\""<<esc(path_utf8(r.golang_extract.types_csv))<<"\",\"type_count\":"<<r.golang_extract.type_count<<"},\"type_error\":\""<<esc(r.golang.type_error)<<"\",\"error\":\""<<esc(r.golang.error)<<"\"},\n";
 
+    o << "  \"rust\": {\"valid\":" << (r.rust.valid?"true":"false")
+      << ",\"state\":\"" << (r.rust.valid?(r.rust.evidence_mode=="RUNTIME_MARKER_ONLY"?"LIKELY":"CONFIRMED"):"FAILED")
+      << "\",\"evidence_mode\":\"" << esc(r.rust.evidence_mode)
+      << "\",\"runtime_marker_count\":" << r.rust.runtime_marker_count
+      << ",\"runtime_marker_offsets\":[";
+    for(std::size_t i=0;i<r.rust.runtime_marker_offsets.size();++i){if(i)o<<',';o<<r.rust.runtime_marker_offsets[i];}
+    o << "],\"rustc_source_hash\":\"" << esc(r.rust.rustc_source_hash)
+      << "\",\"std_source_path_count\":" << r.rust.std_source_paths.size()
+      << ",\"crate_hint_count\":" << r.rust.crates.size()
+      << ",\"demangled_symbol_count\":" << r.rust.symbols.size()
+      << ",\"error\":\"" << esc(r.rust.error) << "\"},\n";
+
     o << "  \"cpython_static\": ";render_cpython_static_json(o,r.cpython_static);o<<",\n";
     o << "  \"cpython_runtimes\": [";
     for(std::size_t i=0;i<r.cpython_runtimes.size();++i){

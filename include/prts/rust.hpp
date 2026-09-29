@@ -12,6 +12,9 @@ struct RustCrateHint { std::string crate,version,path; };
 struct RustInfo {
     bool valid=false;
     bool symbol_table_present=false;
+    std::string evidence_mode;
+    std::uint64_t runtime_marker_count=0;
+    std::vector<std::uint64_t> runtime_marker_offsets;
     std::string rustc_source_hash;
     std::vector<std::string> std_source_paths;
     std::vector<RustCrateHint> crates;

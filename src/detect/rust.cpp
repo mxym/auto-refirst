@@ -34,7 +34,20 @@ void scan_paths(std::span<const std::uint8_t>d,RustInfo&r){
     constexpr std::string_view cargo="/.cargo/registry/src/";
     for(std::size_t hit=0;;){hit=detail::find_exact(d,cargo,hit);if(hit==std::string::npos)break;auto e=printable_end(hit);std::string_view v(reinterpret_cast<const char*>(d.data()+hit),e-hit);auto after=v.find('/',cargo.size());if(after!=std::string_view::npos){auto pkgstart=after+1;auto slash=v.find('/',pkgstart);if(slash!=std::string_view::npos){auto pkg=v.substr(pkgstart,slash-pkgstart);auto dash=pkg.rfind('-');if(dash!=std::string_view::npos&&dash+1<pkg.size()){std::string key(pkg);if(seencrate.insert(key).second&&r.crates.size()<128)r.crates.push_back({std::string(pkg.substr(0,dash)),std::string(pkg.substr(dash+1)),std::string(v.substr(0,slash))});}}}++hit;}
 }
+void scan_runtime_markers(std::span<const std::uint8_t>d,RustInfo&r){
+    static constexpr std::array<std::string_view,3> markers={"rust_begin_unwind","core::panicking","library/core/src/panicking.rs"};
+    constexpr std::size_t kOffsetCap=64;
+    for(const auto marker:markers){
+        for(std::size_t hit=0;;){
+            hit=detail::find_exact(d,marker,hit);
+            if(hit==std::string::npos)break;
+            ++r.runtime_marker_count;
+            if(r.runtime_marker_offsets.size()<kOffsetCap)r.runtime_marker_offsets.push_back(hit);
+            hit+=marker.size();
+        }
+    }
 }
-RustInfo detect_rust(std::span<const std::uint8_t>d,const PeInfo&pe,const ElfInfo&elf){RustInfo r;parse_elf_syms(d,elf,r);parse_elf_dynamic_syms(elf,r);parse_pe_coff(d,pe,r);scan_paths(d,r);auto has=[&](std::string_view s){return detail::contains_exact(d,s);};if(!r.symbols.empty()||!r.rustc_source_hash.empty()||has("rust_begin_unwind")||has("core::panicking")||has("library/core/src/panicking.rs"))r.valid=true;if(r.valid&&r.symbols.empty())r.error="Rust runtime/source evidence present but usable Rust function symbols are stripped/absent";return r;}
-Finding rust_finding(const RustInfo&r){Finding f;f.kind="runtime";f.family="Rust";if(!r.valid){f.state="FAILED";return f;}f.state="CONFIRMED";f.evidence.push_back(!r.symbols.empty()?"Rust mangled symbols decoded with rustc-demangle native C":"Rust standard-library source/runtime paths detected");if(!r.rustc_source_hash.empty())f.fields["rustc_source_hash"]=r.rustc_source_hash;f.fields["demangled_symbols"]=std::to_string(r.symbols.size());f.fields["crate_hints"]=std::to_string(r.crates.size());if(!r.error.empty())f.negative_evidence.push_back(r.error);return f;}
+}
+RustInfo detect_rust(std::span<const std::uint8_t>d,const PeInfo&pe,const ElfInfo&elf){RustInfo r;parse_elf_syms(d,elf,r);parse_elf_dynamic_syms(elf,r);parse_pe_coff(d,pe,r);scan_paths(d,r);scan_runtime_markers(d,r);if(!r.symbols.empty())r.evidence_mode="SYMBOLS";else if(!r.rustc_source_hash.empty()||!r.std_source_paths.empty())r.evidence_mode="RUSTC_SOURCE";else if(r.runtime_marker_count)r.evidence_mode="RUNTIME_MARKER_ONLY";r.valid=!r.evidence_mode.empty();if(r.valid&&r.symbols.empty())r.error="Rust runtime/source evidence present but usable Rust function symbols are stripped/absent";return r;}
+Finding rust_finding(const RustInfo&r){Finding f;f.kind="runtime";f.family="Rust";if(!r.valid){f.state="FAILED";return f;}f.state=r.evidence_mode=="RUNTIME_MARKER_ONLY"?"LIKELY":"CONFIRMED";f.confidence=r.evidence_mode=="RUNTIME_MARKER_ONLY"?.62:.96;f.fields["evidence_mode"]=r.evidence_mode;f.fields["runtime_marker_count"]=std::to_string(r.runtime_marker_count);f.fields["runtime_marker_offsets"]=([&]{std::string s;for(std::size_t i=0;i<r.runtime_marker_offsets.size();++i){if(i)s+=",";s+=std::to_string(r.runtime_marker_offsets[i]);}return s;})();f.evidence.push_back(!r.symbols.empty()?"Rust mangled symbols decoded with rustc-demangle native C":(r.evidence_mode=="RUSTC_SOURCE"?"rustc source paths and compiler hash detected":"bounded Rust runtime marker strings detected"));if(r.evidence_mode=="RUNTIME_MARKER_ONLY")f.negative_evidence.push_back("runtime marker strings alone do not prove that this image was produced by Rust");if(!r.rustc_source_hash.empty())f.fields["rustc_source_hash"]=r.rustc_source_hash;f.fields["demangled_symbols"]=std::to_string(r.symbols.size());f.fields["crate_hints"]=std::to_string(r.crates.size());if(!r.error.empty())f.negative_evidence.push_back(r.error);for(const auto offset:r.runtime_marker_offsets)f.ranges.push_back(file_offset_range(offset,1,"Rust runtime marker"));return f;}
 }
