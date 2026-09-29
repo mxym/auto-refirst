@@ -60,6 +60,19 @@ def payload_finding(report: dict) -> dict | None:
                  if f["family"] == "PE Authenticode extension payload"), None)
 
 
+def module_finding(report: dict) -> dict | None:
+    return next((f for f in report["findings"]
+                 if f["family"] == "PE Authenticode module manifest"), None)
+
+
+def module_manifest() -> bytes:
+    rows = []
+    for module_id in (1035, 7, 42, 1023):
+        rows.append(der(0x30, der(0x02, module_id.to_bytes(2, "big")) +
+                        der(0x04, bytes([module_id & 0xff]) * 80)))
+    return der(0x30, b"".join(rows))
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("usage: test_authenticode_extension_payload.py <auto-refirst>")
@@ -79,6 +92,17 @@ def main() -> None:
     extraction = positive["authenticode"]["extraction"]
     assert extraction["success"] and extraction["written_count"] == 1, extraction
     assert (pathlib.Path(extraction["output_dir"]) / "extension-0.der").read_bytes() == nested
+
+    manifest = run(binary, certificate_carrier([extension(module_manifest())]),
+                    pathlib.Path(tempfile.mkdtemp(prefix="ar-cert-manifest-")), "manifest.bin")
+    mf = module_finding(manifest)
+    assert mf is not None and mf["state"] == "CONFIRMED", manifest["findings"]
+    assert mf["variant"] == "DER_INTEGER_OCTET_RECORDS"
+    assert mf["fields"]["record_count"] == "4"
+    rendered = manifest["authenticode"]["signatures"][0]["module_manifests"]
+    assert len(rendered) == 1 and rendered[0]["valid"]
+    assert rendered[0]["record_count"] == 4 and rendered[0]["sorted_ids"] is False
+    assert rendered[0]["records"][0]["module_id"] == 1035
 
     # A valid private OID with only a short value is common metadata, not a
     # payload candidate.  A truncated DER carrier must also fail closed.
