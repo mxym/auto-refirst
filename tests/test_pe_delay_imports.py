@@ -51,6 +51,12 @@ def main() -> None:
     plain = run(binary, minimal_pe())
     assert not any(f["family"] == "PE delay-load imports" for f in plain["findings"])
     report = run(binary, delay_pe())
+    assert report["pe"]["valid"] is True
+    assert report["pe"]["state"] == "CONFIRMED"
+    assert report["pe"]["delay_imports_total"] == 1
+    assert report["pe"]["delay_import_function_count"] == 1
+    assert report["pe"]["delay_imports"][0]["name"] == "USER32.dll"
+    assert report["pe"]["delay_imports"][0]["functions"][0]["name"] == "LoadLibraryA"
     finding = next(f for f in report["findings"] if f["family"] == "PE delay-load imports")
     assert finding["state"] == "CONFIRMED"
     assert finding["fields"]["descriptor_count"] == "1"
