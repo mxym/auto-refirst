@@ -18,6 +18,7 @@ P0 校验：
 - ASAR/JavaScript 预检：验证合法 ASAR 几何进入 `Electron ASAR` 目录候选，含多个源码 token 的 JS 文件进入低置信度脚本候选，截断或伪造 ASAR 头不提升优先级；
 - .NET managed resources unit：用独立构造的 `ManifestResource` 内嵌/`AssemblyRef`/`File` 外部关系验证 `CONFIRMED` 资源计数、精确 `FILE_OFFSET` 范围和 `NOT_ATTEMPTED_STATIC_ONLY` 语义；再验证原样资源物化、输出字节、文件预算拒绝和清理；不执行或解码资源 payload；
 - PE delay-load triage：合成 RVA-based descriptor、DLL/name thunk 与目录边界截断样本，验证 `PE delay-load imports` 的 descriptor/function 计数、`RVA`/`CURRENT_INPUT_IMAGE` 范围、`NOT_ATTEMPTED_STATIC_ONLY` 以及损坏输入的 `PARTIAL`；无 delay directory 样本不产生该 finding；
+- V8 code-cache ingress：合成 modern 7-word 与 legacy 6-word serializer header、source-hash 标志、payload 长度不闭合和截断样本，验证 `V8 JavaScript code cache` 的 `LIKELY`/`FAILED` 边界、严格当前文件 payload 范围、目录预检路由以及 JSON/text 的不透明 payload 语义；不反序列化或执行缓存；
 - 分层/Polyglot 静态线索：合成 PE 外壳后接 PDF、Mach-O 与 ZIP 标记，验证至少两种非零偏移格式才产生 `Layered/polyglot format markers`，范围为当前输入 `FILE_OFFSET`，单一诱饵标记、截断 marker 与 16 MiB 前缀上限之外的 marker 均不提升；
 - 跨文件关系与目录 guidance；
 - interpreter/runtime-modality 静态授权边界；

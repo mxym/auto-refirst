@@ -51,6 +51,7 @@
 - .NET single-file bundle v2/v6 manifest/member geometry与 Linux NativeAOT section/table evidence；已验证的未压缩 bundle 成员会在默认 AUTO_CORE 或 `--extract` 预算内原样物化并接入子工件图，成员路径、类型和压缩遗漏都会进入报告；v6 Brotli 压缩成员只保留边界与遗漏状态，不伪造解压结果。识别结果不等同于 IL 反混淆或源码恢复。
 - Hermes HBC v89/v96/v98 的 header/table/function/string/opcode/debug/footer 完整性与有界提取，并可由 APK content entry 进入静态子分析；不声明 JavaScript 源码恢复或 runtime loading。
 - CPython `.pyc`、marshal、opcode、扩展模块、Cython/frozen/static/runtime 参考比较；PyInstaller/Nuitka 负责打包层与高价值 Python 子工件。
+- V8 JavaScript code cache：识别 V8 serializer magic、legacy/modern cache header、source-hash 标志和严格 payload 几何，输出当前文件范围与配对源/运行时提示；序列化 payload 保持不透明，不反序列化、不执行，也不把 header 视为源码或版本兼容证明。
 
 ## 3. 游戏与应用运行时
 

@@ -1,5 +1,6 @@
 #include "prts/preflight.hpp"
 #include "prts/python_bytecode.hpp"
+#include "prts/v8_code_cache.hpp"
 #include <algorithm>
 #include <array>
 #include <initializer_list>
@@ -139,6 +140,11 @@ PreflightHeader probe_preflight_header(std::span<const std::uint8_t>d,std::uint6
     if(identify_cpython_pyc_magic(d).known){
         const bool plausible=d.size()>16&&(read(d,4,4)&~std::uint64_t{3})==0&&(d[16]&0x7f)==0x63;
         return hint(Format::PythonBytecode,"CPython bytecode","bytecode_payload",plausible?55:5,plausible?"shared CPython minor-family magic registry plus pyc flags and root-code tag; marshal validation remains pending":"known CPython magic without a plausible complete pyc/code header",plausible?"medium":"low");
+    }
+    const auto v8=parse_v8_code_cache(d,file_size);
+    if(v8.candidate){
+        if(v8.valid)return hint(Format::V8CodeCache,"V8 JavaScript code cache","bytecode_payload",50,"V8 serializer magic and bounded cache-header geometry close over the file","medium");
+        return hint(Format::V8CodeCache,"V8 code-cache candidate","bytecode_candidate",5,"V8 serializer magic is present but the bounded cache-header geometry did not close","low");
     }
     if(starts(d,{0,'a','s','m'}))return hint(Format::Wasm,"WebAssembly","bytecode_module",55,"WebAssembly signature routes full structural validation","high");
     if(d.size()>=8&&starts(d,{'d','e','x','\n'}))return hint(Format::Dex,"DEX","bytecode_module",55,"DEX header prefix routes full validation","high");

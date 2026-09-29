@@ -18,6 +18,7 @@
 #include "prts/mapped_file.hpp"
 #include "prts/lua.hpp"
 #include "prts/wasm.hpp"
+#include "prts/v8_code_cache.hpp"
 #include "prts/jvm.hpp"
 #include "prts/android.hpp"
 #include "prts/apk.hpp"
@@ -1609,6 +1610,8 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
         if(report.pe.valid){report.authenticode=prts::analyze_authenticode(mapped.bytes(),report.pe);if(report.authenticode.present||report.authenticode.state=="FAILED"){report.findings.push_back(prts::authenticode_finding(report.authenticode));if(auto f=prts::authenticode_extension_payload_finding(report.authenticode))report.findings.push_back(std::move(*f));if(report.authenticode.present)materialize_authenticode_extension_payloads(report,opt,mapped.bytes(),extract_bytes_left,extract_files_left);}if(std::any_of(report.pe.exports.begin(),report.pe.exports.end(),[](const auto&e){return !e.forwarder.empty();}))report.findings.push_back(prts::pe_forwarder_finding(report.pe));if(!report.pe.delay_imports.empty()||!report.pe.delay_imports_parse_complete)report.findings.push_back(prts::pe_delay_import_finding(report.pe));}
         if(!report.pe.valid){report.elf=prts::parse_elf(mapped.bytes());if(!report.elf.valid)report.macho=prts::parse_macho(mapped.bytes());}
         report.static_scan=prts::scan_static(mapped.bytes());
+        report.v8_code_cache=prts::parse_v8_code_cache(mapped.bytes());
+        if(report.v8_code_cache.candidate)report.findings.push_back(prts::v8_code_cache_finding(report.v8_code_cache));
         report.unreal=prts::detect_unreal_container(mapped.bytes(),input);
         if(report.unreal.candidate){
             report.findings.push_back(prts::unreal_container_finding(report.unreal));

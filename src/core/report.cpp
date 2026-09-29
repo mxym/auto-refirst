@@ -534,6 +534,14 @@ std::string render_text(const AnalysisReport& r) {
           << "  magic: " << r.python_bytecode.magic.magic_number << " (minor-family authenticated; patch ambiguous)\n"
           << "  header: " << r.python_bytecode.header_kind << " marshal_offset=" << r.python_bytecode.marshal_offset << "\n"
           << "  marshal: objects=" << r.python_bytecode.marshal.object_count << " code_objects=" << r.python_bytecode.marshal.code_object_count << " root_code_bytes=" << r.python_bytecode.root.code.size() << "\n";
+    } else if (r.v8_code_cache.valid) {
+        o << "Format: V8 JavaScript code cache\n"
+          << "  layout: " << r.v8_code_cache.layout << " magic=0x" << std::hex << r.v8_code_cache.magic << std::dec << "\n"
+          << "  source_length: " << r.v8_code_cache.source_length
+          << " module=" << (r.v8_code_cache.source_hash_is_module ? "true" : "false")
+          << " wrapped_arguments=" << (r.v8_code_cache.source_hash_has_wrapped_arguments ? "true" : "false") << "\n"
+          << "  payload: current-file+0x" << std::hex << r.v8_code_cache.payload_offset << std::dec
+          << " size=" << r.v8_code_cache.payload_size << " (serialized payload remains opaque)\n";
     } else {
         o << "Format: unknown (" << r.pe.error << "; " << r.elf.error << "; " << r.macho.error << ")\n";
     }
@@ -1667,10 +1675,42 @@ void render_json_impl(std::ostream& o,const AnalysisReport& r,bool automatic_chi
         if(!r.macho.fat&&!r.macho.slices.empty()){const auto&m=r.macho.slices.front();o<<",\"bits\":"<<(m.macho64?64:32)<<",\"machine\":\""<<esc(macho_cpu_name(m.cpu_type))<<"\",\"type\":\""<<esc(macho_filetype_name(m.filetype))<<"\",\"entry\":"<<m.entry_va;}
     } else if (r.python_bytecode.valid) {
         o << "\"kind\":\"CPython bytecode\",\"container\":\"pyc\",\"version_family\":\""<<esc(r.python_bytecode.magic.version_family)<<"\",\"version_authentication\":\"MAGIC_MINOR_FAMILY_AUTHENTICATED\",\"patch_version_state\":\"AMBIGUOUS_WITHIN_MINOR_FAMILY\",\"magic_number\":"<<r.python_bytecode.magic.magic_number<<",\"header_kind\":\""<<esc(r.python_bytecode.header_kind)<<"\",\"marshal_offset\":"<<r.python_bytecode.marshal_offset<<",\"code_objects\":"<<r.python_bytecode.marshal.code_object_count;
+    } else if (r.v8_code_cache.valid) {
+        o << "\"kind\":\"V8 JavaScript code cache\",\"layout\":\"" << esc(r.v8_code_cache.layout)
+          << "\",\"magic\":" << r.v8_code_cache.magic
+          << ",\"version_hash\":" << r.v8_code_cache.version_hash
+          << ",\"source_hash\":" << r.v8_code_cache.source_hash
+          << ",\"source_length\":" << r.v8_code_cache.source_length
+          << ",\"source_hash_wrapped_arguments\":" << (r.v8_code_cache.source_hash_has_wrapped_arguments ? "true" : "false")
+          << ",\"source_hash_is_module\":" << (r.v8_code_cache.source_hash_is_module ? "true" : "false")
+          << ",\"flag_hash\":" << r.v8_code_cache.flag_hash
+          << ",\"read_only_snapshot_checksum\":" << r.v8_code_cache.read_only_snapshot_checksum
+          << ",\"header_size\":" << r.v8_code_cache.header_size
+          << ",\"payload_offset\":" << r.v8_code_cache.payload_offset
+          << ",\"payload_size\":" << r.v8_code_cache.payload_size
+          << ",\"checksum\":" << r.v8_code_cache.checksum;
     } else {
         o << "\"kind\":\"unknown\"";
     }
     o << "},\n";
+
+    {
+        const auto& v = r.v8_code_cache;
+        o << "  \"v8_code_cache\": {\"candidate\":" << (v.candidate ? "true" : "false")
+          << ",\"valid\":" << (v.valid ? "true" : "false")
+          << ",\"state\":\"" << (v.valid ? "LIKELY" : (v.candidate ? "FAILED" : "ABSENT")) << "\""
+          << ",\"layout\":\"" << esc(v.layout) << "\",\"magic\":" << v.magic
+          << ",\"magic_low16\":" << v.magic_low16 << ",\"version_hash\":" << v.version_hash
+          << ",\"source_hash\":" << v.source_hash << ",\"source_length\":" << v.source_length
+          << ",\"source_hash_wrapped_arguments\":" << (v.source_hash_has_wrapped_arguments ? "true" : "false")
+          << ",\"source_hash_is_module\":" << (v.source_hash_is_module ? "true" : "false")
+          << ",\"flag_hash\":" << v.flag_hash
+          << ",\"read_only_snapshot_checksum\":" << v.read_only_snapshot_checksum
+          << ",\"payload_length\":" << v.payload_length << ",\"checksum\":" << v.checksum
+          << ",\"header_size\":" << v.header_size << ",\"payload_offset\":" << v.payload_offset
+          << ",\"payload_size\":" << v.payload_size << ",\"error_offset\":" << v.error_offset
+          << ",\"error\":\"" << esc(v.error) << "\"},\n";
+    }
 
     o << "  \"sections\": [";
     if (r.pe.valid) {
