@@ -49,6 +49,7 @@
 - 目录预检会对有界 ASAR Pickle/JSON 几何和 JavaScript-like 源码 token 给出低成本路由提示；提示仍由完整解析复核，不能单独提升为执行或生态确认。
 - .NET managed resources：在已验证的 `ManifestResource`/CLR resources 目录上列出嵌入资源的精确文件偏移、总字节数以及外部 `AssemblyRef`/`File`/`ExportedType` 实现关系，帮助先定位内嵌 DLL、配置和二进制 payload；默认静态模式和 `--extract` 都可在各自预算内原样物化嵌入字节并接入子工件图，资源名称不会被当作类型或执行证明，解压、解密和 CLR 资源语义保持静态未决。
 - .NET single-file bundle v2/v6 manifest/member geometry与 Linux NativeAOT section/table evidence；已验证的未压缩 bundle 成员会在默认 AUTO_CORE 或 `--extract` 预算内原样物化并接入子工件图，成员路径、类型和压缩遗漏都会进入报告；v6 Brotli 压缩成员只保留边界与遗漏状态，不伪造解压结果。识别结果不等同于 IL 反混淆或源码恢复。
+- .NET ReadyToRun：验证 CLI `ManagedNativeHeader`、`RTR_HEADER` 导出或唯一映像内 `RTR` 候选，解析版本、flags、严格排序的 section directory 与当前 PE 文件范围；保留 composite/component、embedded MSIL、stripped IL 等交付线索，不反序列化 fixup、反汇编 native 方法或执行镜像。
 - Hermes HBC v89/v96/v98 的 header/table/function/string/opcode/debug/footer 完整性与有界提取，并可由 APK content entry 进入静态子分析；不声明 JavaScript 源码恢复或 runtime loading。
 - CPython `.pyc`、marshal、opcode、扩展模块、Cython/frozen/static/runtime 参考比较；PyInstaller/Nuitka 负责打包层与高价值 Python 子工件。
 - V8 JavaScript code cache：识别 V8 serializer magic、legacy/modern cache header、source-hash 标志和严格 payload 几何，输出当前文件范围与配对源/运行时提示；序列化 payload 保持不透明，不反序列化、不执行，也不把 header 视为源码或版本兼容证明。
