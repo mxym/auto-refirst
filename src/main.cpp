@@ -19,6 +19,7 @@
 #include "prts/lua.hpp"
 #include "prts/wasm.hpp"
 #include "prts/v8_code_cache.hpp"
+#include "prts/readytorun.hpp"
 #include "prts/jvm.hpp"
 #include "prts/android.hpp"
 #include "prts/apk.hpp"
@@ -1739,6 +1740,8 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
         if(report.dotnet_bundle.valid)materialize_dotnet_bundle(report,opt,mapped.bytes(),extract_bytes_left,extract_files_left);
         report.native_aot=prts::detect_native_aot(mapped.bytes(),report.pe,report.elf);
         if(report.native_aot.candidate)report.findings.push_back(prts::native_aot_finding(report.native_aot));
+        report.ready_to_run=prts::detect_ready_to_run(mapped.bytes(),report.pe);
+        if(report.ready_to_run.candidate)report.findings.push_back(prts::ready_to_run_finding(report.ready_to_run));
 
         report.dotnet=prts::detect_dotnet(mapped.bytes(),report.pe,input);
         if(report.dotnet.valid){report.findings.push_back(prts::dotnet_finding(report.dotnet));if(auto dynamic_surface=prts::dotnet_dynamic_surface_finding(report.dotnet))report.findings.push_back(std::move(*dynamic_surface));if(auto resource_loader=prts::dotnet_resource_loader_finding(report.dotnet))report.findings.push_back(std::move(*resource_loader));if(!report.dotnet.resources.empty())report.findings.push_back(prts::dotnet_resources_finding(report.dotnet));}

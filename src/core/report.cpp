@@ -982,6 +982,21 @@ std::string render_text(const AnalysisReport& r) {
         if(n.valid)o << "  evidence: __modules + __managedcode + .dotnet_eh_table + .hydrated; raw_RTR=" << n.raw_rtr_magic_count << " valid_headers=" << n.valid_rtr_header_count << "\n";
         if(!n.error.empty())o << "  note: " << n.error << "\n";
     }
+    if (r.ready_to_run.candidate) {
+        const auto& n = r.ready_to_run;
+        o << ".NET ReadyToRun:\n"
+          << "  state: " << n.state << " source=" << n.source << " version=" << n.major_version << '.' << n.minor_version
+          << " sections=" << n.section_count << " flags=0x" << std::hex << n.flags << std::dec << "\n"
+          << "  header: RVA 0x" << std::hex << n.header_rva << std::dec << " file+0x" << n.header_offset
+          << " size=" << n.header_size << " runtime_functions=" << n.runtime_function_section_count
+          << " method_entrypoints=" << n.method_entrypoint_section_count << " imports=" << n.import_section_count << "\n";
+        if (n.composite || n.component || n.embedded_msil || n.stripped_il_bodies)
+            o << "  profile: composite=" << (n.composite ? "true" : "false")
+              << " component=" << (n.component ? "true" : "false")
+              << " embedded_msil=" << (n.embedded_msil ? "true" : "false")
+              << " stripped_il_bodies=" << (n.stripped_il_bodies ? "true" : "false") << "\n";
+        if (!n.error.empty()) o << "  note: " << n.error << "\n";
+    }
 
     if (r.pe.clr.present) {
         o << ".NET metadata:\n"
@@ -1622,6 +1637,23 @@ void render_dotnet_native_json(std::ostream&o,const AnalysisReport&r,bool compac
      <<",\"native_section_id_count\":"<<n.native_section_id_count<<",\"has_managed_code_section\":"<<(n.has_managed_code_section?"true":"false")
      <<",\"has_dotnet_eh_table\":"<<(n.has_dotnet_eh_table?"true":"false")<<",\"has_hydrated_section\":"<<(n.has_hydrated_section?"true":"false")<<",\"sections_total\":"<<n.sections.size()<<",\"sections_rendered\":"<<std::min<std::size_t>(n.sections.size(),compact?64:512)<<",\"sections_omitted\":"<<(n.sections.size()-std::min<std::size_t>(n.sections.size(),compact?64:512))<<",\"sections_truncated\":"<<(n.sections.size()>(compact?64:512)?"true":"false")<<",\"sections\":[";
     for(std::size_t x=0;x<n.sections.size()&&x<(compact?64:512);++x){if(x)o<<',';const auto&e=n.sections[x];o<<"{\"id\":"<<e.id<<",\"flags\":"<<e.flags<<",\"start_va\":"<<e.start_va<<",\"end_va\":"<<e.end_va<<"}";}
+    o<<"]},\n";
+    const auto&rr=r.ready_to_run;
+    o<<"  \"ready_to_run\": {\"candidate\":"<<(rr.candidate?"true":"false")<<",\"valid\":"<<(rr.valid?"true":"false")
+     <<",\"state\":\""<<esc(rr.state)<<"\",\"source\":\""<<esc(rr.source)<<"\",\"error\":\""<<esc(rr.error)
+     <<"\",\"header_offset\":"<<rr.header_offset<<",\"header_rva\":"<<rr.header_rva<<",\"header_size\":"<<rr.header_size
+     <<",\"managed_native_rva\":"<<rr.managed_native_rva<<",\"managed_native_size\":"<<rr.managed_native_size
+     <<",\"major_version\":"<<rr.major_version<<",\"minor_version\":"<<rr.minor_version<<",\"flags\":"<<rr.flags
+     <<",\"unknown_flags\":"<<rr.unknown_flags<<",\"section_count\":"<<rr.section_count
+     <<",\"composite\":"<<(rr.composite?"true":"false")<<",\"component\":"<<(rr.component?"true":"false")
+     <<",\"partial\":"<<(rr.partial?"true":"false")<<",\"embedded_msil\":"<<(rr.embedded_msil?"true":"false")
+     <<",\"platform_native_image\":"<<(rr.platform_native_image?"true":"false")<<",\"stripped_il_bodies\":"<<(rr.stripped_il_bodies?"true":"false")
+     <<",\"stripped_inlining_info\":"<<(rr.stripped_inlining_info?"true":"false")<<",\"stripped_debug_info\":"<<(rr.stripped_debug_info?"true":"false")
+     <<",\"import_section_count\":"<<rr.import_section_count<<",\"runtime_function_section_count\":"<<rr.runtime_function_section_count
+     <<",\"method_entrypoint_section_count\":"<<rr.method_entrypoint_section_count<<",\"exception_section_count\":"<<rr.exception_section_count
+     <<",\"sections_total\":"<<rr.sections.size()<<",\"sections_rendered\":"<<std::min<std::size_t>(rr.sections.size(),compact?64:512)
+     <<",\"sections_omitted\":"<<(rr.sections.size()-std::min<std::size_t>(rr.sections.size(),compact?64:512))<<",\"sections_truncated\":"<<(rr.sections.size()>(compact?64:512)?"true":"false")<<",\"sections\":[";
+    for(std::size_t x=0;x<rr.sections.size()&&x<(compact?64:512);++x){if(x)o<<',';const auto&e=rr.sections[x];o<<"{\"type\":"<<e.type<<",\"type_name\":\""<<esc(e.type_name)<<"\",\"rva\":"<<e.rva<<",\"size\":"<<e.size<<",\"file_offset\":"<<e.file_offset<<",\"offset_space\":\"current_input_file\"}";}
     o<<"]},\n";
 }
 
