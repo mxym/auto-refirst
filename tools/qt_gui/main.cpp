@@ -19,6 +19,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontDatabase>
+#include <QFrame>
 #include <QGroupBox>
 #include <QHash>
 #include <QHBoxLayout>
@@ -38,6 +39,7 @@
 #include <QRegularExpression>
 #include <QScrollBar>
 #include <QSpinBox>
+#include <QStackedWidget>
 #include <QSplitter>
 #include <QStandardPaths>
 #include <QTabWidget>
@@ -69,6 +71,9 @@ struct QueueItem {
     QString report_path;
     QString detail;
     QJsonObject report;
+    int findings = 0;
+    int confirmed = 0;
+    int review = 0;
 };
 
 QStringList uniqueStrings(const QStringList& values) {
@@ -111,6 +116,7 @@ public:
         m_exit_after_analysis = qgetenv("AUTO_REFIRST_GUI_EXIT_AFTER_ANALYSIS") == QByteArrayLiteral("1");
         m_english = m_language->currentIndex() == 1;
         applyLanguage();
+        if (qgetenv("AUTO_REFIRST_GUI_PAGE").toLower() == QByteArrayLiteral("settings")) showPage(1);
         setStatus(m_english ? QStringLiteral("Drop files or folders to start; static preparation is the default.") : QStringLiteral("拖放文件或目录开始；默认只做静态预处理。"));
     }
 
@@ -191,7 +197,49 @@ private:
         header->addWidget(m_cancel);
         root->addLayout(header);
 
-        auto* splitter = new QSplitter(Qt::Horizontal, central);
+        auto* body = new QHBoxLayout();
+        body->setSpacing(14);
+
+        auto* navigation = new QFrame(central);
+        navigation->setObjectName(QStringLiteral("navigation"));
+        navigation->setMinimumWidth(154);
+        navigation->setMaximumWidth(190);
+        auto* navigation_layout = new QVBoxLayout(navigation);
+        navigation_layout->setContentsMargins(10, 14, 10, 14);
+        navigation_layout->setSpacing(6);
+        auto* navigation_title = new QLabel(QStringLiteral("WORKBENCH"));
+        navigation_title->setObjectName(QStringLiteral("navigationTitle"));
+        navigation_layout->addWidget(navigation_title);
+        m_nav_workspace = new QPushButton(QStringLiteral("Workspace"));
+        m_nav_workspace->setObjectName(QStringLiteral("navButton"));
+        m_nav_workspace->setCheckable(true);
+        m_nav_settings = new QPushButton(QStringLiteral("Settings"));
+        m_nav_settings->setObjectName(QStringLiteral("navButton"));
+        m_nav_settings->setCheckable(true);
+        navigation_layout->addWidget(m_nav_workspace);
+        navigation_layout->addWidget(m_nav_settings);
+        navigation_layout->addStretch(1);
+        m_nav_hint = new QLabel(QStringLiteral("Drop a file or folder to start."));
+        m_nav_hint->setObjectName(QStringLiteral("navigationHint"));
+        m_nav_hint->setWordWrap(true);
+        navigation_layout->addWidget(m_nav_hint);
+
+        m_pages = new QStackedWidget(central);
+        m_workspace_page = new QWidget(m_pages);
+        auto* workspace_layout = new QVBoxLayout(m_workspace_page);
+        workspace_layout->setContentsMargins(0, 0, 0, 0);
+        workspace_layout->setSpacing(0);
+        m_settings_page = new QWidget(m_pages);
+        auto* settings_page_layout = new QVBoxLayout(m_settings_page);
+        settings_page_layout->setContentsMargins(0, 0, 0, 0);
+        settings_page_layout->setSpacing(0);
+        m_pages->addWidget(m_workspace_page);
+        m_pages->addWidget(m_settings_page);
+        body->addWidget(navigation);
+        body->addWidget(m_pages, 1);
+        root->addLayout(body, 1);
+
+        auto* splitter = new QSplitter(Qt::Horizontal, m_workspace_page);
         splitter->setChildrenCollapsible(false);
 
         auto* queue_box = new QGroupBox(QStringLiteral("样本队列  ·  拖放文件/目录到这里"));
@@ -226,6 +274,18 @@ private:
         m_summary->setObjectName(QStringLiteral("summary"));
         m_summary->setWordWrap(true);
         detail_layout->addWidget(m_summary);
+        auto* metrics = new QHBoxLayout();
+        metrics->setSpacing(7);
+        m_metric_findings = new QLabel(QStringLiteral("—\nFINDINGS"));
+        m_metric_confirmed = new QLabel(QStringLiteral("—\nCONFIRMED"));
+        m_metric_review = new QLabel(QStringLiteral("—\nREVIEW"));
+        for (auto* metric : {m_metric_findings, m_metric_confirmed, m_metric_review}) {
+            metric->setObjectName(QStringLiteral("metric"));
+            metric->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+            metric->setMinimumHeight(42);
+            metrics->addWidget(metric, 1);
+        }
+        detail_layout->addLayout(metrics);
         m_filter_edit = new QLineEdit();
         m_filter_edit->setPlaceholderText(QStringLiteral("筛选发现 / Filter findings"));
         detail_layout->addWidget(m_filter_edit);
@@ -246,9 +306,9 @@ private:
         splitter->addWidget(detail_box);
         splitter->setStretchFactor(0, 3);
         splitter->setStretchFactor(1, 2);
-        root->addWidget(splitter, 1);
+        workspace_layout->addWidget(splitter, 1);
 
-        auto* settings = new QGroupBox(QStringLiteral("分析设置"));
+        auto* settings = new QGroupBox(QStringLiteral("分析设置"), m_settings_page);
         m_settings = settings;
         auto* settings_layout = new QVBoxLayout(settings);
         settings_layout->setContentsMargins(10, 12, 10, 8);
@@ -377,7 +437,7 @@ private:
         advanced_layout->setColumnStretch(5, 1);
         m_settings_tabs->addTab(advanced_page, QStringLiteral("高级"));
         settings_layout->addWidget(m_settings_tabs);
-        root->addWidget(settings);
+        settings_page_layout->addWidget(settings, 1);
 
         auto* footer = new QHBoxLayout();
         m_progress = new QProgressBar();
@@ -396,11 +456,18 @@ private:
         setCentralWidget(central);
         setStyleSheet(QStringLiteral(
             "QMainWindow { background:#0b1220; color:#e5e7eb; }"
+            "QFrame#navigation { background:#0f192b; border:1px solid #253b5a; border-radius:10px; }"
+            "QLabel#navigationTitle { color:#6f86a8; font-size:10px; font-weight:700; letter-spacing:1px; padding:2px 6px 8px; }"
+            "QLabel#navigationHint { color:#6f86a8; font-size:11px; padding:6px; }"
+            "QPushButton#navButton { background:transparent; border:1px solid transparent; color:#9db0cc; text-align:left; padding:10px 11px; border-radius:6px; font-weight:600; }"
+            "QPushButton#navButton:hover { background:#172943; color:#dce8f7; }"
+            "QPushButton#navButton:checked { background:#1d4777; border-color:#2e6caf; color:#ffffff; }"
             "QGroupBox { border:1px solid #25324a; border-radius:10px; margin-top:8px; padding-top:10px; color:#a9b8d0; font-weight:600; }"
             "QGroupBox::title { subcontrol-origin:margin; left:12px; padding:0 6px; background:#0b1220; }"
             "QLabel#title { color:#f8fafc; font-size:27px; font-weight:700; }"
             "QLabel#subtitle, QLabel#hint { color:#8091ad; }"
             "QLabel#summary { color:#dbeafe; padding:4px; font-size:14px; }"
+            "QLabel#metric { background:#101f35; border:1px solid #294568; border-radius:7px; color:#cfe2ff; padding:6px 9px; font-size:11px; font-weight:600; }"
             "QLabel#safety { color:#f0b35b; font-size:11px; }"
             "QLabel#status { color:#8fa4c2; }"
             "QPushButton { background:#18243a; color:#dbeafe; border:1px solid #324666; border-radius:6px; padding:7px 12px; }"
@@ -423,6 +490,8 @@ private:
         m_timeout_timer = new QTimer(this);
         m_timeout_timer->setSingleShot(true);
 
+        connect(m_nav_workspace, &QPushButton::clicked, this, [this] { showPage(0); });
+        connect(m_nav_settings, &QPushButton::clicked, this, [this] { showPage(1); });
         connect(m_add_file, &QPushButton::clicked, this, [this] { addFiles(); });
         connect(m_add_dir, &QPushButton::clicked, this, [this] { addDirectory(); });
         connect(m_clear, &QPushButton::clicked, this, [this] { clearQueue(); });
@@ -471,7 +540,16 @@ private:
         connect(m_process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
                 [this](int code, QProcess::ExitStatus status) { processFinished(code, status); });
         connect(m_timeout_timer, &QTimer::timeout, this, [this] { processTimedOut(); });
+        showPage(0);
         updateAdvancedState();
+    }
+
+    void showPage(int index) {
+        if (!m_pages) return;
+        const int bounded = std::clamp(index, 0, m_pages->count() - 1);
+        m_pages->setCurrentIndex(bounded);
+        m_nav_workspace->setChecked(bounded == 0);
+        m_nav_settings->setChecked(bounded == 1);
     }
 
     void detectCli() {
@@ -498,6 +576,9 @@ private:
         m_title->setText(QStringLiteral("auto-refirst"));
         setWindowTitle(m_english ? QStringLiteral("auto-refirst  ·  Evidence workspace") : QStringLiteral("auto-refirst  ·  证据工作台"));
         m_subtitle->setText(m_english ? QStringLiteral("Static preparation workspace for unusual programs") : QStringLiteral("异常程序预处理工作台"));
+        m_nav_workspace->setText(m_english ? QStringLiteral("Workspace") : QStringLiteral("工作台"));
+        m_nav_settings->setText(m_english ? QStringLiteral("Settings") : QStringLiteral("设置"));
+        m_nav_hint->setText(m_english ? QStringLiteral("Drop a file or folder to start.") : QStringLiteral("拖放文件或目录开始分析。"));
         m_queue_box->setTitle(m_english ? QStringLiteral("Samples  ·  drop files or folders here") : QStringLiteral("样本队列  ·  拖放文件或目录到这里"));
         m_detail_box->setTitle(m_english ? QStringLiteral("Report") : QStringLiteral("报告"));
         m_settings->setTitle(m_english ? QStringLiteral("Analysis settings") : QStringLiteral("分析设置"));
@@ -549,6 +630,7 @@ private:
         m_choose_artifact_root->setText(m_english ? QStringLiteral("Browse…") : QStringLiteral("选择…"));
         m_queue_hint->setText(m_english ? QStringLiteral("Dropped items start automatically. Double-click a finished row to open its JSON report.") : QStringLiteral("拖放后会自动开始。双击已完成项打开 JSON 报告。"));
         m_filter_edit->setPlaceholderText(m_english ? QStringLiteral("Filter findings…") : QStringLiteral("筛选发现…"));
+        updateMetricCards();
         if (m_queue_table->currentRow() < 0) m_summary->setText(m_english ? QStringLiteral("Select a row to view its summary") : QStringLiteral("选择一行查看摘要"));
         if (m_items.isEmpty()) m_progress->setFormat(m_english ? QStringLiteral("Waiting for samples") : QStringLiteral("等待样本"));
         m_queue_table->setHorizontalHeaderLabels(m_english
@@ -558,7 +640,8 @@ private:
         for (int row = 0; row < m_items.size(); ++row) {
             const QString state = m_items[row].state;
             if (!m_items[row].report.isEmpty()) {
-                renderSummary(m_items[row].report, m_items[row].format, m_items[row].evidence, m_items[row].detail);
+                renderSummary(m_items[row].report, m_items[row].format, m_items[row].evidence, m_items[row].detail,
+                              m_items[row].findings, m_items[row].confirmed, m_items[row].review);
                 setCell(row, 2, m_items[row].format);
                 setCell(row, 3, m_items[row].evidence);
             }
@@ -626,6 +709,7 @@ private:
         m_items.clear();
         m_queue_table->setRowCount(0);
         m_detail->clear();
+        resetMetricCards();
         m_summary->setText(m_english ? QStringLiteral("Select a row to view its summary") : QStringLiteral("选择一行查看摘要"));
         m_open_report->setEnabled(false);
         m_open_output->setEnabled(false);
@@ -692,6 +776,9 @@ private:
             m_items[i].detail.clear();
             m_items[i].report_path.clear();
             m_items[i].report = {};
+            m_items[i].findings = 0;
+            m_items[i].confirmed = 0;
+            m_items[i].review = 0;
         }
         m_progress->setRange(0, m_items.size());
         m_progress->setValue(0);
@@ -939,7 +1026,8 @@ private:
                     m_items[row].report = object;
                     m_items[row].report_path = report_path;
                     m_items[row].state = QStringLiteral("Done");
-                    renderSummary(object, m_items[row].format, m_items[row].evidence, m_items[row].detail);
+                    renderSummary(object, m_items[row].format, m_items[row].evidence, m_items[row].detail,
+                                  m_items[row].findings, m_items[row].confirmed, m_items[row].review);
                     setCell(row, 1, m_items[row].evidence.contains(QStringLiteral("partial"), Qt::CaseInsensitive)
                         ? (m_english ? QStringLiteral("Complete · partial") : QStringLiteral("完成 · 部分"))
                         : (m_english ? QStringLiteral("Complete") : QStringLiteral("完成")));
@@ -1147,7 +1235,21 @@ private:
         return raw;
     }
 
-    void renderSummary(const QJsonObject& root, QString& format, QString& evidence, QString& detail) const {
+    void updateMetricCards() {
+        if (m_metric_findings) m_metric_findings->setText(QStringLiteral("%1\n%2").arg(m_metricFindingsValue).arg(m_english ? QStringLiteral("FINDINGS") : QStringLiteral("发现")));
+        if (m_metric_confirmed) m_metric_confirmed->setText(QStringLiteral("%1\n%2").arg(m_metricConfirmedValue).arg(m_english ? QStringLiteral("CONFIRMED") : QStringLiteral("已确认")));
+        if (m_metric_review) m_metric_review->setText(QStringLiteral("%1\n%2").arg(m_metricReviewValue).arg(m_english ? QStringLiteral("REVIEW") : QStringLiteral("待复核")));
+    }
+
+    void resetMetricCards() {
+        m_metricFindingsValue = QStringLiteral("—");
+        m_metricConfirmedValue = QStringLiteral("—");
+        m_metricReviewValue = QStringLiteral("—");
+        updateMetricCards();
+    }
+
+    void renderSummary(const QJsonObject& root, QString& format, QString& evidence, QString& detail,
+                       int& findings_out, int& confirmed_out, int& review_out) {
         QJsonArray reports;
         if (root.value(QStringLiteral("reports")).isArray()) reports = root.value(QStringLiteral("reports")).toArray();
         else reports.push_back(root);
@@ -1210,6 +1312,9 @@ private:
             ? QStringLiteral("%1 findings  ·  %2 confirmed  ·  %3 to review").arg(findings).arg(confirmed).arg(review)
             : QStringLiteral("%1 项发现  ·  %2 项已确认  ·  %3 项待复核").arg(findings).arg(confirmed).arg(review);
         if (partial) evidence += m_english ? QStringLiteral("  ·  limited") : QStringLiteral("  ·  部分输出");
+        findings_out = findings;
+        confirmed_out = confirmed;
+        review_out = review;
         const QString input_label = directory.isEmpty() ? root.value(QStringLiteral("input")).toString() : directory.value(QStringLiteral("root")).toString();
         detail = (m_english ? QStringLiteral("INPUT\n%1\n\nFORMAT\n%2\n\nSUMMARY\n%3\n\n") : QStringLiteral("输入\n%1\n\n格式\n%2\n\n摘要\n%3\n\n")).arg(input_label, format, evidence);
         if (!next_steps.isEmpty()) {
@@ -1241,6 +1346,7 @@ private:
         if (row < 0 || row >= m_items.size()) return;
         const auto& item = m_items[row];
         if (item.report.isEmpty()) {
+            resetMetricCards();
             QString state = item.state;
             if (item.state == QStringLiteral("Queued")) state = m_english ? QStringLiteral("Queued") : QStringLiteral("等待");
             else if (item.state == QStringLiteral("Running")) state = m_english ? QStringLiteral("Analyzing…") : QStringLiteral("分析中…");
@@ -1249,6 +1355,10 @@ private:
             m_summary->setText(QStringLiteral("%1  ·  %2").arg(shortPath(item.path), state));
             m_detail->setPlainText(item.detail.isEmpty() ? (m_english ? QStringLiteral("Waiting for analysis…") : QStringLiteral("等待分析结果…")) : item.detail);
         } else {
+            m_metricFindingsValue = QString::number(item.findings);
+            m_metricConfirmedValue = QString::number(item.confirmed);
+            m_metricReviewValue = QString::number(item.review);
+            updateMetricCards();
             QString next = item.detail.section(m_english ? QStringLiteral("NEXT STEPS\n") : QStringLiteral("下一步\n"), 1, 1).section(QLatin1Char('\n'), 0, 0).trimmed();
             QString headline = QStringLiteral("%1  ·  %2  ·  %3").arg(shortPath(item.path), item.format, item.evidence);
             if (!next.isEmpty()) headline += m_english ? QStringLiteral("  ·  Next: %1").arg(next) : QStringLiteral("  ·  下一步：%1").arg(next);
@@ -1318,6 +1428,12 @@ private:
     QGroupBox* m_detail_box = nullptr;
     QGroupBox* m_settings = nullptr;
     QTabWidget* m_settings_tabs = nullptr;
+    QStackedWidget* m_pages = nullptr;
+    QWidget* m_workspace_page = nullptr;
+    QWidget* m_settings_page = nullptr;
+    QPushButton* m_nav_workspace = nullptr;
+    QPushButton* m_nav_settings = nullptr;
+    QLabel* m_nav_hint = nullptr;
     QLabel* m_title = nullptr;
     QLabel* m_subtitle = nullptr;
     QLabel* m_queue_hint = nullptr;
@@ -1337,6 +1453,9 @@ private:
     QTextEdit* m_detail = nullptr;
     QLineEdit* m_filter_edit = nullptr;
     QLabel* m_summary = nullptr;
+    QLabel* m_metric_findings = nullptr;
+    QLabel* m_metric_confirmed = nullptr;
+    QLabel* m_metric_review = nullptr;
     QLabel* m_status = nullptr;
     QProgressBar* m_progress = nullptr;
     QString m_cli_path;
@@ -1386,6 +1505,9 @@ private:
     bool m_exit_after_analysis = false;
     bool m_automation_scheduled = false;
     bool m_english = false;
+    QString m_metricFindingsValue = QStringLiteral("—");
+    QString m_metricConfirmedValue = QStringLiteral("—");
+    QString m_metricReviewValue = QStringLiteral("—");
 };
 
 } // namespace
