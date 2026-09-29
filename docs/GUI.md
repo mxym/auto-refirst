@@ -34,6 +34,14 @@ path picker in the product UI. Normal analysis invokes the CLI once per queue it
 auto-refirst <file-or-directory> --json --json-envelope --json-errors
 ```
 
+The window is organized as a small workbench: **Workspace** keeps the sample
+queue beside the readable report, while **Settings** gives the analysis
+options a full page instead of competing with the results. The workspace
+report starts with compact finding, confirmed, and review counts, then keeps
+the filtered evidence and next steps below them. The left navigation remains
+available while the queue runs, and switching Chinese/English updates both
+pages without restarting the application.
+
 Search mode replaces `--json-envelope` with `--search=TEXT` because the CLI
 returns JSON Lines; the GUI wraps those hits into the same report view.
 
