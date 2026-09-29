@@ -71,6 +71,9 @@ struct QueueItem {
     QString report_path;
     QString detail;
     QJsonObject report;
+    int findings = 0;
+    int confirmed = 0;
+    int review = 0;
 };
 
 QStringList uniqueStrings(const QStringList& values) {
@@ -637,7 +640,8 @@ private:
         for (int row = 0; row < m_items.size(); ++row) {
             const QString state = m_items[row].state;
             if (!m_items[row].report.isEmpty()) {
-                renderSummary(m_items[row].report, m_items[row].format, m_items[row].evidence, m_items[row].detail);
+                renderSummary(m_items[row].report, m_items[row].format, m_items[row].evidence, m_items[row].detail,
+                              m_items[row].findings, m_items[row].confirmed, m_items[row].review);
                 setCell(row, 2, m_items[row].format);
                 setCell(row, 3, m_items[row].evidence);
             }
@@ -772,6 +776,9 @@ private:
             m_items[i].detail.clear();
             m_items[i].report_path.clear();
             m_items[i].report = {};
+            m_items[i].findings = 0;
+            m_items[i].confirmed = 0;
+            m_items[i].review = 0;
         }
         m_progress->setRange(0, m_items.size());
         m_progress->setValue(0);
@@ -1019,7 +1026,8 @@ private:
                     m_items[row].report = object;
                     m_items[row].report_path = report_path;
                     m_items[row].state = QStringLiteral("Done");
-                    renderSummary(object, m_items[row].format, m_items[row].evidence, m_items[row].detail);
+                    renderSummary(object, m_items[row].format, m_items[row].evidence, m_items[row].detail,
+                                  m_items[row].findings, m_items[row].confirmed, m_items[row].review);
                     setCell(row, 1, m_items[row].evidence.contains(QStringLiteral("partial"), Qt::CaseInsensitive)
                         ? (m_english ? QStringLiteral("Complete · partial") : QStringLiteral("完成 · 部分"))
                         : (m_english ? QStringLiteral("Complete") : QStringLiteral("完成")));
@@ -1240,7 +1248,8 @@ private:
         updateMetricCards();
     }
 
-    void renderSummary(const QJsonObject& root, QString& format, QString& evidence, QString& detail) {
+    void renderSummary(const QJsonObject& root, QString& format, QString& evidence, QString& detail,
+                       int& findings_out, int& confirmed_out, int& review_out) {
         QJsonArray reports;
         if (root.value(QStringLiteral("reports")).isArray()) reports = root.value(QStringLiteral("reports")).toArray();
         else reports.push_back(root);
@@ -1303,10 +1312,9 @@ private:
             ? QStringLiteral("%1 findings  ·  %2 confirmed  ·  %3 to review").arg(findings).arg(confirmed).arg(review)
             : QStringLiteral("%1 项发现  ·  %2 项已确认  ·  %3 项待复核").arg(findings).arg(confirmed).arg(review);
         if (partial) evidence += m_english ? QStringLiteral("  ·  limited") : QStringLiteral("  ·  部分输出");
-        m_metricFindingsValue = QString::number(findings);
-        m_metricConfirmedValue = QString::number(confirmed);
-        m_metricReviewValue = QString::number(review);
-        updateMetricCards();
+        findings_out = findings;
+        confirmed_out = confirmed;
+        review_out = review;
         const QString input_label = directory.isEmpty() ? root.value(QStringLiteral("input")).toString() : directory.value(QStringLiteral("root")).toString();
         detail = (m_english ? QStringLiteral("INPUT\n%1\n\nFORMAT\n%2\n\nSUMMARY\n%3\n\n") : QStringLiteral("输入\n%1\n\n格式\n%2\n\n摘要\n%3\n\n")).arg(input_label, format, evidence);
         if (!next_steps.isEmpty()) {
@@ -1347,6 +1355,10 @@ private:
             m_summary->setText(QStringLiteral("%1  ·  %2").arg(shortPath(item.path), state));
             m_detail->setPlainText(item.detail.isEmpty() ? (m_english ? QStringLiteral("Waiting for analysis…") : QStringLiteral("等待分析结果…")) : item.detail);
         } else {
+            m_metricFindingsValue = QString::number(item.findings);
+            m_metricConfirmedValue = QString::number(item.confirmed);
+            m_metricReviewValue = QString::number(item.review);
+            updateMetricCards();
             QString next = item.detail.section(m_english ? QStringLiteral("NEXT STEPS\n") : QStringLiteral("下一步\n"), 1, 1).section(QLatin1Char('\n'), 0, 0).trimmed();
             QString headline = QStringLiteral("%1  ·  %2  ·  %3").arg(shortPath(item.path), item.format, item.evidence);
             if (!next.isEmpty()) headline += m_english ? QStringLiteral("  ·  Next: %1").arg(next) : QStringLiteral("  ·  下一步：%1").arg(next);
