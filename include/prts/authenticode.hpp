@@ -34,6 +34,19 @@ struct AuthenticodeExtensionPayload {
     bool inner_der=false;
     std::uint64_t payload_offset=0;
 };
+// A bounded structural view of a repeated DER SEQUENCE { INTEGER, OCTET STRING }
+// table found inside a private-enterprise extension payload.  Module bytes are
+// deliberately not interpreted, decrypted, or executed.
+struct AuthenticodeModuleRecord {
+    std::uint64_t file_offset=0,encoded_size=0,payload_offset=0,payload_size=0,module_id=0;
+};
+struct AuthenticodeModuleManifest {
+    std::uint64_t file_offset=0,encoded_size=0,payload_offset=0,payload_size=0;
+    std::string oid,state,error;
+    std::uint32_t declared_record_count=0,record_count=0;
+    bool candidate=false,valid=false,partial=false,duplicate_ids=false,sorted_ids=false;
+    std::vector<AuthenticodeModuleRecord> records;
+};
 struct AuthenticodeExtensionPayloadExtractResult {
     bool success=false,core_only=false,budget_exhausted=false;
     std::filesystem::path output_dir;
@@ -62,6 +75,7 @@ struct AuthenticodeSignatureInfo {
     std::vector<AuthenticodeCertificateInfo> certificates;
     std::vector<AuthenticodeSignerInfo> signers;
     std::vector<AuthenticodeExtensionPayload> extension_payloads;
+    std::vector<AuthenticodeModuleManifest> module_manifests;
     std::vector<AuthenticodePageHashEntry> page_hashes;
     std::string signer_metadata_state,signer_metadata_error;
     std::string page_hash_algorithm,page_hash_state,page_hash_error;
@@ -79,5 +93,6 @@ struct AuthenticodeInfo {
 AuthenticodeInfo analyze_authenticode(std::span<const std::uint8_t> data,const PeInfo& pe);
 Finding authenticode_finding(const AuthenticodeInfo& info);
 std::optional<Finding> authenticode_extension_payload_finding(const AuthenticodeInfo& info);
+std::optional<Finding> authenticode_module_manifest_finding(const AuthenticodeInfo& info);
 AuthenticodeExtensionPayloadExtractResult extract_authenticode_extension_payloads(std::span<const std::uint8_t> data,const AuthenticodeInfo& info,const std::filesystem::path& output_dir,bool core_only=false,std::uint64_t max_output_bytes=64ull*1024*1024,std::uint32_t max_output_files=256);
 }

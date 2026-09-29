@@ -11,6 +11,7 @@
 #include <optional>
 #include <sstream>
 #include <tuple>
+#include <unordered_set>
 #include <vector>
 
 namespace prts { namespace {
@@ -78,6 +79,37 @@ void scan_private_extension_payloads(std::span<const std::uint8_t>blob,std::opti
     if(!base||blob.empty())return;
     const auto bounded=blob.first(std::min(blob.size(),kScanBytes));std::size_t p=0,budget=kMaxNodes;
     while(p<bounded.size()&&budget){const auto before=p;Der root{};if(!der_one(bounded,p,root))break;collect_extension_payloads(bounded,root,*base,out,budget,0);if(p<=before)break;}
+}
+std::optional<AuthenticodeModuleManifest> parse_module_manifest(std::span<const std::uint8_t>file,const AuthenticodeExtensionPayload&payload){
+    constexpr std::size_t kMaxBytes=16u*1024u*1024u,kMaxRecords=4096;
+    if(payload.payload_offset>file.size()||payload.payload_size>static_cast<std::uint64_t>(file.size())-payload.payload_offset||payload.payload_size>kMaxBytes)return std::nullopt;
+    const auto bytes=file.subspan(static_cast<std::size_t>(payload.payload_offset),static_cast<std::size_t>(payload.payload_size));
+    std::size_t p=0;Der root{};if(!der_one(bytes,p,root)||root.tag!=0x30||p!=bytes.size())return std::nullopt;
+    AuthenticodeModuleManifest out;out.file_offset=payload.file_offset;out.encoded_size=payload.encoded_size;out.payload_offset=payload.payload_offset;out.payload_size=payload.payload_size;out.oid=payload.oid;
+    std::size_t cursor=root.content;std::unordered_set<std::uint64_t> ids;ids.reserve(64);std::uint64_t previous=0;bool have_previous=false;
+    while(cursor<root.end){
+        if(out.declared_record_count>=kMaxRecords){out.partial=true;out.error="DER module record count exceeds the 4096-record safety limit";break;}
+        Der record{};if(!der_one(bytes,cursor,record)){out.partial=true;out.error="DER module record sequence is truncated";break;}
+        ++out.declared_record_count;bool ok=false;auto fields=children(bytes,record,ok);
+        if(!ok||fields.size()!=2||fields[0].tag!=0x02||fields[1].tag!=0x04){out.partial=true;out.error="module record is not exactly SEQUENCE(INTEGER,OCTET STRING)";break;}
+        const auto integer=bytes.subspan(fields[0].content,fields[0].length);if(integer.empty()||integer.size()>9||(integer.front()&0x80u)){out.partial=true;out.error="module record ID is not a bounded non-negative INTEGER";break;}
+        std::size_t first=0;while(first+1<integer.size()&&integer[first]==0)++first;if(integer.size()-first>8){out.partial=true;out.error="module record ID exceeds 64-bit range";break;}
+        std::uint64_t id=0;for(std::size_t i=first;i<integer.size();++i)id=(id<<8)|integer[i];if(fields[1].length==0){out.partial=true;out.error="module record payload is empty";break;}
+        if(payload.payload_offset>std::numeric_limits<std::uint64_t>::max()-record.begin||payload.payload_offset>std::numeric_limits<std::uint64_t>::max()-fields[1].content){out.partial=true;out.error="module record file offset overflows";break;}
+        AuthenticodeModuleRecord item;item.file_offset=payload.payload_offset+record.begin;item.encoded_size=record.end-record.begin;item.payload_offset=payload.payload_offset+fields[1].content;item.payload_size=fields[1].length;item.module_id=id;out.records.push_back(item);
+        if(!ids.insert(id).second)out.duplicate_ids=true;
+        if(have_previous&&id<previous)out.sorted_ids=false;
+        previous=id;have_previous=true;
+    }
+    out.record_count=static_cast<std::uint32_t>(out.records.size());out.candidate=out.record_count>0;out.sorted_ids=out.record_count>0;
+    for(std::size_t i=1;i<out.records.size();++i)if(out.records[i].module_id<out.records[i-1].module_id){out.sorted_ids=false;break;}
+    out.valid=!out.partial&&out.record_count>=4&&out.declared_record_count==out.record_count;
+    out.state=out.valid?"CONFIRMED":(out.partial?"PARTIAL":"CANDIDATE");
+    if(!out.candidate)return std::nullopt;
+    return out;
+}
+void collect_module_manifests(std::span<const std::uint8_t>file,const std::vector<AuthenticodeExtensionPayload>&payloads,std::vector<AuthenticodeModuleManifest>&out){
+    constexpr std::size_t kMaxManifests=32;for(const auto&payload:payloads){if(out.size()>=kMaxManifests)break;if(auto manifest=parse_module_manifest(file,payload))out.push_back(std::move(*manifest));}
 }
 std::string asn1_string(std::span<const std::uint8_t>d,const Der&n){
     if(n.content+n.length>d.size())return{};
@@ -230,6 +262,7 @@ void verify_page_hashes(std::span<const std::uint8_t>d,const PeInfo&pe,const PeH
 void parse_pkcs7_signature(std::span<const std::uint8_t>file,const PeInfo&pe,const PeHashLayout&layout,std::span<const std::uint8_t>blob,std::optional<std::uint64_t>blob_offset,AuthenticodeSignatureInfo&out){
     out.pkcs7=true;std::string alg,err;std::vector<std::uint8_t>dig;std::uint32_t signer_count=0;EmbeddedPageHashes page_hashes;
     scan_private_extension_payloads(blob,blob_offset,out.extension_payloads);
+    collect_module_manifests(file,out.extension_payloads,out.module_manifests);
     if(!parse_spc_digest(blob,alg,dig,signer_count,page_hashes,err)){out.state="PKCS7_PARSE_FAILED";out.error=std::move(err);return;}
     out.spc_indirect_data=true;out.signer_infos_present=true;out.signer_info_count=signer_count;out.digest_extracted=true;std::string metaerr;if(parse_pkcs7_identity(blob,out.certificates,out.signers,metaerr))out.signer_metadata_state="PARSED";else{out.signer_metadata_state="PARTIAL";out.signer_metadata_error=std::move(metaerr);}verify_page_hashes(file,pe,layout,page_hashes,out);out.digest_algorithm=alg;out.signed_digest=hex_bytes(dig);out.computed_digest=compute_digest(file,layout,alg);if(out.computed_digest.empty()){out.state="UNSUPPORTED_DIGEST";out.error="SpcIndirectDataContent digest algorithm is not yet supported for local recomputation";}else{out.digest_match=out.signed_digest==out.computed_digest;out.state=out.digest_match?"DIGEST_MATCH":"DIGEST_MISMATCH";}
 }
@@ -291,6 +324,19 @@ std::optional<Finding> authenticode_extension_payload_finding(const Authenticode
     f.fields["payload_bytes"]=std::to_string(total);
     f.suggested_actions.push_back("inspect the bounded certificate-extension ranges as data; validate any nested format independently before extraction or execution");
     return f;
+}
+std::optional<Finding> authenticode_module_manifest_finding(const AuthenticodeInfo&i){
+    std::vector<const AuthenticodeModuleManifest*> manifests;
+    for(const auto&s:i.signatures)for(const auto&m:s.module_manifests)if(manifests.size()<32&&m.candidate&&m.record_count>=4)manifests.push_back(&m);
+    if(manifests.empty())return std::nullopt;
+    Finding f;f.kind="embedded_payload";f.family="PE Authenticode module manifest";f.variant="DER_INTEGER_OCTET_RECORDS";
+    const bool complete=std::any_of(manifests.begin(),manifests.end(),[](const auto*m){return m->valid;});f.state=complete?"CONFIRMED":"LIKELY";f.confidence=complete ? 0.9 : 0.72;
+    f.evidence.push_back("bounded DER parsing found "+std::to_string(manifests.size())+" private-enterprise payload(s) containing repeated INTEGER/OCTET STRING module records");
+    f.negative_evidence.push_back("module IDs and record boundaries are structural only; payload bytes remain opaque and no decryption, trust, or execution was inferred");
+    std::uint64_t total_records=0,total_payload=0;std::uint32_t partial=0,duplicates=0;
+    for(const auto*m:manifests){total_records+=m->record_count;for(const auto&r:m->records)total_payload+=r.payload_size;if(m->partial)++partial;if(m->duplicate_ids)++duplicates;std::ostringstream detail;detail<<"private OID="<<m->oid<<" records="<<m->record_count<<"/"<<m->declared_record_count<<" state="<<m->state<<(m->duplicate_ids?" duplicate-IDs":"")<<(m->sorted_ids?" sorted-IDs":" unsorted-IDs");f.evidence.push_back(detail.str());f.ranges.push_back(file_offset_range(m->file_offset,m->encoded_size,"DER module manifest extension"));for(std::size_t n=0;n<m->records.size()&&f.ranges.size()<128;++n){const auto&r=m->records[n];f.ranges.push_back(file_offset_range(r.file_offset,r.encoded_size,"DER module record id="+std::to_string(r.module_id)));}}
+    f.fields["manifest_count"]=std::to_string(manifests.size());f.fields["record_count"]=std::to_string(total_records);f.fields["module_payload_bytes"]=std::to_string(total_payload);f.fields["partial_manifest_count"]=std::to_string(partial);f.fields["duplicate_id_manifest_count"]=std::to_string(duplicates);f.fields["record_safety_limit"]="4096";
+    f.suggested_actions={"inspect the extracted certificate payloads as a bounded module table","validate any module decoder independently before attempting recovery or execution"};return f;
 }
 
 AuthenticodeExtensionPayloadExtractResult extract_authenticode_extension_payloads(std::span<const std::uint8_t> data,const AuthenticodeInfo& info,const std::filesystem::path& output_dir,bool core_only,std::uint64_t max_output_bytes,std::uint32_t max_output_files){

@@ -12,6 +12,7 @@
 - Authenticode `WIN_CERTIFICATE`、PKCS#7、PE image digest、签名者/证书元数据、RFC3161 时间戳、EKU、page hash 与嵌套签名证据。
 - JSON 报告提供有界 `pe` 对象，统一保留 PE 身份、导入模块/函数、delay-load 模块、导出/forwarder、主要目录、TLS、异常和 CRT 初始化计数；列表带 total/rendered/omitted/truncated 字段，GUI 不必从文本报告反解析这些事实。
 - 对安全目录中的私有企业 OID + 大型 OCTET STRING 提供低置信度载荷线索：只在已验证的 PE Certificate Table file-offset 范围内做有界 DER 遍历（16 MiB、4096 节点、16 层、32 条），输出 `FILE_OFFSET` 证据，并在 AUTO_CORE/`--extract` 预算内原样物化为 `BULK` 不透明证书载荷工件；不把它当成代码、签名信任或嵌套格式结论，不自动递归解释、解密或执行。
+- 对私有企业证书载荷中的重复 `SEQUENCE { INTEGER, OCTET STRING }` 模块表提供有界结构识别：保留 OID、模块 ID、每条记录和 OCTET STRING 的 `FILE_OFFSET`/长度、记录数量、排序/重复 ID 与截断状态，输出 `PE Authenticode module manifest`；模块字节保持不透明，不恢复解码算法、不解密、不执行，也不把 ID 顺序当作运行顺序。
 - 对 PE 导出表中指向导出目录的字符串提供有界 forwarder/API-set 关系线索：验证模块与符号/ordinal 几何，输出 `RVA`/`CURRENT_INPUT_IMAGE` 范围、API-set 与部分状态；只复用既有有界导出字符串解析，不解析系统 API-set 主机映射，也不宣称运行时 DLL 已被解析。
 - 对 PE `IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT` 提供有界 delay-load 关系线索：验证 RVA/VA 属性、DLL 名称、INT/IAT thunk 与 ordinal/name 几何，输出 `PE delay-load imports` finding 和 `RVA`/`CURRENT_INPUT_IMAGE` 范围；目录或 thunk 截断时保留 `PARTIAL`。delay-load helper 的首次调用、failure hook、搜索路径和最终 DLL 身份均不从静态描述器猜测。
 - x64 常见执行前置条件、手工解析器、反调试与运行时物化相关证据。手工 API 解析器在没有可用 `.pdata`/`RUNTIME_FUNCTION` 的保护器或自定义 loader 中，也会对入口可执行节的有界窗口复核完整 PEB → export 结构；FNV-1a32 保留精确算法字段，算术/位运算被替换的名称哈希标为 `MODIFIED_OR_UNKNOWN_NAME_HASH`，不强行映射 API 名称。无函数边界或算法未知的结果固定为 `SUSPECTED` 并标明 `ENTRY_SECTION_WINDOW`，不会把窗口边界当成真实函数边界。
