@@ -60,6 +60,7 @@ def main() -> int:
         "QStackedWidget",
         "m_nav_workspace",
         "m_nav_settings",
+        "m_navigation_title",
         "showPage",
         "m_metric_findings",
         "m_metric_confirmed",
