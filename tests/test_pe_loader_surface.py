@@ -60,7 +60,12 @@ def loader_finding(report: dict) -> dict | None:
 
 def main() -> None:
     binary = pathlib.Path(sys.argv[1]).resolve()
-    assert loader_finding(run(binary, image(relocations=False))) is None
+    plain = run(binary, image(relocations=False))
+    assert loader_finding(plain) is None
+    assert plain["pe"]["imports_total"] == 1, plain["pe"]
+    assert plain["pe"]["import_function_count"] == 2, plain["pe"]
+    assert plain["pe"]["imports"][0]["name"] == "kernel32.dll", plain["pe"]
+    assert {x["name"] for x in plain["pe"]["imports"][0]["functions"]} == {"LoadLibraryA", "GetProcAddress"}, plain["pe"]
     finding = loader_finding(run(binary, image(relocations=True)))
     assert finding is not None, "resolver imports without relocation geometry must not route"
     assert finding["state"] == "SUSPECTED", finding
