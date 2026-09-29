@@ -22,7 +22,8 @@ struct AsarScriptReference {
     std::string target_path;
     std::string call_kind;
     std::string literal;
-    std::uint64_t source_byte=0;
+    std::string resolution_basis;
+    std::uint64_t source_byte=0,source_line=0;
     std::uint64_t target_offset=0,target_size=0;
     bool target_unpacked=false;
 };
@@ -33,6 +34,8 @@ struct AsarInfo {
     std::uint64_t file_count=0,directory_count=0,link_count=0,packed_file_count=0,unpacked_file_count=0,integrity_count=0;
     std::vector<AsarEntry> entries;
     std::vector<AsarScriptReference> script_references;
+    bool script_reference_scan_limited=false;
+    std::uint64_t script_reference_scanned_bytes=0,script_reference_scanned_files=0;
     std::vector<std::string> interesting_paths;
     bool package_json_valid=false;
     std::string package_name,package_version,package_main,package_main_resolved;
@@ -48,6 +51,7 @@ struct AsarExtractResult {
     std::string error;
 };
 AsarInfo detect_asar(std::span<const std::uint8_t> data,const std::filesystem::path& archive_path={});
+void analyze_asar_script_references(std::span<const std::uint8_t> data,AsarInfo& info);
 Finding asar_finding(const AsarInfo& info);
 AsarExtractResult extract_asar(std::span<const std::uint8_t> data,const AsarInfo& info,const std::filesystem::path& output_dir,bool core_only=false,std::uint64_t max_output_bytes=512ull*1024*1024,std::uint32_t max_output_files=100000);
 }
