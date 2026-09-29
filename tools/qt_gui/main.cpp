@@ -208,6 +208,7 @@ private:
         navigation_layout->setContentsMargins(10, 14, 10, 14);
         navigation_layout->setSpacing(6);
         auto* navigation_title = new QLabel(QStringLiteral("WORKBENCH"));
+        m_navigation_title = navigation_title;
         navigation_title->setObjectName(QStringLiteral("navigationTitle"));
         navigation_layout->addWidget(navigation_title);
         m_nav_workspace = new QPushButton(QStringLiteral("Workspace"));
@@ -576,6 +577,7 @@ private:
         m_title->setText(QStringLiteral("auto-refirst"));
         setWindowTitle(m_english ? QStringLiteral("auto-refirst  ·  Evidence workspace") : QStringLiteral("auto-refirst  ·  证据工作台"));
         m_subtitle->setText(m_english ? QStringLiteral("Static preparation workspace for unusual programs") : QStringLiteral("异常程序预处理工作台"));
+        m_navigation_title->setText(m_english ? QStringLiteral("WORKBENCH") : QStringLiteral("工作台"));
         m_nav_workspace->setText(m_english ? QStringLiteral("Workspace") : QStringLiteral("工作台"));
         m_nav_settings->setText(m_english ? QStringLiteral("Settings") : QStringLiteral("设置"));
         m_nav_hint->setText(m_english ? QStringLiteral("Drop a file or folder to start.") : QStringLiteral("拖放文件或目录开始分析。"));
@@ -1325,9 +1327,10 @@ private:
         detail += m_english ? QStringLiteral("FINDINGS\n") : QStringLiteral("发现\n");
         if (lines.isEmpty()) detail += m_english ? QStringLiteral("No findings match the filter.\n") : QStringLiteral("没有符合筛选条件的发现。\n");
         else detail += lines.join(QStringLiteral("\n")) + QLatin1Char('\n');
-        detail += QStringLiteral("\n") + (m_english ? QStringLiteral("LIMITS\n") : QStringLiteral("限制\n"));
-        if (partial) detail += m_english ? QStringLiteral("• Some output was limited; review the JSON report for the complete record.\n") : QStringLiteral("• 部分输出受限，请打开 JSON 查看完整记录。\n");
-        if (!partial) detail += m_english ? QStringLiteral("• No output limits were reported.\n") : QStringLiteral("• 未报告输出限制。\n");
+        if (partial) {
+            detail += QStringLiteral("\n") + (m_english ? QStringLiteral("LIMITS\n") : QStringLiteral("限制\n"));
+            detail += m_english ? QStringLiteral("• Some results are limited; open JSON for the full record.\n") : QStringLiteral("• 部分结果受限；打开 JSON 查看完整记录。\n");
+        }
     }
 
     void showSelected() {
@@ -1436,6 +1439,7 @@ private:
     QLabel* m_nav_hint = nullptr;
     QLabel* m_title = nullptr;
     QLabel* m_subtitle = nullptr;
+    QLabel* m_navigation_title = nullptr;
     QLabel* m_queue_hint = nullptr;
     QLabel* m_output_label = nullptr;
     QLabel* m_timeout_label = nullptr;
