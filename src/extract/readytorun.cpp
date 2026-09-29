@@ -224,9 +224,10 @@ ReadyToRunInfo detect_ready_to_run(std::span<const std::uint8_t> data, const PeI
     if (out.major_version == 0) return fail(out, "ReadyToRun major version is zero");
     if (out.section_count == 0 || out.section_count > kMaxSections)
         return fail(out, "ReadyToRun section count is zero or exceeds the bounded limit");
-    if (out.section_count > (std::numeric_limits<std::uint64_t>::max() - kHeaderPrefixSize) / kSectionSize)
+    const auto section_count = static_cast<std::uint64_t>(out.section_count);
+    if (section_count > (std::numeric_limits<std::uint64_t>::max() - kHeaderPrefixSize) / kSectionSize)
         return fail(out, "ReadyToRun section table size overflows");
-    out.header_size = kHeaderPrefixSize + static_cast<std::uint64_t>(out.section_count) * kSectionSize;
+    out.header_size = kHeaderPrefixSize + section_count * kSectionSize;
     if (!span_ok(data, out.header_offset, out.header_size))
         return fail(out, "ReadyToRun section table is truncated");
     if (location->directory_size && out.header_size > location->directory_size)
