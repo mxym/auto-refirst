@@ -199,6 +199,7 @@ add_executable(auto_refirst
     src/extract/dotnet_loader.cpp
     src/extract/wxapkg.cpp
     src/extract/asar.cpp
+    src/extract/asar_script.cpp
     src/extract/autoit.cpp
     src/extract/renpy.cpp
     src/extract/godot.cpp

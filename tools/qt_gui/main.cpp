@@ -1064,6 +1064,7 @@ private:
             {"Managed dynamic loader surface", "托管动态加载面"},
             {"Native import hook surface", "原生导入 Hook 面"},
             {"Embedded executable loader route", "嵌套可执行文件加载路线"},
+            {"ASAR script child route", "ASAR 脚本子文件路线"},
             {"Layered/polyglot format markers", "分层/多格式标记"},
             {"WebAssembly relocatable metadata", "WebAssembly 可重定位元数据"},
             {"Wasm import module dependency", "Wasm 导入模块依赖"},
@@ -1136,6 +1137,8 @@ private:
         if (raw.contains(QStringLiteral("trace:loader-or-hook-initialization"), Qt::CaseInsensitive)) return QStringLiteral("只有需要运行时证据时，再跟踪加载器或 Hook 初始化链。");
         if (raw.contains(QStringLiteral("inspect:embedded-child-loader-callsite"), Qt::CaseInsensitive)) return QStringLiteral("检查父文件中资源提取、写出或启动子文件的调用点。");
         if (raw.contains(QStringLiteral("trace:resource-to-child-route-only-when-runtime-evidence-is-required"), Qt::CaseInsensitive)) return QStringLiteral("只有需要确认资源到子文件的实际路径时，再跟踪运行时路线。");
+        if (raw.contains(QStringLiteral("inspect:asar-script-child-route"), Qt::CaseInsensitive)) return QStringLiteral("检查 ASAR 脚本中的精确子文件引用和对应成员。");
+        if (raw.contains(QStringLiteral("trace:asar-script-wasm-route-only-when-runtime-evidence-is-required"), Qt::CaseInsensitive)) return QStringLiteral("只有需要确认脚本实际加载路径时，再跟踪 ASAR 脚本到子文件的运行时路线。");
         if (raw.contains(QStringLiteral("--run=python-probe"), Qt::CaseInsensitive)) return QStringLiteral("如需确认 CPython 编译器行为，可启用 --run=python-probe。");
         if (raw.contains(QStringLiteral("--run"), Qt::CaseInsensitive)) return QStringLiteral("如需运行时证据，可启用 --run。");
         if (raw.contains(QStringLiteral("--extract"), Qt::CaseInsensitive)) return QStringLiteral("如需完整容器或重型静态展开，可启用 --extract。");
