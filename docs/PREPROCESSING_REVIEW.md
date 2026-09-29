@@ -49,6 +49,7 @@
 | P2 · 已实现 | PE export forwarder/API-set triage | 对已验证导出目录内的 forwarder 字符串做有界 module/symbol/ordinal/API-set 几何整理；畸形目标降为 `PARTIAL`，不猜 API-set host、不模拟 loader 搜索路径、不执行 DLL。 |
 | P2 · 已实现 | CLR/native boundary triage | 对 PE COR20、native entry flag/RVA、OEP、MethodDef body、P/Invoke 及非 CLR 原生导入/导出面做静态边界整理；MethodDef body 进一步区分 RVA 缺失、RVA 不可映射和 tiny/fat IL 几何无效，标出疑似改写/裁剪的托管方法；VMProtect/自定义 loader 常见的托管-原生分界保留 `CONFIRMED`/`LIKELY`/`PARTIAL`，所有运行时解析保持明确拒绝。 |
 | P2 · 已实现 | .NET dynamic loader/reflection surface | 组合已验证 `MemberRef` 与 `P/Invoke` 中的程序集加载、metadata 解析、反射调用、动态生成、资源访问和原生加载桥接信号；至少两类独立信号才升级为 `SUSPECTED`/`LIKELY`，报告命中 token 和计数，明确不推出运行时可达、解密或执行。 |
+| P2 · 已实现 | .NET resource-to-loader route | 将 `ManifestResource` 的嵌入/外部实现与 `GetManifestResourceStream`/`ResourceManager` 资源访问、`Assembly.Load*`/`AssemblyLoadContext.LoadFrom*`/`AppDomain.Load*` MemberRef 做有界关系闭合；输出路线变体、资源范围/总量、命中 token 与未解析运行时边界，不把静态引用当作 IL 可达或执行证明。 |
 | P2 · 已实现 | .NET MethodDef body map | JSON 与 `.NET symbols.csv` 输出 MethodDef 元数据行、IL body/header/code 的 file-offset、长度和 file-backed 状态；下游可以直接按 token 与当前输入偏移复核异常方法，不需要重新猜测 RVA 到文件范围的映射。 |
 | P2 · 已实现 | PE custom-loader surface | 组合 resolver imports、重定位目录、TLS 预入口和入口段权限的独立信号，输出低置信度手动映射/反射式 loader 路由；单一 API、单独重定位目录和普通插件宿主形状不升级，保持静态-only。 |
 | P2 · 已实现 | 原生 IAT/代码 hook 面 | 在有界 PE 函数或入口窗口内定位对精确 IAT 槽/可执行范围的文件内写入，并与同函数 loader/patch bridge 调用组合；保留写入指令、IAT 目标和未解析 hook 目标，不把导入或保护 API 单独当作 hook。 |

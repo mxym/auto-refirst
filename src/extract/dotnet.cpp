@@ -6,6 +6,7 @@
 #include <fstream>
 #include <functional>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -26,6 +27,7 @@ std::string csvq(const std::string&s){std::string r="\"";for(char c:s){if(c=='\"
 std::string join(const std::vector<std::string>&v,std::string_view sep){std::string o;for(const auto&s:v){if(!o.empty())o+=sep;o+=s;}return o;}
 bool contains_icase(std::string a,std::string b){std::transform(a.begin(),a.end(),a.begin(),[](unsigned char c){return char(std::tolower(c));});std::transform(b.begin(),b.end(),b.begin(),[](unsigned char c){return char(std::tolower(c));});return a.find(b)!=std::string::npos;}
 std::string hex32(std::uint32_t v){std::ostringstream o;o<<"0x"<<std::hex<<std::setw(8)<<std::setfill('0')<<v;return o.str();}
+std::string hex64(std::uint64_t v){std::ostringstream o;o<<"0x"<<std::hex<<std::setw(16)<<std::setfill('0')<<v;return o.str();}
 
 struct HeapView {
     std::span<const std::uint8_t>d;
@@ -236,6 +238,51 @@ std::optional<Finding> dotnet_dynamic_surface_finding(const DotNetInfo&i){
     f.negative_evidence={"metadata references do not prove call reachability, payload decryption, or dynamic code execution","the exact loader path and runtime-selected assembly/resource remain unresolved"};
     f.fields["managed_assembly_load_refs"]=std::to_string(c.load);f.fields["metadata_resolution_refs"]=std::to_string(c.resolve);f.fields["reflection_invoke_refs"]=std::to_string(c.invoke);f.fields["dynamic_emit_refs"]=std::to_string(c.emit);f.fields["resource_access_refs"]=std::to_string(c.resource);f.fields["native_loader_bridge_refs"]=std::to_string(c.native);f.fields["surface_category_count"]=std::to_string(categories);f.fields["runtime_reachability"]="NOT_RESOLVED";
     f.suggested_actions={"extract:dotnet-symbols-and-types","prioritize managed loader/reflection callsites and embedded resources","trace the selected assembly/resource path only when runtime evidence is required"};
+    return f;
+}
+
+std::optional<Finding> dotnet_resource_loader_finding(const DotNetInfo&i){
+    if(!i.valid)return std::nullopt;
+    struct Counts{std::size_t resource=0,assembly=0,context=0,appdomain=0;std::vector<std::string> evidence;};
+    Counts c;
+    auto lower_copy=[](std::string s){std::transform(s.begin(),s.end(),s.begin(),[](unsigned char ch){return static_cast<char>(std::tolower(ch));});return s;};
+    auto parent_is=[&](const std::string&parent,std::string_view suffix){const auto p=lower_copy(parent);return p==suffix||(p.size()>suffix.size()+1&&p.compare(p.size()-suffix.size(),suffix.size(),suffix)==0&&p[p.size()-suffix.size()-1]=='.');};
+    auto sample=[&](const DotNetMemberRef&m,std::string label){if(c.evidence.size()>=12)return;const auto parent=m.parent.empty()?std::string("<unresolved-parent>"):m.parent;c.evidence.push_back(std::move(label)+" "+parent+"::"+m.name+" "+hex32(m.token));};
+    for(const auto&m:i.member_refs){
+        const auto parent=lower_copy(m.parent),name=lower_copy(m.name);
+        const bool resource=(parent_is(parent,"system.reflection.assembly")&&(name=="getmanifestresourcestream"||name=="getmanifestresourcename"||name=="getmanifestresourcenames"))||
+            (parent_is(parent,"system.resources.resourcemanager")&&(name=="getobject"||name=="getstring"||name=="getstream"))||
+            (parent_is(parent,"system.resources.resourceset")&&(name=="getobject"||name=="getstring"));
+        if(resource){++c.resource;sample(m,"managed resource access");continue;}
+        const bool assembly=parent_is(parent,"system.reflection.assembly")&&(name=="load"||name=="loadfrom"||name=="loadfile"||name=="loadwithpartialname"||name=="loadmodule");
+        if(assembly){++c.assembly;sample(m,"managed assembly load");continue;}
+        const bool context=parent_is(parent,"system.runtime.loader.assemblyloadcontext")&&(name=="loadfromstream"||name=="loadfromassemblypath"||name=="loadfromassemblyname"||name=="load");
+        if(context){++c.context;sample(m,"assembly-load-context load");continue;}
+        if(parent_is(parent,"system.appdomain")&&(name=="load"||name=="loadassembly")){++c.appdomain;sample(m,"AppDomain assembly load");}
+    }
+    const std::size_t loaders=c.assembly+c.context+c.appdomain;
+    if(!c.resource||!loaders)return std::nullopt;
+    std::size_t embedded=0,external=0;std::uint64_t embedded_bytes=0;std::size_t rendered=0;
+    for(const auto&r:i.resources){
+        if(r.embedded&&r.size_known){
+            ++embedded;
+            embedded_bytes=(r.size>std::numeric_limits<std::uint64_t>::max()-embedded_bytes)?std::numeric_limits<std::uint64_t>::max():embedded_bytes+r.size;
+            if(rendered<64){if(c.evidence.size()<12)c.evidence.push_back("resource payload "+(r.name.empty()?std::to_string(r.rid):r.name)+" file range "+hex64(r.data_offset)+" size="+std::to_string(r.size));++rendered;}
+        }else if(r.implementation_token)++external;
+    }
+    const std::string scope=embedded?"EMBEDDED":(external?"EXTERNAL":"UNRESOLVED");
+    const std::string loader_kind=c.context?(c.assembly?"ASSEMBLY_AND_LOAD_CONTEXT":"ASSEMBLY_LOAD_CONTEXT"):(c.appdomain?(c.assembly?"ASSEMBLY_AND_APPDOMAIN":"APPDOMAIN"):"ASSEMBLY");
+    Finding f;f.kind="relationship";f.family="Managed resource loader route";f.variant=scope+"_RESOURCE_TO_"+loader_kind;f.state=(embedded||external)?"LIKELY":"SUSPECTED";f.confidence=(embedded?std::optional<double>(.94):(external?std::optional<double>(.84):std::optional<double>(.76)));
+    f.evidence.push_back("validated ECMA-335 MemberRef metadata contains resource-access and managed assembly-loading surfaces");
+    for(const auto&x:c.evidence)f.evidence.push_back(x);
+    if(embedded)f.evidence.push_back(std::to_string(embedded)+" embedded ManifestResource payload(s) close to exact file ranges totaling "+std::to_string(embedded_bytes)+" bytes");
+    if(external)f.evidence.push_back(std::to_string(external)+" external ManifestResource implementation reference(s) require sibling assembly resolution");
+    f.negative_evidence={"MemberRef metadata does not prove call reachability, argument values, or loader execution","resource bytes are not decoded, decrypted, or interpreted as a managed assembly by this static route"};
+    if(!embedded&&!external)f.negative_evidence.push_back("no ManifestResource payload range closed in this image; the route may consume a sibling or runtime-created resource");
+    if(embedded>rendered)f.negative_evidence.push_back("only the first 64 embedded resource ranges are rendered; counts and byte totals cover all validated rows");
+    f.fields["resource_access_refs"]=std::to_string(c.resource);f.fields["assembly_load_refs"]=std::to_string(c.assembly);f.fields["assembly_load_context_refs"]=std::to_string(c.context);f.fields["appdomain_load_refs"]=std::to_string(c.appdomain);f.fields["managed_loader_refs"]=std::to_string(loaders);f.fields["embedded_resource_count"]=std::to_string(embedded);f.fields["external_resource_count"]=std::to_string(external);f.fields["embedded_resource_bytes"]=std::to_string(embedded_bytes);f.fields["resource_scope"]=scope;f.fields["loader_kind"]=loader_kind;f.fields["route_resolution"]="STATIC_MEMBERREF_RELATION";f.fields["runtime_reachability"]="NOT_RESOLVED";
+    std::size_t range_count=0;for(const auto&r:i.resources)if(r.embedded&&r.size_known&&range_count<64){f.ranges.push_back(file_offset_range(r.data_offset,r.size,"managed resource loader payload "+(r.name.empty()?std::to_string(r.rid):r.name)));++range_count;}
+    f.suggested_actions={"extract:dotnet-resources","inspect MethodDef bodies that consume the resource and loader MemberRefs","resolve sibling assemblies before tracing the selected managed load path"};
     return f;
 }
 
