@@ -81,6 +81,21 @@ bool lua_header(std::span<const std::uint8_t>d){
     const auto integer_size=d[p++];if(!negative_marker(integer_size)||p>=d.size())return false;
     const auto number_size=d[p++];return (number_size==4||number_size==8)&&number_size<=d.size()-p;
 }
+bool asar_header(std::span<const std::uint8_t>d,std::uint64_t file_size){
+    if(d.size()<16||file_size<16||read(d,0,4)!=4)return false;
+    const auto header_size=read(d,4,4),payload_size=read(d,8,4),json_size=read(d,12,4);
+    if(header_size<8||header_size>64ull*1024*1024||header_size>file_size-8)return false;
+    if(payload_size+4!=header_size||std::uint64_t(json_size)>payload_size-4||16ull+json_size>file_size)return false;
+    if(16ull+json_size>d.size()||json_size<9)return false;
+    return d[16]=='{'&&d[17]=='\"'&&d[18]=='f'&&d[19]=='i'&&d[20]=='l'&&d[21]=='e'&&d[22]=='s';
+}
+bool javascript_prefix(std::span<const std::uint8_t>d){
+    if(d.empty())return false;
+    std::string_view text(reinterpret_cast<const char*>(d.data()),d.size());
+    static constexpr std::array<std::string_view,7> tokens={"module.exports","exports.","require(","WebAssembly.","fetch(","import ","const "};
+    std::size_t hits=0;for(const auto token:tokens)if(text.find(token)!=std::string_view::npos)++hits;
+    return hits>=2;
+}
 }
 
 PreflightHeader probe_preflight_header(std::span<const std::uint8_t>d,std::uint64_t file_size){
@@ -130,7 +145,9 @@ PreflightHeader probe_preflight_header(std::span<const std::uint8_t>d,std::uint6
     if(starts(d,{'P','K',3,4})||starts(d,{'P','K',5,6})||starts(d,{'P','K',7,8}))return hint(Format::Zip,"ZIP/container","container",50,"ZIP signature routes APK/JAR/container validation");
     if(starts(d,{'-','=','=', '-', '-', '=', '=', '-', '-', '=', '=', '-', '-', '=', '=', '-'}))return hint(Format::IoStore,"Unreal IoStore TOC","iostore_toc",55,"fixed IoStore UTOC magic routes full bounded section and partition validation","high");
     if(starts(d,{'G','D','P','C'}))return hint(Format::GodotPck,"Godot PCK","container",50,"Godot PCK magic routes full structural validation");
+    if(asar_header(d,file_size))return hint(Format::Asar,"Electron ASAR","container",55,"bounded ASAR Pickle geometry and JSON files marker route full container validation","medium");
     if(starts(d,{'#','!'}))return hint(Format::Script,"script","script",30,"shebang identifies a script; it remains static-only by default");
+    if(javascript_prefix(d))return hint(Format::Script,"JavaScript-like script","script",25,"bounded source tokens identify a JavaScript-like script; parsing remains static-only","low");
     return {};
 }
 }

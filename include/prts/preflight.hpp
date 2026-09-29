@@ -5,7 +5,7 @@
 #include <string_view>
 
 namespace prts {
-enum class PreflightFormat { Unknown, PE, ELF, MachO, JvmClass, MachOOrJvm, Hermes, Lua, PythonBytecode, Wasm, Dex, Zip, IoStore, GodotPck, Script };
+enum class PreflightFormat { Unknown, PE, ELF, MachO, JvmClass, MachOOrJvm, Hermes, Lua, PythonBytecode, Wasm, Dex, Zip, IoStore, GodotPck, Script, Asar };
 inline constexpr std::size_t kPreflightPrefixBytes=64*1024;
 
 // A cheap admission hint, never a complete format/semantic validation or an
