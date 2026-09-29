@@ -22,6 +22,14 @@ def large_dos_pe():
     return bytes(out)
 
 
+def minimal_asar():
+    header=b'{"files":{"app.js":{"size":1}}}'
+    aligned=(len(header)+3)&~3
+    payload_size=4+aligned
+    header_size=payload_size+4
+    return struct.pack('<IIII',4,header_size,payload_size,len(header))+header+b'\0'*(aligned-len(header))+b'x'
+
+
 def main():
     helper=pathlib.Path(sys.argv[1]).resolve()
     with tempfile.TemporaryDirectory(prefix='ar-header-probe-') as temp:
@@ -35,7 +43,7 @@ def main():
 
         thin=struct.pack('<IiiIIIII',0xfeedfacf,0x01000007,3,2,0,0,0,0)
         thin_be=struct.pack('>IiiIIII',0xfeedface,18,0,1,0,0,0)
-        cases=[(minimal_pe(),'PE executable'),(minimal_elf(),'ELF'),(thin,'Mach-O'),(thin_be,'Mach-O'),(make_fat_macho(),'Mach-O'),(pyc310(),'CPython bytecode'),((ROOT/'tests/corpus/jvm/LambdaSample.class').read_bytes(),'JVM Class')]
+        cases=[(minimal_pe(),'PE executable'),(minimal_elf(),'ELF'),(thin,'Mach-O'),(thin_be,'Mach-O'),(make_fat_macho(),'Mach-O'),(pyc310(),'CPython bytecode'),((ROOT/'tests/corpus/jvm/LambdaSample.class').read_bytes(),'JVM Class'),(minimal_asar(),'Electron ASAR')]
         for version in (89,96,98):cases.append(((ROOT/f'tests/corpus/hermes/v{version}.hbc').read_bytes(),'Hermes HBC'))
         for version in ('5.1.5','5.2.4','5.3.6','5.4.8','5.5.0'):
             cases.append(((ROOT/f'tests/corpus/lua/sample-{version}.luac').read_bytes(),'Lua'))
@@ -43,7 +51,9 @@ def main():
             result=probe(data)
             assert result[0]==expected and result[2]>=45,(expected,result)
             if expected not in ('PE executable','ELF'):assert result[1]=='medium' and result[4] is False,result
-        for data in (thin[:4],bytes.fromhex('cafebabe'),pyc310()[:4],b'\x1bLua',bytes.fromhex('c61fbc03c103191f')):
+        js=probe(b"const x=require('x'); WebAssembly.instantiateStreaming(fetch('x.wasm'));",'main.js')
+        assert js[0]=='JavaScript-like script' and js[1]=='low' and js[2]>=20 and js[3]=='script' and js[4] is False,js
+        for data in (thin[:4],bytes.fromhex('cafebabe'),pyc310()[:4],b'\x1bLua',bytes.fromhex('c61fbc03c103191f'),minimal_asar()[:16]):
             result=probe(data);assert result[2]<=5 and result[4] is False,result
         for name in ('fake.class','fake.hbc','fake.luac','fake.pyc','fake.dylib'):
             assert probe(b'ordinary text with no binary header',name)[0]=='',name

@@ -54,6 +54,7 @@
 | P2 · 已实现 | 原生 IAT/代码 hook 面 | 在有界 PE 函数或入口窗口内定位对精确 IAT 槽/可执行范围的文件内写入，并与同函数 loader/patch bridge 调用组合；保留写入指令、IAT 目标和未解析 hook 目标，不把导入或保护 API 单独当作 hook。 |
 | P2 · 已实现 | 嵌套 PE 加载路线 | 父 PE 资源目录、资源提取导入与独立写出/启动/模块加载桥和已验证嵌套 PE 同时成立时，生成 `ROUTE_HINT` 父子关系；资源身份、参数流、调用顺序和运行时执行保持未解析，不提升优先级。 |
 | P2 · 已实现 | ASAR 脚本到 Wasm/原生成员路线 | 对有界脚本的直接字符串成员引用进行路径规范化和目标格式校验，唯一 exact 成员进入 AUTO_CORE 并生成 `BOUNDED`/R2 关系；动态表达式、缺失目标和未验证格式不伪造端点，运行时加载保持未解析。 |
+| P2 · 已实现 | ASAR/JavaScript 目录预检 | 对 ASAR Pickle/JSON 几何及多个 JavaScript-like token 提供有界排序提示；完整分析复核后才保留 Electron ASAR/脚本类型，文本诱饵不会获得原生运行时资格。 |
 | P2 · 已实现 | 无 `.pdata` 与魔改名称哈希手工解析器 | 对没有可用 `RUNTIME_FUNCTION` 的 x64 PE，仅在入口可执行节的 8 KiB 有界窗口内复核完整 PEB → export 解析形状；FNV-1a32 走精确分支，算术/位运算替换的名称哈希输出 `MODIFIED_OR_UNKNOWN_NAME_HASH`，不凭静态目录强行分配 API 名称。结果标为 `SUSPECTED`/`ENTRY_SECTION_WINDOW`，不把窗口当作真实函数边界。 |
 | P2 · 已实现 | .NET managed resources surface | 将已验证 `ManifestResource` 的嵌入 payload 与外部 `AssemblyRef`/`File`/`ExportedType` 实现关系交接给报告，并在预算内原样物化嵌入字节接入递归子工件图，保留文件偏移和静态-only 边界，优先提示内嵌 DLL/配置/二进制资源。 |
 | P2 · 已实现 | .NET single-file bundle materialization | 在 v2/v6 manifest/member geometry 已闭合后，按 AUTO_CORE/`--extract` 预算物化未压缩 managed assembly、native runtime、deps/runtimeconfig 与 symbols 成员，注册到现有静态子工件图；v6 压缩成员明确保留为待解压边界，不执行应用、不伪造 Brotli 结果。 |

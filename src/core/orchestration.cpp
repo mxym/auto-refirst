@@ -249,7 +249,7 @@ DirectoryCandidate preflight_directory_candidate(const std::filesystem::path& pa
         if(!b.empty()&&printable*100/b.size()>90){c.type_hint="text";c.role="text";c.format_priority_boost=5;add_reason(c,5,"bounded prefix is predominantly text");}
         else{c.type_hint="unknown binary";c.role="data";c.format_priority_boost=10;add_reason(c,10,"unknown binary is retained for full static analysis");}
     }
-    auto ext=lower_ext(path);if(!ext.empty()&&(ext==".exe"||ext==".dll"||ext==".so"||ext==".pck"||ext==".apk"||ext==".jar"||ext==".dex"||ext==".wasm"||ext==".pak"||ext==".utoc"||ext==".ucas"||ext==".dylib"||ext==".class"||ext==".hbc"||ext==".luac"||ext==".pyc"))add_reason(c,2,"filename extension is weak ordering evidence only");
+    auto ext=lower_ext(path);if(!ext.empty()&&(ext==".exe"||ext==".dll"||ext==".so"||ext==".pck"||ext==".apk"||ext==".jar"||ext==".dex"||ext==".wasm"||ext==".pak"||ext==".utoc"||ext==".ucas"||ext==".dylib"||ext==".class"||ext==".hbc"||ext==".luac"||ext==".pyc"||ext==".asar"))add_reason(c,2,"filename extension is weak ordering evidence only");
     set_tier(c);return c;
 }
 
@@ -279,6 +279,7 @@ void refine_directory_candidate(DirectoryCandidate& c,const AnalysisReport& r){
     case PreflightFormat::Dex:rejected=!r.dex.valid;break;
     case PreflightFormat::GodotPck:rejected=!r.godot.valid;break;
     case PreflightFormat::IoStore:rejected=!r.unreal.iostore.toc_valid;break;
+    case PreflightFormat::Asar:rejected=!r.asar.valid;break;
     default:break;
     }
     if(rejected){
@@ -290,7 +291,7 @@ void refine_directory_candidate(DirectoryCandidate& c,const AnalysisReport& r){
     if(r.pe.valid)confirmed_boost=r.pe.dll?60:100;
     else if(r.elf.valid)confirmed_boost=r.elf.type==2?100:(r.elf.type==3?65:45);
     else if(r.macho.valid)confirmed_boost=65;
-    else if(r.jvm_class.valid||r.hermes.valid||r.lua.valid||r.python_bytecode.valid||r.wasm.valid||r.dex.valid)confirmed_boost=55;
+    else if(r.jvm_class.valid||r.hermes.valid||r.lua.valid||r.python_bytecode.valid||r.wasm.valid||r.dex.valid||r.asar.valid)confirmed_boost=55;
     if(confirmed_boost>c.format_priority_boost){
         add_reason(c,confirmed_boost-c.format_priority_boost,"full structural validation raises the bounded format priority; header hints are not counted twice");
         c.format_priority_boost=confirmed_boost;
@@ -312,6 +313,7 @@ void refine_directory_candidate(DirectoryCandidate& c,const AnalysisReport& r){
         validated_format(r.apk.valid,"Android APK","container");
         validated_format(r.jar.valid,"JAR/JVM","container");
         validated_format(r.godot.valid,"Godot PCK","container");
+        validated_format(r.asar.valid,"Electron ASAR","container");
     }
     if(r.pyinstaller.valid){add_reason(c,35,"validated PyInstaller CArchive/embedded-runtime relationship");c.role="executable_root";}
     if(r.python_bytecode.valid){add_reason(c,35,"authenticated direct CPython .pyc with structurally validated root code object");c.role="bytecode_payload";}
@@ -327,6 +329,7 @@ void refine_directory_candidate(DirectoryCandidate& c,const AnalysisReport& r){
     else if(r.unity.valid)add_reason(c,10,"Unity family evidence is present but backend-specific structure is unresolved in this file");
     if(r.dotnet.valid&&r.dotnet.unity_managed){add_reason(c,40,"validated Unity-managed CLR payload (ECMA-335 plus UnityEngine AssemblyRef)");c.role="managed_payload_candidate";}
     if(r.godot.valid)add_reason(c,30,"validated Godot PCK structure");
+    if(r.asar.valid)add_reason(c,25,"validated Electron ASAR structure and bounded member tree");
     if(r.gdextension_descriptor.valid){add_reason(c,45,"validated standalone Godot GDExtension descriptor with exact entry symbol and safe res:// library declarations");c.role="gdextension_descriptor";}
     if(r.apk.valid)add_reason(c,25,"validated APK structure");
     if(r.unreal.pak.valid){add_reason(c,25,"validated Unreal Pak exact footer, index range, SHA-1, and minimum index structure");c.type_hint="Unreal Pak";c.structural_confidence="validated";c.role="container";}
