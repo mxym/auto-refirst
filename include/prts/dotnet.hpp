@@ -120,6 +120,10 @@ Finding dotnet_finding(const DotNetInfo&info);
 // resolved metadata references form a dynamic-code or payload-loading shape.
 // The result is static triage only; a MemberRef does not prove call reachability.
 std::optional<Finding> dotnet_dynamic_surface_finding(const DotNetInfo&info);
+// Reports a bounded resource-to-managed-loader route when resource access and
+// assembly/load-context APIs are both present.  This is a relationship hint,
+// not IL reachability or payload-execution proof.
+std::optional<Finding> dotnet_resource_loader_finding(const DotNetInfo&info);
 Finding dotnet_resources_finding(const DotNetInfo&info);
 DotNetResourceExtractResult extract_dotnet_resources(std::span<const std::uint8_t>data,const DotNetInfo&info,const std::filesystem::path&out,bool core_only,std::uint64_t max_output_bytes,std::uint32_t max_output_files);
 DotNetExtractResult extract_dotnet_symbols(const DotNetInfo&info,const std::filesystem::path&out);
