@@ -30,6 +30,13 @@ def minimal_asar():
     return struct.pack('<IIII',4,header_size,payload_size,len(header))+header+b'\0'*(aligned-len(header))+b'x'
 
 
+def v8_cache():
+    out=bytearray(32+64)
+    for offset,value in ((0,0xc0de0688),(4,0xdc338cfa),(8,17|(1<<29)),(12,0x5fb11f89),(16,0x5cfb0532),(20,64),(24,0)):
+        struct.pack_into('<I',out,offset,value)
+    return bytes(out)
+
+
 def main():
     helper=pathlib.Path(sys.argv[1]).resolve()
     with tempfile.TemporaryDirectory(prefix='ar-header-probe-') as temp:
@@ -43,7 +50,7 @@ def main():
 
         thin=struct.pack('<IiiIIIII',0xfeedfacf,0x01000007,3,2,0,0,0,0)
         thin_be=struct.pack('>IiiIIII',0xfeedface,18,0,1,0,0,0)
-        cases=[(minimal_pe(),'PE executable'),(minimal_elf(),'ELF'),(thin,'Mach-O'),(thin_be,'Mach-O'),(make_fat_macho(),'Mach-O'),(pyc310(),'CPython bytecode'),((ROOT/'tests/corpus/jvm/LambdaSample.class').read_bytes(),'JVM Class'),(minimal_asar(),'Electron ASAR')]
+        cases=[(minimal_pe(),'PE executable'),(minimal_elf(),'ELF'),(thin,'Mach-O'),(thin_be,'Mach-O'),(make_fat_macho(),'Mach-O'),(pyc310(),'CPython bytecode'),(v8_cache(),'V8 JavaScript code cache'),((ROOT/'tests/corpus/jvm/LambdaSample.class').read_bytes(),'JVM Class'),(minimal_asar(),'Electron ASAR')]
         for version in (89,96,98):cases.append(((ROOT/f'tests/corpus/hermes/v{version}.hbc').read_bytes(),'Hermes HBC'))
         for version in ('5.1.5','5.2.4','5.3.6','5.4.8','5.5.0'):
             cases.append(((ROOT/f'tests/corpus/lua/sample-{version}.luac').read_bytes(),'Lua'))
@@ -53,7 +60,7 @@ def main():
             if expected not in ('PE executable','ELF'):assert result[1]=='medium' and result[4] is False,result
         js=probe(b"const x=require('x'); WebAssembly.instantiateStreaming(fetch('x.wasm'));",'main.js')
         assert js[0]=='JavaScript-like script' and js[1]=='low' and js[2]>=20 and js[3]=='script' and js[4] is False,js
-        for data in (thin[:4],bytes.fromhex('cafebabe'),pyc310()[:4],b'\x1bLua',bytes.fromhex('c61fbc03c103191f'),minimal_asar()[:16]):
+        for data in (thin[:4],bytes.fromhex('cafebabe'),pyc310()[:4],b'\x1bLua',bytes.fromhex('c61fbc03c103191f'),minimal_asar()[:16],v8_cache()[:16]):
             result=probe(data);assert result[2]<=5 and result[4] is False,result
         for name in ('fake.class','fake.hbc','fake.luac','fake.pyc','fake.dylib'):
             assert probe(b'ordinary text with no binary header',name)[0]=='',name
@@ -63,6 +70,8 @@ def main():
         assert probe(bad_pyc)[2]<=5
         bad_lua=bytearray((ROOT/'tests/corpus/lua/sample-5.4.8.luac').read_bytes());bad_lua[12]=0
         assert probe(bad_lua)[2]<=5
+        bad_v8=bytearray(v8_cache());struct.pack_into('<I',bad_v8,20,63)
+        assert probe(bad_v8)[2]<=5
         assert probe(make_fat_macho()[:-1])[2]<=5
         # The helper supplies the complete file, but the shared probe may only
         # inspect the first 64 KiB. Full analysis is tested separately.

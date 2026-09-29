@@ -207,6 +207,7 @@ add_executable(auto_refirst
     src/extract/cpython_cython.cpp
     src/extract/cpython_frozen.cpp
     src/extract/cpython_static.cpp
+    src/extract/v8_code_cache.cpp
     src/runtime/runtime.cpp
     src/runtime/materialization_graph.cpp
     src/runtime/cpython_probe_runtime.cpp
@@ -409,8 +410,15 @@ add_executable(auto_refirst_public_python_bytecode_unit EXCLUDE_FROM_ALL
     src/formats/python_bytecode.cpp
     src/formats/python_marshal.cpp
     src/core/sha256.cpp
+    src/extract/v8_code_cache.cpp
 )
 target_include_directories(auto_refirst_public_python_bytecode_unit PRIVATE include)
+
+add_executable(auto_refirst_public_v8_code_cache_unit EXCLUDE_FROM_ALL
+    tests/v8_code_cache_unit.cpp
+    src/extract/v8_code_cache.cpp
+)
+target_include_directories(auto_refirst_public_v8_code_cache_unit PRIVATE include)
 
 add_executable(auto_refirst_public_flutter_codec_unit EXCLUDE_FROM_ALL
     tests/flutter_codec_unit.cpp
@@ -511,7 +519,8 @@ set(AUTO_REFIRST_PUBLIC_UNIT_TARGETS
     auto_refirst_public_unity_method_dispatch_profile_unit
     auto_refirst_public_unity_generic_class_profile_unit
     auto_refirst_public_dotnet_boundary_unit
-    auto_refirst_public_dotnet_dynamic_surface_unit)
+    auto_refirst_public_dotnet_dynamic_surface_unit
+    auto_refirst_public_v8_code_cache_unit)
 set(AUTO_REFIRST_PUBLIC_TARGETS
     ${AUTO_REFIRST_PUBLIC_UNIT_TARGETS}
     auto_refirst_public_fixture_ordinary

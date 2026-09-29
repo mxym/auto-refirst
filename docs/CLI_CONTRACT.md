@@ -42,7 +42,7 @@ Runtime observations are represented in the text or JSON report. A target exit, 
 
 ## Directory resource scope
 
-Directory admission performs a bounded, name-independent header preflight over at most 64 KiB per regular file. It routes existing PE, ELF, Mach-O (including universal images), JVM Class, Hermes HBC, Lua 5.1–5.5, CPython bytecode, WebAssembly, DEX, ZIP, IoStore, Godot PCK, and shebang inputs. The result is an ordering hint only: shared or malformed signatures remain low-confidence, and full parsers replace both the format and runtime decision before a file state is emitted.
+Directory admission performs a bounded, name-independent header preflight over at most 64 KiB per regular file. It routes existing PE, ELF, Mach-O (including universal images), JVM Class, Hermes HBC, Lua 5.1–5.5, CPython bytecode, V8 JavaScript code cache, WebAssembly, DEX, ZIP, IoStore, Godot PCK, and shebang inputs. The result is an ordering hint only: shared or malformed signatures remain low-confidence, and full parsers replace both the format and runtime decision before a file state is emitted.
 
 Static and explicitly authorized runtime directory analysis share the same report transport budget: 16 MiB of complete inline reports, 8 MiB per report, and 24 MiB of temporary report payloads including deferred cache and the active writer. Final cross-file priorities reselect available cached reports without repeating extraction or target execution. `cache_evicted_reports` counts payloads discarded to maintain the disk bound; their compact file states remain present, but final priority changes cannot recover discarded bytes. `priorities_finalized`, `reports_reselected` and `spool_resident_bytes` describe this final selection.
 

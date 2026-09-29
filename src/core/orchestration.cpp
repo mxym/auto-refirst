@@ -275,6 +275,7 @@ void refine_directory_candidate(DirectoryCandidate& c,const AnalysisReport& r){
     case PreflightFormat::Hermes:rejected=!r.hermes.valid;break;
     case PreflightFormat::Lua:rejected=!r.lua.valid;break;
     case PreflightFormat::PythonBytecode:rejected=!r.python_bytecode.valid;break;
+    case PreflightFormat::V8CodeCache:rejected=!r.v8_code_cache.valid;break;
     case PreflightFormat::Wasm:rejected=!r.wasm.valid;break;
     case PreflightFormat::Dex:rejected=!r.dex.valid;break;
     case PreflightFormat::GodotPck:rejected=!r.godot.valid;break;
@@ -291,7 +292,7 @@ void refine_directory_candidate(DirectoryCandidate& c,const AnalysisReport& r){
     if(r.pe.valid)confirmed_boost=r.pe.dll?60:100;
     else if(r.elf.valid)confirmed_boost=r.elf.type==2?100:(r.elf.type==3?65:45);
     else if(r.macho.valid)confirmed_boost=65;
-    else if(r.jvm_class.valid||r.hermes.valid||r.lua.valid||r.python_bytecode.valid||r.wasm.valid||r.dex.valid||r.asar.valid)confirmed_boost=55;
+    else if(r.jvm_class.valid||r.hermes.valid||r.lua.valid||r.python_bytecode.valid||r.v8_code_cache.valid||r.wasm.valid||r.dex.valid||r.asar.valid)confirmed_boost=55;
     if(confirmed_boost>c.format_priority_boost){
         add_reason(c,confirmed_boost-c.format_priority_boost,"full structural validation raises the bounded format priority; header hints are not counted twice");
         c.format_priority_boost=confirmed_boost;
@@ -310,6 +311,7 @@ void refine_directory_candidate(DirectoryCandidate& c,const AnalysisReport& r){
         validated_format(r.lua.valid,"Lua","bytecode_module");
         validated_format(r.hermes.valid,"Hermes HBC","bytecode_module");
         validated_format(r.python_bytecode.valid,"CPython bytecode","bytecode_payload");
+        validated_format(r.v8_code_cache.valid,"V8 JavaScript code cache","bytecode_payload");
         validated_format(r.apk.valid,"Android APK","container");
         validated_format(r.jar.valid,"JAR/JVM","container");
         validated_format(r.godot.valid,"Godot PCK","container");
@@ -337,6 +339,7 @@ void refine_directory_candidate(DirectoryCandidate& c,const AnalysisReport& r){
     if(r.jar.valid)add_reason(c,20,"validated JAR/JVM container structure");
     if(r.dex.valid)add_reason(c,20,"validated DEX structure");
     if(r.wasm.valid)add_reason(c,20,"validated WebAssembly structure");
+    if(r.v8_code_cache.valid)add_reason(c,20,"validated V8 serializer/cache header geometry");
     if(r.nuitka.valid)add_reason(c,30,"validated Nuitka structure");
     if(r.analysis_guidance.decoy_risk=="HIGH")add_reason(c,25,"analysis guidance reports HIGH decoy/alternate-execution risk");
     else if(r.analysis_guidance.decoy_risk=="REVIEW")add_reason(c,10,"analysis guidance requests review of alternate execution evidence");
