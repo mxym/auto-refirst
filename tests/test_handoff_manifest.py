@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -38,7 +39,7 @@ def main():
                       "suggested_actions": ["inspect", "inspect"], "fields": {"z": 2, "a": 1}}],
         "artifact_relationships": [{"kind": "loader_route", "state": "CONFIRMED", "first": "/untrusted/root.bin",
                                      "second": "/untrusted/z.dll", "evidence_level": "R2"}],
-        "analysis_guidance": {"runtime_modality": {"priority_guidance": ["inspect"]}},
+        "analysis_guidance": {"runtime_modality": {"priority_guidance": ["review runtime guidance", "inspect"]}},
     }
     cp, raw = run(report)
     assert cp.returncode == 0, cp.stderr
@@ -52,7 +53,7 @@ def main():
     assert next(x for x in out["entries"] if x["path"] == "/runtime/memory.bin")["trust_state"] == "RUNTIME_OBSERVED_UNTRUSTED"
     assert all(x["execution_allowed"] is False for x in out["entries"])
     assert out["findings"][0]["evidence"] == ["a", "z"]
-    assert out["next_actions"] == ["inspect"]
+    assert out["next_actions"] == ["inspect", "review runtime guidance"]
     assert out["truncation"]["entries_total"] == 3
     assert out["generated_from"]["report_sha256"] == hashlib.sha256(raw).hexdigest()
     assert out["sources"] == [{
@@ -84,12 +85,48 @@ def main():
     print("[PASS] Deterministic static handoff manifest")
 
 
+def timing_gate_pe64() -> bytes:
+    """Generate a PE64 timestamp-delta gate for static analysis; never execute it."""
+    image = bytearray(0x400)
+    image[:2] = b"MZ"
+    struct.pack_into("<I", image, 0x3C, 0x80)
+    image[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<HH", image, 0x84, 0x8664, 1)
+    struct.pack_into("<HH", image, 0x94, 240, 0x0022)
+    optional = 0x98
+    struct.pack_into("<H", image, optional, 0x20B)
+    for offset, value in ((4, 0x200), (16, 0x1000), (20, 0x1000),
+                          (32, 0x1000), (36, 0x200), (56, 0x2000),
+                          (60, 0x200), (108, 16)):
+        struct.pack_into("<I", image, optional + offset, value)
+    struct.pack_into("<Q", image, optional + 24, 0x140000000)
+    struct.pack_into("<H", image, optional + 68, 3)
+    for offset, value in ((72, 0x100000), (80, 0x1000),
+                          (88, 0x100000), (96, 0x1000)):
+        struct.pack_into("<Q", image, optional + offset, value)
+    section = optional + 240
+    image[section:section + 8] = b".text\0\0\0"
+    for offset, value in ((8, 0x200), (12, 0x1000), (16, 0x200),
+                          (20, 0x200), (36, 0x60000020)):
+        struct.pack_into("<I", image, section + offset, value)
+
+    # rdtsc; mov ebx,eax; rdtsc; sub eax,ebx; cmp eax,256; jae; ret; ret
+    # A bounded exception-directory function range makes the data dependency
+    # available to the real prerequisite detector on every host platform.
+    code = bytes.fromhex("0f31 89c3 0f31 29d8 3d00010000 7301 c3 c3")
+    image[0x200:0x200 + len(code)] = code
+    struct.pack_into("<II", image, optional + 112 + 3 * 8, 0x1100, 12)
+    struct.pack_into("<III", image, 0x300, 0x1000, 0x1000 + len(code), 0x1120)
+    image[0x320:0x324] = b"\x01\0\0\0"  # v1 leaf unwind info
+    return bytes(image)
+
+
 def integration_cli(binary: pathlib.Path) -> None:
     """Exercise the converter against both shapes emitted by the real CLI."""
     with tempfile.TemporaryDirectory(prefix="ar-handoff-cli-") as td:
         td = pathlib.Path(td)
-        sample = td / "sample.bin"
-        sample.write_bytes(b"auto-refirst handoff integration\n")
+        sample = td / "timing-gate.exe"
+        sample.write_bytes(timing_gate_pe64())
         expected_hash = hashlib.sha256(sample.read_bytes()).hexdigest()
         for cli_args in (("--json",), ("--json", "--json-envelope")):
             cp = subprocess.run([str(binary), str(sample), *cli_args], text=True,
@@ -101,7 +138,8 @@ def integration_cli(binary: pathlib.Path) -> None:
             assert reports[0]["size"] == sample.stat().st_size
             manifest_cp, _ = run(report)
             assert manifest_cp.returncode == 0, manifest_cp.stderr
-            source = json.loads(manifest_cp.stdout)["sources"][0]
+            manifest = json.loads(manifest_cp.stdout)
+            source = manifest["sources"][0]
             assert source == {
                 "report_index": 0,
                 "path": str(sample),
@@ -110,6 +148,15 @@ def integration_cli(binary: pathlib.Path) -> None:
                 "offset_space": "current_input_file",
             }
             assert "snapshot_exists" not in source
+            modality = reports[0]["analysis_guidance"]["runtime_modality"]
+            guidance = modality["priority_guidance"]
+            assert guidance and not modality["runtime_execution_authorized"]
+            assert not reports[0]["runtime"]["requested"]
+            finding_actions = {action for finding in reports[0]["findings"]
+                               for action in finding["suggested_actions"]}
+            assert set(guidance) - finding_actions, "guidance must be tested independently"
+            assert set(guidance).issubset(manifest["next_actions"])
+            assert not manifest["policy"]["execution_authorized"]
 
         # A real directory report puts aggregate runtime guidance in
         # directory_summary.runtime_modality.  Use the system ELF loader chain
@@ -135,7 +182,7 @@ def integration_cli(binary: pathlib.Path) -> None:
                 assert manifest_cp.returncode == 0, manifest_cp.stderr
                 manifest = json.loads(manifest_cp.stdout)
                 assert set(guidance).issubset(manifest["next_actions"])
-    print("[PASS] CLI bare/envelope source provenance")
+    print("[PASS] CLI bare/envelope source provenance and nested runtime guidance")
 
 
 if __name__ == "__main__":
