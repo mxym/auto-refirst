@@ -23,7 +23,9 @@ The manifest contains:
 - `findings`: bounded evidence, negative evidence, fields and suggested
   actions, without copying arbitrary report fields;
 - `relationships`: bounded structural relations and their provenance fields;
-- `next_actions`: deterministic union of suggested actions and guidance;
+- `next_actions`: deterministic union of suggested actions and runtime guidance
+  from `analysis_guidance.runtime_modality.priority_guidance` (or the
+  directory aggregate at `directory_summary.runtime_modality`);
 - `truncation`: total and omitted counts for each bounded collection.
 
 Output uses sorted JSON keys and stable collection ordering. A caller that

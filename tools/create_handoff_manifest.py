@@ -163,6 +163,18 @@ def build(value: Any, raw: bytes, *, max_entries: int, max_findings: int,
                 relationships.append(_relationship(rec, source_report=index))
         guidance = _obj(report.get("analysis_guidance"))
         next_actions.update(_bounded_strings(guidance.get("priority_guidance")))
+        # Runtime guidance is nested in the CLI contract.  Keep the legacy
+        # report-level list above for compatibility, but read the real path.
+        modality = _obj(guidance.get("runtime_modality"))
+        next_actions.update(_bounded_strings(modality.get("priority_guidance")))
+
+    # Directory --json reports keep the aggregate runtime guidance beside
+    # reports[], under directory_summary.runtime_modality.  It is still
+    # declared evidence from the report and should not be silently dropped.
+    if isinstance(value, dict):
+        summary = _obj(value.get("directory_summary"))
+        summary_modality = _obj(summary.get("runtime_modality"))
+        next_actions.update(_bounded_strings(summary_modality.get("priority_guidance")))
 
     entries.sort(key=lambda x: (x["source_report"], x["path"], x["kind"], x["role"], x["sha256"], x["state"]))
     findings.sort(key=lambda x: (x["source_report"], x["family"], x["kind"], x["variant"], x["state"]))
