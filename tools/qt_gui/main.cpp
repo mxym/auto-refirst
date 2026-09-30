@@ -62,6 +62,7 @@ namespace {
 
 constexpr qint64 kUiOutputCap = 64ll * 1024ll * 1024ll;
 constexpr qint64 kUiErrorCap = 4ll * 1024ll * 1024ll;
+constexpr int kUiRelationshipCap = 32;
 
 struct QueueItem {
     QString path;
@@ -1258,10 +1259,12 @@ private:
 
         QStringList formats;
         QStringList lines;
+        QStringList relationship_lines;
         QStringList next_steps;
         int findings = 0;
         int confirmed = 0;
         int review = 0;
+        int relationship_matches = 0;
         bool partial = false;
         for (const auto& value : reports) {
             const QJsonObject report = value.toObject();
@@ -1289,6 +1292,29 @@ private:
                     if (!variant.isEmpty()) label += QStringLiteral(" / ") + variant;
                     lines.push_back(QStringLiteral("[%1] %2%3").arg(stateLabel(state), label, evidence_text.isEmpty() ? QString() : QStringLiteral("  — ") + evidence_text));
                 }
+            }
+            const QJsonArray relationship_array = report.value(QStringLiteral("artifact_relationships")).toArray();
+            const QString filter = m_filter_edit ? m_filter_edit->text().trimmed() : QString();
+            for (const auto& relationship_value : relationship_array) {
+                const QJsonObject relationship = relationship_value.toObject();
+                const QString kind = relationship.value(QStringLiteral("kind")).toString().trimmed();
+                const QString first = relationship.value(QStringLiteral("first")).toString().trimmed();
+                const QString second = relationship.value(QStringLiteral("second")).toString().trimmed();
+                const QString evidence_level = relationship.value(QStringLiteral("evidence_level")).toString().trimmed();
+                const QString ambiguity = relationship.value(QStringLiteral("ambiguity")).toString().trimmed();
+                const QString haystack = kind + QStringLiteral(" ") + first + QStringLiteral(" ") + second + QStringLiteral(" ") + evidence_level + QStringLiteral(" ") + ambiguity;
+                if (!filter.isEmpty() && !haystack.contains(filter, Qt::CaseInsensitive)) continue;
+                ++relationship_matches;
+                if (relationship_lines.size() >= kUiRelationshipCap) continue;
+                const QString state = stateText(relationship.value(QStringLiteral("state")).toString());
+                const QString arrow = relationship.value(QStringLiteral("directed")).toBool(true) ? QStringLiteral(" → ") : QStringLiteral(" ↔ ");
+                const QString left = first.isEmpty() ? QStringLiteral("?") : shortPath(first);
+                const QString right = second.isEmpty() ? QStringLiteral("?") : shortPath(second);
+                QString label = kind.isEmpty() ? QStringLiteral("relationship") : kind;
+                QString suffix;
+                if (!evidence_level.isEmpty()) suffix += QStringLiteral("  ·  ") + evidence_level;
+                if (!ambiguity.isEmpty() && ambiguity != QStringLiteral("NONE")) suffix += QStringLiteral("  ·  ") + ambiguity;
+                relationship_lines.push_back(QStringLiteral("[%1] %2  %3%4").arg(stateLabel(state), label, left + arrow + right, suffix));
             }
             const QJsonObject materialization = report.value(QStringLiteral("materialization")).toObject();
             if (materialization.value(QStringLiteral("partial")).toBool()) partial = true;
@@ -1327,6 +1353,15 @@ private:
         detail += m_english ? QStringLiteral("FINDINGS\n") : QStringLiteral("发现\n");
         if (lines.isEmpty()) detail += m_english ? QStringLiteral("No findings match the filter.\n") : QStringLiteral("没有符合筛选条件的发现。\n");
         else detail += lines.join(QStringLiteral("\n")) + QLatin1Char('\n');
+        if (relationship_matches > 0) {
+            detail += QStringLiteral("\n") + (m_english ? QStringLiteral("RELATIONSHIPS\n") : QStringLiteral("关系\n"));
+            detail += relationship_lines.join(QStringLiteral("\n")) + QLatin1Char('\n');
+            if (relationship_matches > relationship_lines.size()) {
+                detail += (m_english
+                    ? QStringLiteral("• %1 more relationships hidden by the UI cap or filter.\n").arg(relationship_matches - relationship_lines.size())
+                    : QStringLiteral("• 还有 %1 条关系因界面上限或筛选未显示。\n").arg(relationship_matches - relationship_lines.size()));
+            }
+        }
         if (partial) {
             detail += QStringLiteral("\n") + (m_english ? QStringLiteral("LIMITS\n") : QStringLiteral("限制\n"));
             detail += m_english ? QStringLiteral("• Some results are limited; open JSON for the full record.\n") : QStringLiteral("• 部分结果受限；打开 JSON 查看完整记录。\n");

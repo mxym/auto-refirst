@@ -63,8 +63,9 @@ cancel action, and a 64 MiB stdout cap. A timeout, process failure, malformed
 JSON, or report write failure stays attached to that queue row and does not
 discard completed reports. The summary counts findings and separates
 `CONFIRMED` from review-level states such as `LIKELY` and `SUSPECTED`. It shows
-concise next steps and whether output was partial; detailed coordinates and
-limits remain in the JSON report.
+concise next steps, a bounded `RELATIONSHIPS` list for artifact endpoints and evidence
+levels, and whether output was partial; detailed coordinates and limits
+remain in the JSON report.
 
 The interface includes a Chinese/English switch, a finding filter, a readable
 summary, next-step text, and compact limit messages. Internal evidence fields
