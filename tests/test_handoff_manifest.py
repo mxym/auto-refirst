@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import hashlib
 import json
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -36,7 +38,7 @@ def main():
                       "suggested_actions": ["inspect", "inspect"], "fields": {"z": 2, "a": 1}}],
         "artifact_relationships": [{"kind": "loader_route", "state": "CONFIRMED", "first": "/untrusted/root.bin",
                                      "second": "/untrusted/z.dll", "evidence_level": "R2"}],
-        "analysis_guidance": {"priority_guidance": ["inspect"]},
+        "analysis_guidance": {"runtime_modality": {"priority_guidance": ["inspect"]}},
     }
     cp, raw = run(report)
     assert cp.returncode == 0, cp.stderr
@@ -108,6 +110,31 @@ def integration_cli(binary: pathlib.Path) -> None:
                 "offset_space": "current_input_file",
             }
             assert "snapshot_exists" not in source
+
+        # A real directory report puts aggregate runtime guidance in
+        # directory_summary.runtime_modality.  Use the system ELF loader chain
+        # as a small, source-independent fixture when running on Linux.
+        if os.name != "nt":
+            runtime_dir = td / "runtime-chain"
+            runtime_dir.mkdir()
+            candidates = [
+                (pathlib.Path("/bin/true"), runtime_dir / "root"),
+                (pathlib.Path("/lib/x86_64-linux-gnu/libc.so.6"), runtime_dir / "libc.so.6"),
+                (pathlib.Path("/lib64/ld-linux-x86-64.so.2"), runtime_dir / "ld-linux-x86-64.so.2"),
+            ]
+            if all(src.is_file() for src, _ in candidates):
+                for src, dst in candidates:
+                    shutil.copyfile(src, dst)
+                cp = subprocess.run([str(binary), str(runtime_dir), "--json", "--json-envelope"],
+                                    text=True, encoding="utf-8", capture_output=True, check=False)
+                assert cp.returncode == 0, cp.stderr
+                directory_report = json.loads(cp.stdout)
+                guidance = directory_report["directory_summary"]["runtime_modality"]["priority_guidance"]
+                assert guidance, directory_report["directory_summary"]
+                manifest_cp, _ = run(directory_report)
+                assert manifest_cp.returncode == 0, manifest_cp.stderr
+                manifest = json.loads(manifest_cp.stdout)
+                assert set(guidance).issubset(manifest["next_actions"])
     print("[PASS] CLI bare/envelope source provenance")
 
 
