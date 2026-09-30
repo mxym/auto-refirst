@@ -63,6 +63,7 @@ namespace {
 constexpr qint64 kUiOutputCap = 64ll * 1024ll * 1024ll;
 constexpr qint64 kUiErrorCap = 4ll * 1024ll * 1024ll;
 constexpr int kUiRelationshipCap = 32;
+constexpr int kUiRuntimeCap = 8;
 
 struct QueueItem {
     QString path;
@@ -1142,6 +1143,19 @@ private:
         return state;
     }
 
+    QString runtimeStateLabel(const QString& raw) const {
+        const QString state = stateText(raw);
+        if (m_english) return state;
+        static const QHash<QString, QString> labels = {
+            {QStringLiteral("PLANNED"), QStringLiteral("已计划")},
+            {QStringLiteral("SKIPPED"), QStringLiteral("已跳过")},
+            {QStringLiteral("COMPLETED"), QStringLiteral("已完成")},
+            {QStringLiteral("FAILED"), QStringLiteral("失败")},
+        };
+        const auto it = labels.constFind(state);
+        return it == labels.constEnd() ? state : it.value();
+    }
+
     QString familyLabel(const QString& raw) const {
         if (m_english || raw.isEmpty()) return raw;
         struct Pair { const char* source; const char* translated; };
@@ -1260,11 +1274,14 @@ private:
         QStringList formats;
         QStringList lines;
         QStringList relationship_lines;
+        QStringList runtime_lines;
         QStringList next_steps;
         int findings = 0;
         int confirmed = 0;
         int review = 0;
         int relationship_matches = 0;
+        int runtime_omitted = 0;
+        bool runtime_seen = false;
         bool partial = false;
         for (const auto& value : reports) {
             const QJsonObject report = value.toObject();
@@ -1316,6 +1333,43 @@ private:
                 if (!ambiguity.isEmpty() && ambiguity != QStringLiteral("NONE")) suffix += QStringLiteral("  ·  ") + ambiguity;
                 relationship_lines.push_back(QStringLiteral("[%1] %2  %3%4").arg(stateLabel(state), label, left + arrow + right, suffix));
             }
+            const QJsonObject runtime_plan = report.value(QStringLiteral("orchestration")).toObject().value(QStringLiteral("runtime_plan")).toObject();
+            if (!runtime_plan.isEmpty()) {
+                runtime_seen = true;
+                const bool eligible = runtime_plan.value(QStringLiteral("runtime_eligible")).toBool();
+                const QString policy = runtime_plan.value(QStringLiteral("policy")).toString().trimmed();
+                const QString input = shortPath(report.value(QStringLiteral("input")).toString());
+                const QString sample_prefix = input.isEmpty() ? QString() : QStringLiteral("[%1] ").arg(input);
+                const QString status = eligible
+                    ? (m_english ? QStringLiteral("eligible") : QStringLiteral("可用"))
+                    : (m_english ? QStringLiteral("blocked") : QStringLiteral("不可用"));
+                QString header = m_english
+                    ? QStringLiteral("%1backend %2").arg(sample_prefix, status)
+                    : QStringLiteral("%1后端：%2").arg(sample_prefix, status);
+                if (!policy.isEmpty()) header += QStringLiteral("  ·  policy=") + policy;
+                if (runtime_lines.size() < kUiRuntimeCap) runtime_lines.push_back(header);
+                else ++runtime_omitted;
+                const QString reason = runtime_plan.value(QStringLiteral("runtime_eligibility_reason")).toString().simplified();
+                if (!reason.isEmpty()) {
+                    QString reason_line = (m_english ? QStringLiteral("  eligibility: ") : QStringLiteral("  资格原因：")) + reason.left(280);
+                    if (runtime_lines.size() < kUiRuntimeCap) runtime_lines.push_back(reason_line);
+                    else ++runtime_omitted;
+                }
+                const QJsonArray runtime_steps = runtime_plan.value(QStringLiteral("steps")).toArray();
+                for (const auto& step_value : runtime_steps) {
+                    const QJsonObject step = step_value.toObject();
+                    const QString analyzer = step.value(QStringLiteral("analyzer")).toString().trimmed();
+                    const QString state = stateText(step.value(QStringLiteral("state")).toString());
+                    const QString selection = step.value(QStringLiteral("selected")).toBool()
+                        ? (m_english ? QStringLiteral("selected") : QStringLiteral("已选择"))
+                        : (m_english ? QStringLiteral("skipped") : QStringLiteral("已跳过"));
+                    const QString step_reason = step.value(QStringLiteral("reason")).toString().simplified();
+                    QString line = QStringLiteral("• [%1 · %2] %3").arg(runtimeStateLabel(state), selection, analyzer.isEmpty() ? QStringLiteral("step") : analyzer);
+                    if (!step_reason.isEmpty()) line += QStringLiteral("  — ") + step_reason.left(240);
+                    if (runtime_lines.size() < kUiRuntimeCap) runtime_lines.push_back(line);
+                    else ++runtime_omitted;
+                }
+            }
             const QJsonObject materialization = report.value(QStringLiteral("materialization")).toObject();
             if (materialization.value(QStringLiteral("partial")).toBool()) partial = true;
             const QJsonObject graph = report.value(QStringLiteral("artifact_graph")).toObject();
@@ -1360,6 +1414,15 @@ private:
                 detail += (m_english
                     ? QStringLiteral("• %1 more relationships hidden by the UI cap or filter.\n").arg(relationship_matches - relationship_lines.size())
                     : QStringLiteral("• 还有 %1 条关系因界面上限或筛选未显示。\n").arg(relationship_matches - relationship_lines.size()));
+            }
+        }
+        if (runtime_seen) {
+            detail += QStringLiteral("\n") + (m_english ? QStringLiteral("RUNTIME\n") : QStringLiteral("运行时\n"));
+            detail += runtime_lines.join(QStringLiteral("\n")) + QLatin1Char('\n');
+            if (runtime_omitted > 0) {
+                detail += (m_english
+                    ? QStringLiteral("• %1 runtime plan entries hidden by the UI cap.\n").arg(runtime_omitted)
+                    : QStringLiteral("• 还有 %1 条运行计划因界面上限未显示。\n").arg(runtime_omitted));
             }
         }
         if (partial) {
