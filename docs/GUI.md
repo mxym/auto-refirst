@@ -64,8 +64,9 @@ JSON, or report write failure stays attached to that queue row and does not
 discard completed reports. The summary counts findings and separates
 `CONFIRMED` from review-level states such as `LIKELY` and `SUSPECTED`. It shows
 concise next steps, a bounded `RELATIONSHIPS` list for artifact endpoints and evidence
-levels, and whether output was partial; detailed coordinates and limits
-remain in the JSON report.
+levels, and a bounded `RUNTIME` section with backend eligibility, policy, and each
+selected or skipped runtime-plan step plus its reason. Whether output was partial
+remains visible; detailed coordinates and limits stay in the JSON report.
 
 The interface includes a Chinese/English switch, a finding filter, a readable
 summary, next-step text, and compact limit messages. Internal evidence fields
