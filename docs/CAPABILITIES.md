@@ -132,6 +132,8 @@
 
 `--extract --recursive` 保持静态；不会因此执行子工件。
 
+静态交接还可通过 `tools/create_handoff_manifest.py` 将 JSON 报告转换为确定性的 `auto-refirst.static-handoff-manifest`。该 sidecar 只读取报告字节，不跟随报告中的路径；它保留有界工件、发现、关系、输入快照和 SHA-256 字段，并明确标记所有条目为不可信、禁止执行/安装/回写。
+
 ## 7. 目录编排与资源约束
 
 目录默认递归。候选通过有界 preflight 评分后进入完整静态分析，并结合跨文件关系重新排序。
