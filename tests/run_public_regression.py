@@ -475,6 +475,9 @@ def p0_report_json(binary:pathlib.Path,td:pathlib.Path) -> None:
         assert cp.returncode==4,(cp.returncode,cp.stderr[-1000:])
         diagnostic=cp.stderr.lower()
         assert b"output" in diagnostic and b"failed" in diagnostic,cp.stderr[-1000:]
+    handoff = run([sys.executable, ROOT / "tests" / "test_handoff_manifest.py", binary], timeout=120)
+    if handoff.stdout.strip():
+        log(handoff.stdout.strip())
     log("[PASS P0] text/JSON/version + CLI exit-code contract")
 
 

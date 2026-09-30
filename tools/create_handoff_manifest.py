@@ -67,12 +67,13 @@ def _reports(value: Any) -> list[dict[str, Any]]:
 
 
 def _source(report: dict[str, Any]) -> dict[str, Any]:
-    snap = _obj(report.get("input_snapshot"))
+    # The CLI report carries the source snapshot at the report root. There is
+    # no input_snapshot object (and no exists bit) in the public JSON schema;
+    # do not synthesize one or claim that a path was observed to exist.
     return {
         "path": _str(report.get("input")),
-        "sha256": _str(snap.get("sha256")),
-        "size": _num(snap.get("size")),
-        "snapshot_exists": _bool(snap.get("exists")),
+        "sha256": _str(report.get("sha256")),
+        "size": _num(report.get("size")),
         "offset_space": "current_input_file",
     }
 

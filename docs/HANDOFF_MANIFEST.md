@@ -16,8 +16,8 @@ entry is marked `STATIC_ARTIFACT_UNTRUSTED`; runtime observations use
 
 The manifest contains:
 
-- `sources`: declared input paths and the report-provided input snapshot,
-  scoped to `current_input_file`;
+- `sources`: declared input paths plus the report-provided top-level SHA-256
+  and size, scoped to `current_input_file`;
 - `entries`: bounded static and runtime artifact observations with state,
   role, relation, size and SHA-256 when supplied by the report;
 - `findings`: bounded evidence, negative evidence, fields and suggested
