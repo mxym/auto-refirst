@@ -377,6 +377,18 @@ if(Python3_Interpreter_FOUND)
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_qt_ui_contract.py"
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
       USES_TERMINAL VERBATIM)
+
+  if(AUTO_REFIRST_BUILD_QT_UI)
+    # Build and run the real Widgets executable on the offscreen platform. The
+    # smoke driver supplies a deterministic CLI report, captures the rendered
+    # window, and checks both visible text and decoded pixels.
+    add_custom_target(auto_refirst_public_qt_ui_smoke
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_qt_ui_smoke.py"
+                --gui "$<TARGET_FILE:auto_refirst_gui>"
+        DEPENDS auto_refirst_gui
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        USES_TERMINAL VERBATIM)
+  endif()
 endif()
 
 # Self-contained public CI helpers. These are built on demand by the public regression runner.

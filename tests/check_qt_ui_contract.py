@@ -16,6 +16,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CMAKE = ROOT / "CMakeLists.txt"
 SOURCE = ROOT / "tools" / "qt_gui" / "main.cpp"
+SMOKE = ROOT / "tests" / "run_qt_ui_smoke.py"
 
 
 def fail(message: str) -> None:
@@ -25,6 +26,8 @@ def fail(message: str) -> None:
 def main() -> int:
     cmake = CMAKE.read_text(encoding="utf-8")
     source = SOURCE.read_text(encoding="utf-8")
+    if not SMOKE.is_file():
+        fail("missing executable Qt smoke driver")
     if not re.search(r"option\(\s*AUTO_REFIRST_BUILD_QT_UI[^\n]*\sOFF\s*\)", cmake):
         fail("AUTO_REFIRST_BUILD_QT_UI must default OFF")
     for needle in (
@@ -96,6 +99,7 @@ def main() -> int:
         "AUTO_REFIRST_GUI_LANGUAGE",
         "AUTO_REFIRST_GUI_PAGE",
         "AUTO_REFIRST_GUI_SEARCH",
+        "AUTO_REFIRST_GUI_DETAIL_DUMP",
         "QDesktopServices::openUrl",
     ):
         if needle not in source:
