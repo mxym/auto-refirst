@@ -112,6 +112,8 @@ public:
         if (!output_override.isEmpty()) m_output_edit->setText(QString::fromLocal8Bit(output_override));
         const QByteArray screenshot_override = qgetenv("AUTO_REFIRST_GUI_SCREENSHOT");
         if (!screenshot_override.isEmpty()) m_screenshot_path = QString::fromLocal8Bit(screenshot_override);
+        const QByteArray detail_dump_override = qgetenv("AUTO_REFIRST_GUI_DETAIL_DUMP");
+        if (!detail_dump_override.isEmpty()) m_detail_dump_path = QString::fromLocal8Bit(detail_dump_override);
         const QByteArray search_override = qgetenv("AUTO_REFIRST_GUI_SEARCH");
         if (!search_override.isEmpty()) m_search_edit->setText(QString::fromLocal8Bit(search_override));
         if (qgetenv("AUTO_REFIRST_GUI_LANGUAGE").toLower() == QByteArrayLiteral("en")) m_language->setCurrentIndex(1);
@@ -1519,7 +1521,19 @@ private:
         if (m_automation_scheduled || m_screenshot_path.isEmpty() || m_items.isEmpty() || terminalCount() != m_items.size()) return;
         m_automation_scheduled = true;
         QTimer::singleShot(250, this, [this] {
+            // The offscreen smoke test uses the same rendered widget tree as a
+            // desktop run. Keep an optional plain-text dump alongside the
+            // screenshot so the test can assert that escaping and bounded
+            // relationship/limit labels reached the visible report.
             grab().save(m_screenshot_path);
+            if (!m_detail_dump_path.isEmpty()) {
+                QFile dump(m_detail_dump_path);
+                if (dump.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                    const QByteArray text = m_detail->toPlainText().toUtf8();
+                    dump.write(text);
+                    dump.close();
+                }
+            }
             if (m_exit_after_analysis) QCoreApplication::quit();
         });
     }
@@ -1604,6 +1618,7 @@ private:
     bool m_closing = false;
     int m_completed = 0;
     QString m_screenshot_path;
+    QString m_detail_dump_path;
     bool m_exit_after_analysis = false;
     bool m_automation_scheduled = false;
     bool m_english = false;
