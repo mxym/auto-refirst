@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cctype>
 #include <fstream>
 #include <limits>
 #include <set>
@@ -36,6 +37,67 @@ std::string optu(const std::optional<std::uint32_t>&v){return v?std::to_string(*
 std::string optid(const std::optional<std::uint64_t>&v){return v?std::to_string(*v):"";}
 std::string basis_name(CoordinateBasis b){return coordinate_basis_name(b);}
 std::string space_name(CoordinateSpace s){return coordinate_space_name(s);}
+
+std::string lower_ascii(std::string value){
+    for(auto& c:value)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return value;
+}
+
+bool same_runtime_path(const std::string& a,const std::string& b){
+    if(a.empty()||b.empty())return false;
+    if(a==b)return true;
+#ifdef _WIN32
+    return lower_ascii(a)==lower_ascii(b);
+#else
+    return false;
+#endif
+}
+
+bool runtime_backing_kind(const std::string& value){
+    const auto k=lower_ascii(value);
+    return k.find("runtime_released_file")!=std::string::npos||
+           k.find("runtime_memfd")!=std::string::npos||
+           k.find("runtime_tmpfile")!=std::string::npos||
+           k=="released_file"||k=="memfd"||k=="tmpfile";
+}
+
+std::optional<std::uint64_t> parse_hex_or_decimal(std::string value){
+    while(!value.empty()&&std::isspace(static_cast<unsigned char>(value.front())))value.erase(value.begin());
+    while(!value.empty()&&std::isspace(static_cast<unsigned char>(value.back())))value.pop_back();
+    return parse_u64(value);
+}
+
+// Runtime mutation ranges are emitted by both backends as a compact
+// "rva 0x123+0x20;..." string. Keep the renderer bounded and discard malformed
+// entries instead of guessing a coordinate.
+std::vector<RangeRef> parse_runtime_rva_ranges(const std::string& text,const std::string& image,std::uint64_t process_uid){
+    std::vector<RangeRef> out;
+    std::size_t begin=0;
+    while(begin<text.size()&&out.size()<32){
+        const auto end=text.find(';',begin);
+        const auto token=text.substr(begin,end==std::string::npos?std::string::npos:end-begin);
+        const auto marker=token.find("rva ");
+        const auto plus=token.find('+',marker==std::string::npos?0:marker+4);
+        if(marker!=std::string::npos&&plus!=std::string::npos){
+            auto value=parse_hex_or_decimal(token.substr(marker+4,plus-(marker+4)));
+            auto size=parse_hex_or_decimal(token.substr(plus+1));
+            if(value&&size&&*size){
+                out.push_back(rva_range(*value,*size,"runtime-changed executable bytes",CoordinateBasis::PROCESS_IMAGE,image,process_uid));
+            }
+        }
+        if(end==std::string::npos)break;
+        begin=end+1;
+    }
+    return out;
+}
+
+bool has_family(const AnalysisReport& report,const std::string& family){
+    return std::any_of(report.findings.begin(),report.findings.end(),[&](const auto& f){return f.family==family;});
+}
+
+std::string hex_text(std::uint64_t value){
+    std::ostringstream out;out<<"0x"<<std::hex<<value;return out.str();
+}
 
 bool artifact_nonzero(const RuntimeArtifact&a){
     if(a.path.empty()) return false;
@@ -282,8 +344,74 @@ bool write_materialization_graph_csv(const MaterializationGraph&g,const std::fil
     std::error_code ec;auto dir=nodes.parent_path();if(!dir.empty())std::filesystem::create_directories(dir,ec);if(ec){error="cannot create materialization graph directory: "+ec.message();return false;}std::ofstream nf(nodes,std::ios::trunc);if(!nf){error="cannot create "+path_utf8(nodes);return false;}nf<<"node_id,kind,generation,executed,process_uid,pid,thread_id,creator_process_uid,creator_thread_id,writer_process_uid,writer_thread_id,writer_execution_generation,write_first_seq,write_last_seq,first_execution_process_uid,first_execution_thread_id,first_execution_seq,first_execution_address,seq,t_us,coordinate_space,coordinate_basis,address,size,backing_identity,backing_path,device,inode,sha256,evidence_state,image,cross_process,detail\n";for(const auto&n:g.nodes)nf<<n.id<<','<<materialization_node_kind_name(n.kind)<<','<<optu(n.generation)<<','<<(n.executed?"true":"false")<<','<<n.process_uid<<','<<n.pid<<','<<(n.thread_id?std::to_string(*n.thread_id):"UNKNOWN")<<','<<n.creator_process_uid<<','<<(n.creator_thread_id?std::to_string(*n.creator_thread_id):"UNKNOWN")<<','<<n.writer_process_uid<<','<<(n.writer_thread_id?std::to_string(*n.writer_thread_id):"UNKNOWN")<<','<<optu(n.writer_execution_generation)<<','<<n.write_first_seq<<','<<n.write_last_seq<<','<<n.first_execution_process_uid<<','<<(n.first_execution_thread_id?std::to_string(*n.first_execution_thread_id):"UNKNOWN")<<','<<n.first_execution_seq<<",0x"<<std::hex<<n.first_execution_address<<std::dec<<','<<n.seq<<','<<n.t_us<<','<<space_name(n.coordinate_space)<<','<<basis_name(n.coordinate_basis)<<",0x"<<std::hex<<n.address<<std::dec<<','<<n.size<<','<<csvq(n.backing_identity)<<','<<csvq(n.backing_path)<<','<<n.device<<','<<n.inode<<','<<csvq(n.sha256)<<','<<csvq(n.evidence_state)<<','<<csvq(n.image)<<','<<(n.cross_process?"true":"false")<<','<<csvq(n.detail)<<'\n';if(!nf){error="write failed for "+path_utf8(nodes);return false;}std::ofstream ef(edges,std::ios::trunc);if(!ef){error="cannot create "+path_utf8(edges);return false;}ef<<"edge_id,source_node,destination_node,kind,source_generation,destination_generation,writer_execution_generation,process_uid,thread_id,seq,t_us,evidence_state,coordinate_basis,address,size,detail\n";for(const auto&e:g.edges){std::optional<std::uint32_t>dg;if(e.destination_node&&e.destination_node<=g.nodes.size())dg=g.nodes[static_cast<std::size_t>(e.destination_node-1)].generation;ef<<e.id<<','<<optid(e.source_node)<<','<<e.destination_node<<','<<materialization_edge_kind_name(e.kind)<<','<<optu(e.source_generation)<<','<<optu(dg)<<','<<optu(e.writer_execution_generation)<<','<<e.process_uid<<','<<(e.thread_id?std::to_string(*e.thread_id):"UNKNOWN")<<','<<e.seq<<','<<e.t_us<<','<<csvq(e.evidence_state)<<','<<basis_name(e.coordinate_basis)<<",0x"<<std::hex<<e.address<<std::dec<<','<<e.size<<','<<csvq(e.detail)<<'\n';}if(!ef){error="write failed for "+path_utf8(edges);return false;}return true;
 }
 
+void append_runtime_actionable_findings(AnalysisReport&report,const MaterializationGraph&g){
+    // Keep the default report focused on runtime facts that change the next
+    // reverse-engineering step. The complete event/timeline and graph remain
+    // available as detail artifacts.
+    if(!has_family(report,"Runtime-created module load")){
+        std::size_t emitted=0;
+        for(const auto&load:report.runtime.timeline){
+            if(emitted>=32)break;
+            if(load.kind!=TimelineKind::ModuleLoad||load.subject.empty())continue;
+            const TimelineEvent* create=nullptr;bool runtime_backing=false;
+            for(const auto&e:report.runtime.timeline){
+                if(e.seq>load.seq)continue;
+                if((e.kind==TimelineKind::FileCreate||e.kind==TimelineKind::FileWrite)&&same_runtime_path(e.subject,load.subject)){
+                    create=&e;
+                    if(auto bk=field(e.fields,"backing_kind"))runtime_backing=runtime_backing||runtime_backing_kind(*bk);
+                    if(auto op=field(e.fields,"operation"))runtime_backing=runtime_backing||runtime_backing_kind(*op);
+                }
+            }
+            if(!create)continue;
+            Finding f;f.kind="runtime";f.family="Runtime-created module load";f.variant=runtime_backing?"runtime_backing":"created_file";f.state="CONFIRMED";
+            f.evidence.push_back("a file created or written during execution was loaded as a module");
+            f.fields["path"]=load.subject;f.fields["process_uid"]=std::to_string(load.process_uid);f.fields["load_event_seq"]=std::to_string(load.seq);f.fields["create_event_seq"]=std::to_string(create->seq);
+            if(auto base=fu64(load.fields,"base")){f.fields["module_base"]=hex_text(*base);f.ranges.push_back(va_range(*base,1,"runtime-created module base",CoordinateBasis::PROCESS_IMAGE,load.subject,load.process_uid));}
+            report.findings.push_back(std::move(f));++emitted;
+        }
+    }
+
+    if(!has_family(report,"Runtime-created executable")){
+        std::size_t emitted=0;
+        for(const auto&e:g.edges){
+            if(e.kind!=MaterializationEdgeKind::FIRST_EXECUTED_AS||!e.destination_node||e.destination_node>g.nodes.size()||emitted>=32)continue;
+            const auto&n=g.nodes[static_cast<std::size_t>(e.destination_node-1)];
+            if(n.kind!=MaterializationNodeKind::RELEASED_FILE&&n.kind!=MaterializationNodeKind::MEMFD_BACKING&&n.kind!=MaterializationNodeKind::O_TMPFILE_BACKING)continue;
+            Finding f;f.kind="runtime";f.family="Runtime-created executable";f.variant=materialization_node_kind_name(n.kind);f.state="CONFIRMED";
+            f.evidence.push_back("runtime-created backing bytes reached execution");
+            f.fields["process_uid"]=std::to_string(n.process_uid);f.fields["execution_event_seq"]=std::to_string(e.seq);if(n.generation)f.fields["generation"]=std::to_string(*n.generation);if(!n.backing_path.empty())f.fields["backing_path"]=n.backing_path;
+            const auto size=e.size?e.size:(n.size?n.size:1);if(e.address)f.ranges.push_back(va_range(e.address,size,"first execution of runtime-created backing",CoordinateBasis::MEMORY_REGION,n.backing_path,n.process_uid));
+            report.findings.push_back(std::move(f));++emitted;
+        }
+    }
+
+    if(!has_family(report,"Runtime executable mutation")){
+        std::size_t emitted=0;
+        for(const auto&e:report.runtime.timeline){
+            if(e.kind!=TimelineKind::MemoryWrite||emitted>=32)continue;
+            const auto changed=fu64(e.fields,"changed_bytes").value_or(0);
+            const bool candidate=field_is(e.fields,"runtime_mutation_generation_candidate","true")||
+                field_is(e.fields,"image_mutation_state","CHANGED_SINCE_PROCESS_CREATE")||
+                field_is(e.fields,"source","remote_image_baseline_diff");
+            if(!candidate||!changed)continue;
+            Finding f;f.kind="runtime";f.family="Runtime executable mutation";f.state="CONFIRMED";
+            f.evidence.push_back("executable bytes changed after the process image or materialized region had been observed");
+            f.fields["process_uid"]=std::to_string(e.process_uid);f.fields["event_seq"]=std::to_string(e.seq);f.fields["changed_bytes"]=std::to_string(changed);
+            if(auto source=field(e.fields,"source"))f.fields["source"]=*source;
+            if(auto trigger=field(e.fields,"trigger"))f.fields["trigger"]=*trigger;
+            if(auto ranges=field(e.fields,"changed_ranges")){for(auto&r:parse_runtime_rva_ranges(*ranges,e.process_image,e.process_uid))f.ranges.push_back(std::move(r));}
+            if(f.ranges.empty()){
+                auto start=fu64(e.fields,"range_start");auto end=fu64(e.fields,"range_end");
+                if(start&&end&&*end>*start)f.ranges.push_back(va_range(*start,*end-*start,"runtime-changed executable region",CoordinateBasis::MEMORY_REGION,e.process_image,e.process_uid));
+                else if(auto first=fu64(e.fields,"first_changed_rva"))f.ranges.push_back(rva_range(*first,1,"first runtime-changed executable byte",CoordinateBasis::PROCESS_IMAGE,e.process_image,e.process_uid));
+            }
+            report.findings.push_back(std::move(f));++emitted;
+        }
+    }
+}
+
 void finalize_materialization_graph(AnalysisReport&report,const std::filesystem::path&artifact_dir){
-    auto g=build_materialization_graph(report.runtime,&report.replacement);const auto np=artifact_dir/"materialization-graph.csv",ep=artifact_dir/"materialization-edges.csv";std::string err;const bool ok=write_materialization_graph_csv(g,np,ep,err);RuntimeArtifact a;a.kind="materialization_graph";a.state=ok?"CONFIRMED":"FAILED";a.path=np;a.process_uid=1;a.detail=ok?"causal runtime materialization/stage provenance graph built from Timeline and RuntimeArtifact facts":"materialization graph build succeeded but CSV persistence failed: "+err;a.fields["nodes_path"]=path_utf8(np);a.fields["edges_path"]=path_utf8(ep);a.fields["generation_count"]=std::to_string(g.summary.generation_count);a.fields["deepest_confirmed_generation"]=std::to_string(g.summary.deepest_confirmed_generation);a.fields["executed_generation_count"]=std::to_string(g.summary.executed_generation_count);a.fields["image_generation_count"]=std::to_string(g.summary.image_generation_count);a.fields["memory_only_generation_count"]=std::to_string(g.summary.memory_only_generation_count);a.fields["cross_process_generation_count"]=std::to_string(g.summary.cross_process_generation_count);a.fields["provenance_unknown_edge_count"]=std::to_string(g.summary.provenance_unknown_edge_count);a.fields["node_count"]=std::to_string(g.nodes.size());a.fields["edge_count"]=std::to_string(g.edges.size());a.fields["semantic_divergence_count"]=std::to_string(g.divergences.size());a.fields["partial"]=g.summary.partial?"true":"false";a.fields["generation_contract"]="generation requires confirmed runtime materialization plus execution/exec-handoff; allocation/protection alone never assigns a generation";a.fields["source_generation_contract"]="MATERIALIZED_BY_RUNTIME retains source_generation=UNKNOWN unless exact source-byte generation is proven";if(!g.divergences.empty()){std::ostringstream d;for(std::size_t i=0;i<g.divergences.size();++i){if(i)d<<"; ";d<<g.divergences[i].kind<<'['<<g.divergences[i].static_expectation<<" -> "<<g.divergences[i].runtime_observation<<']';if(d.tellp()>8192){d<<"; ...";break;}}a.fields["semantic_divergences"]=d.str();}report.runtime.artifacts.push_back(std::move(a));
+    auto g=build_materialization_graph(report.runtime,&report.replacement);append_runtime_actionable_findings(report,g);const auto np=artifact_dir/"materialization-graph.csv",ep=artifact_dir/"materialization-edges.csv";std::string err;const bool ok=write_materialization_graph_csv(g,np,ep,err);RuntimeArtifact a;a.kind="materialization_graph";a.state=ok?"CONFIRMED":"FAILED";a.path=np;a.process_uid=1;a.detail=ok?"causal runtime materialization/stage provenance graph built from Timeline and RuntimeArtifact facts":"materialization graph build succeeded but CSV persistence failed: "+err;a.fields["nodes_path"]=path_utf8(np);a.fields["edges_path"]=path_utf8(ep);a.fields["generation_count"]=std::to_string(g.summary.generation_count);a.fields["deepest_confirmed_generation"]=std::to_string(g.summary.deepest_confirmed_generation);a.fields["executed_generation_count"]=std::to_string(g.summary.executed_generation_count);a.fields["image_generation_count"]=std::to_string(g.summary.image_generation_count);a.fields["memory_only_generation_count"]=std::to_string(g.summary.memory_only_generation_count);a.fields["cross_process_generation_count"]=std::to_string(g.summary.cross_process_generation_count);a.fields["provenance_unknown_edge_count"]=std::to_string(g.summary.provenance_unknown_edge_count);a.fields["node_count"]=std::to_string(g.nodes.size());a.fields["edge_count"]=std::to_string(g.edges.size());a.fields["semantic_divergence_count"]=std::to_string(g.divergences.size());a.fields["partial"]=g.summary.partial?"true":"false";a.fields["generation_contract"]="generation requires confirmed runtime materialization plus execution/exec-handoff; allocation/protection alone never assigns a generation";a.fields["source_generation_contract"]="MATERIALIZED_BY_RUNTIME retains source_generation=UNKNOWN unless exact source-byte generation is proven";if(!g.divergences.empty()){std::ostringstream d;for(std::size_t i=0;i<g.divergences.size();++i){if(i)d<<"; ";d<<g.divergences[i].kind<<'['<<g.divergences[i].static_expectation<<" -> "<<g.divergences[i].runtime_observation<<']';if(d.tellp()>8192){d<<"; ...";break;}}a.fields["semantic_divergences"]=d.str();}report.runtime.artifacts.push_back(std::move(a));
 }
 
 } // namespace prts

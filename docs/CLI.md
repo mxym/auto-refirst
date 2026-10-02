@@ -14,6 +14,7 @@ auto-refirst <file|directory> [options]
 -h, --help
 --version
 --json
+--summary
 --json-errors
 --json-envelope
 --report-lang=en|zh
@@ -22,6 +23,8 @@ auto-refirst <file|directory> [options]
 --apply
 --timeout=MS
 ```
+
+`--summary` 生成面向下一步逆向工作的单文件摘要：只保留格式、已物化工件、可行动 finding、坐标和已有建议，不展开哈希、解析库存或内部路由诊断。默认完整报告和既有 JSON 结构保持不变；与 `--json` 联用时，结果带有 `view: "summary"`，便于界面按需展开完整报告。
 
 目录默认递归；可通过 `--max-depth`、`--max-runtime-targets`、`--total-runtime-budget` 和 `--run-all` 控制运行计划。
 
@@ -85,6 +88,8 @@ auto-refirst target --run --json
 ```
 
 `--run` 允许执行目标，并在支持的平台上选择 runtime trace、materialization、reconstruction 等步骤。它不会授权安装/替换原输入。
+
+运行时观察会把影响后续静态分析的事实提升到 finding：例如运行期间创建或释放后被加载的模块、运行时 backing 首次进入执行，以及已观测可执行区域发生自修改。finding 会保留模块基址、首次执行地址或变化范围；完整时间线和物化因果图仍写入运行时产物，避免把每个系统调用都塞进主报告。
 
 ```sh
 auto-refirst target --run --apply --json

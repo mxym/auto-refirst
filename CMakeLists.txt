@@ -411,6 +411,17 @@ if(WIN32)
   target_compile_definitions(auto_refirst_public_directory_report_spool_unit PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
+add_executable(auto_refirst_public_materialization_graph_unit EXCLUDE_FROM_ALL
+    tests/materialization_graph_unit.cpp
+    src/runtime/materialization_graph.cpp
+    src/core/file_snapshot.cpp
+    src/core/sha256.cpp
+)
+target_include_directories(auto_refirst_public_materialization_graph_unit PRIVATE include)
+if(WIN32)
+  target_compile_definitions(auto_refirst_public_materialization_graph_unit PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 add_executable(auto_refirst_public_model_trust_unit EXCLUDE_FROM_ALL
     tests/model_trust_unit.cpp
     src/reference/model_trust.cpp
@@ -525,6 +536,7 @@ add_executable(auto_refirst_public_fixture_runtime_parent EXCLUDE_FROM_ALL tests
 set(AUTO_REFIRST_PUBLIC_UNIT_TARGETS
     auto_refirst_public_mapped_file_snapshot_unit
     auto_refirst_public_directory_report_spool_unit
+    auto_refirst_public_materialization_graph_unit
     auto_refirst_public_model_trust_unit
     auto_refirst_public_python_bytecode_unit
     auto_refirst_public_flutter_codec_unit
