@@ -53,6 +53,7 @@ These are meaningful only when multiple facts line up:
 - `NtQuerySystemInformation(SystemKernelDebuggerInformation=35/0x23)` is recognized as a kernel-debugger-state query but remains `LIKELY`, because the information class is an NT-internal/version-sensitive contract rather than a stable Win32 API surface. A 2-byte output length is retained as strengthening evidence.
 - `NtQueryObject(ObjectTypeInformation=2)` is promoted only when the output `OBJECT_TYPE_INFORMATION` buffer is recovered, a later comparison loads `UNICODE_STRING.Buffer` at output-buffer `+8`, the comparison's actual UTF-16 literal is `DebugObject`, and the compare callsite is in the same bounded x64 function. Merely importing `NtQueryObject` or containing a `DebugObject` string is insufficient.
 - x64 `PEB.NtGlobalFlag` is recognized only when the PEB is derived from `GS:[0x60]`, offset `+0xBC` is accessed, and the canonical debug-heap mask `0x70` is explicitly tested/masked. The internal offset is reported as version-sensitive and is not treated like a public ABI.
+- x64 `PEB.ProcessHeap` is recognized only when `GS:[0x60] -> PEB + 0x30` is recovered and the resulting heap pointer reaches a bounded `Flags` (`+0x70`) or `ForceFlags` (`+0x74`) `TEST`/`CMP`/`AND` operation. A bare `+0x30`, `+0x70`, or `+0x74` load is ignored.
 
 ### Weak/ambiguous — normally `SUSPECTED`
 
@@ -103,6 +104,7 @@ Implemented now:
 17. `NtQueryObject(ObjectTypeInformation)` with stack-output + `TypeName.Buffer` + exact `DebugObject` comparison correlation.
 18. bounded current-PE executable-range software-breakpoint scans that compare each byte against `0xCC`, with exact target file/RVA range recovery.
 19. separate `Self-integrity` findings for bounded current-PE executable-range ADD32/XOR32/FNV-1a32 byte checksums, with scanner/direct-caller reference comparison, immediate/RIP-global references, exact target range recovery, and current-reference match/mismatch recomputation.
+20. x64 PEB `ProcessHeap` `Flags`/`ForceFlags` probes, requiring PEB-to-heap data flow and a concrete field test rather than magic-offset co-occurrence.
 
 ## Research backlog / planned detectors
 
@@ -110,8 +112,7 @@ The following techniques are useful, but require additional validation before th
 
 ### PEB / heap internals
 
-- process heap `Flags` / `ForceFlags` debugger-dependent values.
-- direct heap metadata checks across Windows generations.
+- direct heap metadata checks across Windows generations. The current detector deliberately reports only the x64 PEB-to-heap offsets and exact field test; version-specific heap layouts and non-x64 variants remain separate research work.
 
 These are version/heap-implementation sensitive. They should not be reported solely from a magic offset without architecture/version context.
 
