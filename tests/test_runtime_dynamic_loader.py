@@ -61,6 +61,7 @@ def main() -> int:
         loads = [e for e in report["runtime"]["timeline"] if e.get("kind") == "module_load" and e.get("fields", {}).get("source") == "runtime_dynamic_loader"]
         payload_loads = [e for e in loads if e.get("fields", {}).get("module_path") == str(lib)]
         assert len(payload_loads) == 1, loads
+        assert len(loads) == 1, loads
         assert all(e.get("fields", {}).get("initial_image") == "false" for e in loads), loads
         hit = payload_loads[0]
         fields = hit["fields"]
