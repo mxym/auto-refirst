@@ -151,6 +151,11 @@ def peb_process_heap_flags() -> bytes:
     )
 
 
+def peb_process_heap_pointer_only() -> bytes:
+    # The same ProcessHeap derivation without reading or testing Flags.
+    return bytes.fromhex("65488b042560000000488b4830c3")
+
+
 def run(binary: Path, payload: bytes) -> dict:
     with tempfile.TemporaryDirectory(prefix="ar-antidebug-bait-") as raw:
         sample = Path(raw) / "sample.exe"
@@ -210,6 +215,8 @@ def main() -> None:
     findings = anti(heap)
     assert any(x["variant"] == "PEB.ProcessHeap/Flags" and x["state"] == "LIKELY"
                for x in findings), findings
+    heap_bait = run(binary, pe64(code=peb_process_heap_pointer_only()))
+    assert not any(x["variant"].startswith("PEB.ProcessHeap/") for x in anti(heap_bait)), anti(heap_bait)
 
     # Ordinary timing/diagnostic imports and a PDB marker remain below the
     # anti-debug contract when no callsite or data-flow is present.
