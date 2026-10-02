@@ -205,6 +205,17 @@ def peb_process_heap_pointer_only() -> bytes:
     return bytes.fromhex("65488b042560000000488b4830c3")
 
 
+def cpuid_hypervisor_branch(prefix: int = 0) -> bytes:
+    # mov eax,1; cpuid; bt ecx,31; jc +1; ret
+    return b"\x90" * prefix + bytes.fromhex("b8010000000fa20fbae11f7201c3")
+
+
+def cpuid_feature_dispatch_only() -> bytes:
+    # CPUID leaf 1 used for an ordinary feature bit; this must not look like
+    # an environment/debugger probe.
+    return bytes.fromhex("b8010000000fa2f7c101c3")
+
+
 def set_thread_context_debug_registers() -> bytes:
     # lea rdx,[rip+0x2300] (the CONTEXT pointer, second argument), then call
     # SetThreadContext through the first IAT slot.
@@ -323,6 +334,18 @@ def main() -> None:
                for x in findings), findings
     heap_bait = run(binary, pe64(code=peb_process_heap_pointer_only()))
     assert not any(x["variant"].startswith("PEB.ProcessHeap/") for x in anti(heap_bait)), anti(heap_bait)
+
+    # CPUID is common in feature dispatch.  Report only the architectural
+    # hypervisor-present bit when its result reaches a conditional branch.
+    cpuid = run(binary, pe64(code=cpuid_hypervisor_branch()))
+    findings = [x for x in anti(cpuid) if x["variant"] == "CPUID/hypervisor-present"]
+    assert findings and findings[0]["fields"]["tested_bit"] == "31", findings
+    assert findings[0]["fields"]["branch_rva"] == "0x100b", findings
+    delayed = run(binary, pe64(code=cpuid_hypervisor_branch(16)))
+    delayed_findings = [x for x in anti(delayed) if x["variant"] == "CPUID/hypervisor-present"]
+    assert delayed_findings and delayed_findings[0]["fields"]["cpuid_rva"] == "0x1015", delayed_findings
+    cpuid_bait = run(binary, pe64(code=cpuid_feature_dispatch_only()))
+    assert not any(x["variant"] == "CPUID/hypervisor-present" for x in anti(cpuid_bait)), anti(cpuid_bait)
 
     # SetThreadContext is also used by malware to clear or install hardware
     # breakpoints.  An imported name alone remains bait; a call whose second

@@ -55,6 +55,7 @@ These are meaningful only when multiple facts line up:
 - `NtQueryObject(ObjectTypeInformation=2)` is promoted only when the output `OBJECT_TYPE_INFORMATION` buffer is recovered, a later comparison loads `UNICODE_STRING.Buffer` at output-buffer `+8`, the comparison's actual UTF-16 literal is `DebugObject`, and the compare callsite is in the same bounded x64 function. Merely importing `NtQueryObject` or containing a `DebugObject` string is insufficient.
 - x64 `PEB.NtGlobalFlag` is recognized only when the PEB is derived from `GS:[0x60]`, offset `+0xBC` is accessed, and the canonical debug-heap mask `0x70` is explicitly tested/masked. The internal offset is reported as version-sensitive and is not treated like a public ABI.
 - x64 `PEB.ProcessHeap` is recognized only when `GS:[0x60] -> PEB + 0x30` is recovered and the resulting heap pointer reaches a bounded `Flags` (`+0x70`) or `ForceFlags` (`+0x74`) `TEST`/`CMP`/`AND` operation. A bare `+0x30`, `+0x70`, or `+0x74` load is ignored.
+- `CPUID/hypervisor-present` is recognized only when the same bounded function loads `EAX=1`, executes `CPUID`, tests `ECX[31]` (`0x80000000`, or `BT ECX,31`), and feeds a nearby conditional branch. Ordinary CPUID feature dispatch is ignored; the result identifies a virtualized environment and does not by itself establish debugger intent.
 
 ### Weak/ambiguous — normally `SUSPECTED`
 
@@ -106,6 +107,7 @@ Implemented now:
 18. bounded current-PE executable-range software-breakpoint scans that compare each byte against `0xCC`, with exact target file/RVA range recovery.
 19. separate `Self-integrity` findings for bounded current-PE executable-range ADD32/XOR32/FNV-1a32 byte checksums, with scanner/direct-caller reference comparison, immediate/RIP-global references, exact target range recovery, and current-reference match/mismatch recomputation.
 20. x64 PEB `ProcessHeap` `Flags`/`ForceFlags` probes, requiring PEB-to-heap data flow and a concrete field test rather than magic-offset co-occurrence.
+21. CPUID leaf-1 hypervisor-present bit checks with a localized compare and conditional branch.
 
 ## Research backlog / planned detectors
 
