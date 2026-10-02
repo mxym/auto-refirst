@@ -66,6 +66,13 @@ def main() -> None:
     assert finding["fields"]["target_validation"] == "CONFIRMED", finding
     assert finding["fields"]["source_line"] == "1", finding
     assert finding["fields"]["resolution_basis"] == "ASAR_PACKED_OFFSET", finding
+    source_ranges = finding.get("ranges", [])
+    assert len(source_ranges) == 1, finding
+    assert source_ranges[0]["coordinate_space"] == "FILE_OFFSET", source_ranges
+    assert source_ranges[0]["basis"] == "ARTIFACT_FILE", source_ranges
+    assert source_ranges[0]["offset"] == direct_ref["source_byte"], source_ranges
+    assert source_ranges[0]["size"] == len(direct_ref["call_kind"]), source_ranges
+    assert pathlib.Path(source_ranges[0]["artifact_identity"]).name == "app.js", source_ranges
 
     native = run(binary, [("app.js", b"require('./addon.node');\n", False), ("addon.node", minimal_pe(), False)])
     assert any(x["kind"] == "asar_script_native_dependency" for x in native["artifact_relationships"]), native["artifact_relationships"]
@@ -88,6 +95,7 @@ def main() -> None:
     assert not missing["artifact_relationships"], missing["artifact_relationships"]
     unresolved = next(x for x in missing["findings"] if x["family"] == "ASAR script child route")
     assert unresolved["state"] == "LOCATED_NOT_MATERIALIZED" and unresolved["fields"]["target_materialized"] == "false", unresolved
+    assert unresolved["ranges"] and unresolved["ranges"][0]["offset"] == 0, unresolved
 
     unpacked = run(binary, [("app.js", b"fetch('./app.wasm');\n", False), ("app.wasm", WASM, True)], unpacked_sibling=True)
     relation = next(x for x in unpacked["artifact_relationships"] if x["kind"] == "asar_script_wasm_dependency")
