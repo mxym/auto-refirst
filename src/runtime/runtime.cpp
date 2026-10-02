@@ -1012,6 +1012,7 @@ bool run_target(const std::filesystem::path&target,const PeInfo&root_pe,const Ru
 #include <sys/mman.h>
 #include <sys/uio.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <linux/ptrace.h>
 #include <signal.h>
 #include <unistd.h>
@@ -1071,13 +1072,13 @@ std::set<std::pair<std::uint64_t,std::uint64_t>> linux_initial_exec_file_identit
         std::string path;std::getline(is,path);while(!path.empty()&&path.front()==' ')path.erase(path.begin());
         if(path.empty()||path.front()!='/')continue;
         const auto deleted=path.find(" (deleted)");if(deleted!=std::string::npos)path.resize(deleted);
-        struct stat st{};if(::stat(path.c_str(),&st)!=0||!S_ISREG(st.st_mode)||!st.st_ino)continue;
-        out.emplace(static_cast<std::uint64_t>(st.st_dev),static_cast<std::uint64_t>(st.st_ino));
+        const auto colon=dev.find(':');if(colon==std::string::npos||inode.empty())continue;
+        try{const auto major=std::stoul(dev.substr(0,colon),nullptr,16),minor=std::stoul(dev.substr(colon+1),nullptr,16);const auto ino=std::stoull(inode);if(!ino)continue;out.emplace(static_cast<std::uint64_t>(makedev(major,minor)),ino);}catch(...){continue;}
     }
     return out;
 }
 bool linux_standard_loader_library_path(const std::string&path){
-    static constexpr std::array<std::string_view,6> roots={"/lib","/lib64","/usr/lib","/usr/lib64","/usr/local/lib","/usr/local/lib64"};
+    static constexpr std::array<std::string_view,4> roots={"/lib","/lib64","/usr/lib","/usr/lib64"};
     for(const auto root:roots)if(path==root||(path.size()>root.size()&&path.rfind(std::string(root)+"/",0)==0))return true;
     return false;
 }
