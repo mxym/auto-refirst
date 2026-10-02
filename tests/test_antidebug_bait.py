@@ -217,7 +217,14 @@ def cpuid_feature_dispatch_only() -> bytes:
 
 
 def trap_flag_probe() -> bytes:
-    # pushfq; pop rax; test eax,1; jne +1; ret
+    # pushfq; pop rax; test eax,0x100; jne +1; ret.  RFLAGS bit 8 is the
+    # architectural Trap Flag; bit 0 is Carry Flag and must remain quiet.
+    return bytes.fromhex("9c58a9000100007501c3")
+
+
+def carry_flag_probe() -> bytes:
+    # pushfq; pop rax; test eax,1; jne +1; ret — ordinary CF use is not a
+    # single-step/debugger probe even though it has the same instruction shape.
     return bytes.fromhex("9c58a9010000007501c3")
 
 
@@ -368,15 +375,18 @@ def main() -> None:
     cpuid_bait = run(binary, pe64(code=cpuid_feature_dispatch_only()))
     assert not any(x["variant"] == "CPUID/hypervisor-present" for x in anti(cpuid_bait)), anti(cpuid_bait)
 
-    # Trap-flag probes read RFLAGS through PUSHFQ/POP and branch on bit 0;
-    # ordinary flag save/restore has no finding.
+    # Trap-flag probes read RFLAGS through PUSHFQ/POP and branch on bit 8;
+    # ordinary flag save/restore and Carry Flag checks have no finding.
     trap = run(binary, pe64(code=trap_flag_probe()))
     findings = [x for x in anti(trap) if x["variant"] == "RFLAGS.TrapFlag"]
-    assert findings and findings[0]["fields"]["tested_bit"] == "0", findings
+    assert findings and findings[0]["fields"]["tested_bit"] == "8", findings
+    assert findings[0]["fields"]["tested_mask"] == "0x100", findings
     assert findings[0]["fields"]["compare_rva"] == "0x1002", findings
     assert findings[0]["fields"]["branch_rva"] == "0x1007", findings
     trap_bait = run(binary, pe64(code=trap_flag_save_restore_only()))
     assert not any(x["variant"] == "RFLAGS.TrapFlag" for x in anti(trap_bait)), anti(trap_bait)
+    carry_bait = run(binary, pe64(code=carry_flag_probe()))
+    assert not any(x["variant"] == "RFLAGS.TrapFlag" for x in anti(carry_bait)), anti(carry_bait)
 
     # Instruction-level timestamp probes are useful even when no timing API
     # is imported.  Keep the result weak because profilers use the same shape.

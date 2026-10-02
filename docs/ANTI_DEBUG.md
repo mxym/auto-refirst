@@ -56,7 +56,7 @@ These are meaningful only when multiple facts line up:
 - x64 `PEB.NtGlobalFlag` is recognized only when the PEB is derived from `GS:[0x60]`, offset `+0xBC` is accessed, and the canonical debug-heap mask `0x70` is explicitly tested/masked. The internal offset is reported as version-sensitive and is not treated like a public ABI.
 - x64 `PEB.ProcessHeap` is recognized only when `GS:[0x60] -> PEB + 0x30` is recovered and the resulting heap pointer reaches a bounded `Flags` (`+0x70`) or `ForceFlags` (`+0x74`) `TEST`/`CMP`/`AND` operation. A bare `+0x30`, `+0x70`, or `+0x74` load is ignored.
 - `CPUID/hypervisor-present` is recognized only when the same bounded function loads `EAX=1`, executes `CPUID`, tests `ECX[31]` (`0x80000000`, or `BT ECX,31`), and feeds a nearby conditional branch. Ordinary CPUID feature dispatch is ignored; the result identifies a virtualized environment and does not by itself establish debugger intent.
-- `RFLAGS.TrapFlag` is recognized only when `PUSHFQ` is immediately followed by `POP` into a tracked register, bit 0 is tested (`TEST/AND/CMP` with `1` or `BT` with `0`), and a nearby conditional branch consumes the result. A plain flags save/restore sequence is ignored.
+- `RFLAGS.TrapFlag` is recognized only when `PUSHFQ` is immediately followed by `POP` into a tracked register, RFLAGS bit 8 is tested (`TEST/AND/CMP` with `0x100` or `BT` with `8`), and a nearby conditional branch consumes the result. Bit 0 is Carry Flag and is deliberately ignored. A plain flags save/restore sequence is ignored. The bit assignment follows Intel SDM Vol. 1 §3.4.3.1 and the public `PUSHFQ` reference: <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>, <https://www.felixcloutier.com/x86/pushf:pushfd:pushfq>.
 
 ### Weak/ambiguous — normally `SUSPECTED`
 
@@ -129,6 +129,7 @@ These are version/heap-implementation sensitive. They should not be reported sol
 - deliberate breakpoint-byte (`0xCC`) scanning.
 
 Instruction presence alone is insufficient. The detector should recover the surrounding exception/control-flow protocol.
+The classic `push ss; pop ss; pushf` sequence documented by the Check Point Anti-Debug guide is a 32-bit segment-register trick; the current PE64 decoder deliberately leaves it out because those segment-register opcodes are not valid x64 instructions. See <https://anti-debug.checkpoint.com/techniques/assembly.html>.
 
 ### Code / breakpoint integrity
 
