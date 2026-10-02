@@ -1260,9 +1260,11 @@ std::string summary_format_label(const AnalysisReport& r) {
 
 bool summary_actionable(const Finding& f) {
     // A finding without a family is an internal routing placeholder.  Keep
-    // failed/partial family findings because they tell the analyst why a
-    // transformation or profile could not be handed off.
-    return !f.family.empty();
+    // failed/partial analysis findings because they tell the analyst why a
+    // transformation or profile could not be handed off.  Artifact-writer
+    // diagnostics are operational metadata, however, and belong to the full
+    // report rather than the reverse-engineering summary.
+    return !f.family.empty() && f.kind!="artifact";
 }
 
 void render_summary_finding_text(std::ostringstream& o,const AnalysisReport& r,const Finding& f) {
