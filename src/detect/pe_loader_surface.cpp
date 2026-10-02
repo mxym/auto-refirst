@@ -24,6 +24,11 @@ bool resolver_api(std::string_view name) {
         "getprocaddress", "ldrloaddll", "ldrgetprocedureaddress",
         "virtualalloc", "virtualallocex", "virtualprotect", "virtualprotectex",
         "virtualfree", "ntallocatevirtualmemory", "ntprotectvirtualmemory",
+        // Native section mapping is the common loader route when an image is
+        // copied into a section/view instead of being handed to LoadLibrary.
+        // Keep this bounded to the mapping APIs themselves; CreateFileMapping
+        // and ordinary file views are too common to route on their own.
+        "ntmapviewofsection", "mapviewoffile", "mapviewoffileex",
     };
     const auto low = lower_ascii(std::string(name));
     return std::find(std::begin(names), std::end(names), low) != std::end(names);

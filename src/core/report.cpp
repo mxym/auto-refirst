@@ -1359,10 +1359,11 @@ void render_summary_json(std::ostream& o,const AnalysisReport& r) {
           << "\",\"state\":\"" << esc(f.state) << "\",\"ranges\":[";
         for(std::size_t i=0;i<f.ranges.size();++i){
             if(i)o<<',';
-            const auto& x=f.ranges[i];
-            o << "{\"value\":" << x.offset << ",\"size\":" << x.size
-              << ",\"coordinate_space\":\"" << coordinate_space_name(x.coordinate_space)
-              << "\",\"label\":\"" << esc(x.label) << "\"}";
+            // Keep the concise view's range contract aligned with the full
+            // report.  Runtime addresses need their basis, artifact identity,
+            // and process UID to remain actionable when several processes map
+            // the same virtual address.
+            render_range_json(o,r,f.ranges[i]);
         }
         o << "],\"suggested_actions\":[";
         for(std::size_t i=0;i<f.suggested_actions.size();++i){if(i)o<<',';o<<"\""<<esc(f.suggested_actions[i])<<"\"";}

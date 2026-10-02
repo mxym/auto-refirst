@@ -41,6 +41,20 @@ def image(*, relocations: bool) -> bytes:
     return bytes(buf)
 
 
+def mapped_image() -> bytes:
+    """A section-view loader route with no GetProcAddress import.
+
+    Native manual mappers commonly use NtMapViewOfSection after resolving
+    imports elsewhere. The route should still be visible when relocation
+    metadata and a sparse import table agree.
+    """
+    buf = bytearray(image(relocations=True))
+    raw = lambda rva: 0x200 + (rva - 0x1000)
+    name = b"NtMapViewOfSection\0"
+    buf[raw(0x1140) + 2:raw(0x1140) + 2 + len(name)] = name
+    return bytes(buf)
+
+
 def run(binary: pathlib.Path, payload: bytes) -> dict:
     with tempfile.TemporaryDirectory(prefix="ar-pe-loader-surface-") as raw:
         sample = pathlib.Path(raw) / "sample.exe"
@@ -76,6 +90,9 @@ def main() -> None:
     assert finding["fields"]["relocation_blocks"] == "1", finding
     assert finding["fields"]["runtime_resolution"] == "NOT_ATTEMPTED_STATIC_ONLY", finding
     assert all(r["coordinate_space"] == "RVA" for r in finding["ranges"]), finding
+    mapped = loader_finding(run(binary, mapped_image()))
+    assert mapped is not None, "native section-view loader route was not recognized"
+    assert "NtMapViewOfSection" in mapped["fields"]["resolver_apis"], mapped
     malformed = bytearray(image(relocations=True))
     p32(malformed, 0x200 + (0x1180 - 0x1000) + 4, 7)
     assert loader_finding(run(binary, bytes(malformed))) is None

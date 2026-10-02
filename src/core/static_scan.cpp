@@ -119,9 +119,9 @@ EmbeddedScanPart scan_embedded_part(std::span<const std::uint8_t>d){EmbeddedScan
         // Reject all other bytes before entering the exact per-signature checks.
         switch(c){case 'M':case 0x7f:case 'P':case 'G':case 'K':case 0x6b:case 0xb9:case 0x20:case 0x81:case 0x3d:case 0x0f:case 0xff:case 0xfb:case 0xfa:case 0xf0:case 0xf1:break;default:continue;}
         if(o&&c=='M'&&d[o+1]=='Z'){std::uint64_t sz=0;if(valid_pe_at(d,o,sz))r.embedded.push_back({"PE",o,sz,true,"CONFIRMED",std::nullopt,"validated MZ/PE headers and sections"});}
-        else if(o&&c==0x7f&&d[o+1]=='E'&&d[o+2]=='L'&&d[o+3]=='F'&&valid_elf_at(d,o))r.embedded.push_back({"ELF",o,0,true,"CONFIRMED",std::nullopt,"validated ELF ident"});
-        else if(c=='P'&&d[o+1]=='Y'&&d[o+2]=='Z'&&d[o+3]==0){r.hints.pyinstaller=true;r.embedded.push_back({"PYZ",o,0,false,"SUSPECTED",0.55,"PYZ magic candidate; container parser must validate"});}
-        else if(c=='G'&&d[o+1]=='D'&&d[o+2]=='P'&&d[o+3]=='C'){r.hints.godot=true;r.embedded.push_back({"GodotPCK",o,0,false,"SUSPECTED",0.55,"Godot PCK magic candidate; PCK parser must validate"});}
+        else if(o&&c==0x7f&&d[o+1]=='E'&&d[o+2]=='L'&&d[o+3]=='F'&&valid_elf_at(d,o))r.embedded.push_back({"ELF",o,4,true,"CONFIRMED",std::nullopt,"validated ELF ident"});
+        else if(c=='P'&&d[o+1]=='Y'&&d[o+2]=='Z'&&d[o+3]==0){r.hints.pyinstaller=true;r.embedded.push_back({"PYZ",o,4,false,"SUSPECTED",0.55,"PYZ magic candidate; container parser must validate"});}
+        else if(c=='G'&&d[o+1]=='D'&&d[o+2]=='P'&&d[o+3]=='C'){r.hints.godot=true;r.embedded.push_back({"GodotPCK",o,4,false,"SUSPECTED",0.55,"Godot PCK magic candidate; PCK parser must validate"});}
         else if(c=='K'&&d[o+1]=='A'&&(d[o+2]=='X'||d[o+2]=='Y'))r.hints.nuitka=true;
         else if(c==0x6b&&d[o+1]==0x43&&d[o+2]==0xca&&d[o+3]==0x52)r.hints.autoit=true;
         else if((c==0xb9&&d[o+1]==0x79&&d[o+2]==0x37&&d[o+3]==0x9e)||(c==0x47&&d[o+1]==0x86&&d[o+2]==0xc8&&d[o+3]==0x61)||(c==0x20&&d[o+1]==0x37&&d[o+2]==0xef&&d[o+3]==0xc6)){r.hints.crypto=true;if(r.crypto_delta_offsets.size()<512)r.crypto_delta_offsets.push_back(o);}
@@ -139,13 +139,13 @@ EmbeddedScanPart scan_embedded_part(std::span<const std::uint8_t>d){EmbeddedScan
     const auto marker_limit=std::min<std::size_t>(d.size(),kLayeredMarkerScanBytes);
     for(std::size_t o=1;o+5<=marker_limit&&r.embedded.size()<512;++o){
         if(d[o]=='%'&&d[o+1]=='P'&&d[o+2]=='D'&&d[o+3]=='F'&&d[o+4]=='-')
-            r.embedded.push_back({"PDF",o,0,false,"SUSPECTED",0.35,"PDF header marker at a non-zero file offset; PDF structure not parsed"});
+            r.embedded.push_back({"PDF",o,5,false,"SUSPECTED",0.35,"PDF header marker at a non-zero file offset; PDF structure not parsed"});
         else if((d[o]==0xce&&d[o+1]==0xfa&&d[o+2]==0xed&&d[o+3]==0xfe)||(d[o]==0xcf&&d[o+1]==0xfa&&d[o+2]==0xed&&d[o+3]==0xfe)||(d[o]==0xfe&&d[o+1]==0xed&&d[o+2]==0xfa&&d[o+3]==0xce)||(d[o]==0xfe&&d[o+1]==0xed&&d[o+2]==0xfa&&d[o+3]==0xcf))
-            r.embedded.push_back({"Mach-O",o,0,false,"SUSPECTED",0.30,"Mach-O magic at a non-zero file offset; slice header geometry not parsed"});
+            r.embedded.push_back({"Mach-O",o,4,false,"SUSPECTED",0.30,"Mach-O magic at a non-zero file offset; slice header geometry not parsed"});
         else if(d[o]==0xca&&d[o+1]==0xfe&&d[o+2]==0xba&&d[o+3]==0xbe)
-            r.embedded.push_back({"Mach-O/JVM",o,0,false,"SUSPECTED",0.25,"shared Mach-O/JVM magic at a non-zero file offset; format disambiguation deferred"});
+            r.embedded.push_back({"Mach-O/JVM",o,4,false,"SUSPECTED",0.25,"shared Mach-O/JVM magic at a non-zero file offset; format disambiguation deferred"});
         else if(d[o]=='*'&&d[o+1]=='U'&&d[o+2]=='D'&&d[o+3]=='F')
-            r.embedded.push_back({"UDF",o,0,false,"SUSPECTED",0.25,"UDF descriptor marker at a non-zero file offset; volume geometry not parsed"});
+            r.embedded.push_back({"UDF",o,4,false,"SUSPECTED",0.25,"UDF descriptor marker at a non-zero file offset; volume geometry not parsed"});
     }
     if(d.size()>=512&&std::memcmp(d.data()+d.size()-512,"conectix",8)==0&&r.embedded.size()<512)
         r.embedded.push_back({"VHD",d.size()-512,512,false,"SUSPECTED",0.35,"VHD footer marker at the file tail; disk geometry not parsed"});

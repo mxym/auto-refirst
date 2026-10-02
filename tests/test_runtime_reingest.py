@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Linux integration check for runtime-created released-file ELF reingest.
 
-The fixture writes /bin/true to a fresh O_CREAT|O_EXCL file, closes the
+The fixture writes /bin/true to a writable O_CREAT|O_TRUNC file, closes the
 writable descriptor, then executes a read-only alias with execveat.  The
 runtime backend must correlate the device/inode, persist the ELF snapshot and
 feed it back to the static child analyzer without replacing or executing the
@@ -28,7 +28,7 @@ SOURCE = r'''
 int main(void) {
     char path[256];
     snprintf(path, sizeof path, "/tmp/auto-refirst-runtime-%ld", (long)getpid());
-    int out = open(path, O_CREAT | O_EXCL | O_RDWR, 0700);
+    int out = open(path, O_CREAT | O_TRUNC | O_RDWR, 0700);
     if (out < 0) return 10;
     int src = open("/bin/true", O_RDONLY);
     if (src < 0) return 11;

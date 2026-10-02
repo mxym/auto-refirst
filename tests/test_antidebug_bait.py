@@ -138,6 +138,29 @@ def call_iat(iat_rva: int, *, branch: bool = True) -> bytes:
     return code + b"\xc3"
 
 
+def rtl_veh_trap() -> bytes:
+    """Register an executable VEH callback through ntdll's native alias.
+
+    RtlAddVectoredExceptionHandler takes the callback in RDX (the second
+    argument).  The conditional branch deliberately leaves one edge at the
+    INT3 and one edge at the return, which gives the static CFG correlator a
+    concrete registration-to-trap relation.
+    """
+    handler_va = 0x140001080
+    call_rva = 0x1000 + 15
+    disp = 0x2050 - (call_rva + 6)
+    code = (
+        b"\x48\xba" + struct.pack("<Q", handler_va)  # mov rdx, callback
+        + b"\xb9\x01\x00\x00\x00"                    # mov ecx, 1
+        + b"\xff\x15" + struct.pack("<i", disp)       # call [Rtl... IAT]
+        + b"\x85\xc0\x74\x01\xcc\xc3"
+    )
+    body = bytearray(b"\x90" * 0x100)
+    body[:len(code)] = code
+    body[0x80] = 0xC3
+    return bytes(body)
+
+
 def peb_being_debugged() -> bytes:
     # mov rax, gs:[0x60]; movzx eax, byte ptr [rax+2]; ret
     return b"\x65\x48\x8b\x04\x25\x60\x00\x00\x00\x0f\xb6\x40\x02\xc3"
@@ -162,6 +185,31 @@ def run(binary: Path, payload: bytes) -> dict:
         sample.write_bytes(payload)
         cp = subprocess.run([str(binary), str(sample), "--json"], check=True,
                             capture_output=True, timeout=30)
+        return json.loads(cp.stdout.decode("utf-8"))
+
+
+def exceptional_flow_csv(binary: Path, payload: bytes) -> str:
+    with tempfile.TemporaryDirectory(prefix="ar-antidebug-extract-") as raw:
+        sample = Path(raw) / "sample.exe"
+        sample.write_bytes(payload)
+        cp = subprocess.run([str(binary), str(sample), "--extract", "--json"],
+                            check=True, capture_output=True, timeout=30)
+        report = json.loads(cp.stdout.decode("utf-8"))
+        for artifact in report.get("artifacts", []):
+            if artifact.get("kind") != "exceptional_flow_map":
+                continue
+            path = Path(artifact.get("path", ""))
+            if path.exists():
+                return path.read_text(encoding="utf-8")
+    return ""
+
+
+def run_summary(binary: Path, payload: bytes) -> dict:
+    with tempfile.TemporaryDirectory(prefix="ar-antidebug-summary-") as raw:
+        sample = Path(raw) / "sample.exe"
+        sample.write_bytes(payload)
+        cp = subprocess.run([str(binary), str(sample), "--summary", "--json"],
+                            check=True, capture_output=True, timeout=30)
         return json.loads(cp.stdout.decode("utf-8"))
 
 
@@ -190,6 +238,14 @@ def main() -> None:
     # The summary field is the stable RVA contract.  The legacy anti-debug
     # range serializer is file-offset based (0x200 is RVA 0x1000 here).
     assert finding["ranges"] and finding["ranges"][0]["offset"] == 0x200
+    # The concise JSON view must retain the typed coordinate provenance used
+    # by the full report; dropping it makes an address ambiguous after a
+    # runtime or child-process finding is folded into the summary.
+    compact = run_summary(binary, pe64(code=call_iat(0x2050),
+                                       imports=("IsDebuggerPresent",)))
+    compact_range = next(f for f in compact["findings"]
+                         if f["variant"] == "IsDebuggerPresent")["ranges"][0]
+    assert {"coordinate_space", "basis", "artifact_identity", "label"} <= set(compact_range), compact_range
 
     # TLS is an execution-before-entry surface.  Its presence is retained in
     # the format facts while the anti-debug result remains tied to the actual
@@ -217,6 +273,20 @@ def main() -> None:
                for x in findings), findings
     heap_bait = run(binary, pe64(code=peb_process_heap_pointer_only()))
     assert not any(x["variant"].startswith("PEB.ProcessHeap/") for x in anti(heap_bait)), anti(heap_bait)
+
+    # Native ntdll exports the same VEH registration primitive under the Rtl
+    # prefix.  It must receive the same trap/callback correlation as the
+    # kernel32-facing AddVectoredExceptionHandler spelling.
+    rtl = run(binary, pe64(code=rtl_veh_trap(), imports=("RtlAddVectoredExceptionHandler",)))
+    findings = anti(rtl)
+    relation = [x for x in findings if x["variant"] == "exception/trap probe"]
+    assert relation and relation[0]["state"] == "LIKELY", findings
+    assert relation[0]["fields"]["handler_registration_api"] == "RtlAddVectoredExceptionHandler", findings
+    assert relation[0]["fields"]["registration_trap_relation"] == "SAME_FUNCTION_CFG_DOMINANCE_REACHABILITY", findings
+    flow = exceptional_flow_csv(binary, pe64(code=rtl_veh_trap(),
+                                              imports=("RtlAddVectoredExceptionHandler",)))
+    assert "RtlAddVectoredExceptionHandler" in flow, flow
+    assert "TRIGGER_HANDLER_CORRELATED" in flow, flow
 
     # Ordinary timing/diagnostic imports and a PDB marker remain below the
     # anti-debug contract when no callsite or data-flow is present.

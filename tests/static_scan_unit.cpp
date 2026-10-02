@@ -73,10 +73,10 @@ int main() {
     if(!scan("sys._MEIPASS").hints.pyinstaller)fail("sys._MEIPASS route lost");
     if(!scan("_PYI_APPLICATION_HOME_DIR").hints.pyinstaller)fail("current _PYI application-home route lost");
 
-    if(pyz_scan.embedded.size()!=1||pyz_scan.embedded[0].kind!="PYZ"||pyz_scan.embedded[0].state!="SUSPECTED")fail("raw PYZ embedded marker retained high-confidence state");
+    if(pyz_scan.embedded.size()!=1||pyz_scan.embedded[0].kind!="PYZ"||pyz_scan.embedded[0].state!="SUSPECTED"||pyz_scan.embedded[0].size!=4)fail("raw PYZ marker lost its exact magic range");
     const std::string gdpc_text="xxxxGDPCjunk";
     auto gdpc_scan=scan(gdpc_text);
-    if(!gdpc_scan.hints.godot||gdpc_scan.embedded.size()!=1||gdpc_scan.embedded[0].kind!="GodotPCK"||gdpc_scan.embedded[0].state!="SUSPECTED")fail("raw GDPC embedded marker retained high-confidence state");
+    if(!gdpc_scan.hints.godot||gdpc_scan.embedded.size()!=1||gdpc_scan.embedded[0].kind!="GodotPCK"||gdpc_scan.embedded[0].state!="SUSPECTED"||gdpc_scan.embedded[0].size!=4)fail("raw GDPC marker lost its exact magic range");
 
     std::cout << "PASS\n";
     return 0;
