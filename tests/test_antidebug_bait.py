@@ -31,7 +31,7 @@ def p64(buf: bytearray, off: int, value: int) -> None:
 
 
 def pe64(*, code: bytes, imports: tuple[str, ...] = (), pdb_marker: bool = False,
-         tls_callback: bool = False) -> bytes:
+         tls_callback: bool = False, context_flags: int = 0) -> bytes:
     """Build one bounded PE64 image containing code/imports/.pdata.
 
     All RVA-bearing structures live in one raw section.  This keeps the
@@ -126,6 +126,12 @@ def pe64(*, code: bytes, imports: tuple[str, ...] = (), pdb_marker: bool = False
         marker = b"C:\\build\\release\\sample.pdb\0"
         image[raw(0x2200):raw(0x2200) + len(marker)] = marker
 
+    if context_flags:
+        # A file-backed CONTEXT object lets the anti-debug fixture exercise
+        # SetThreadContext-family argument localization without executing the
+        # sample.  ContextFlags is the first DWORD in the structure.
+        p32(image, raw(0x2300), context_flags)
+
     return bytes(image)
 
 
@@ -136,6 +142,15 @@ def call_iat(iat_rva: int, *, branch: bool = True) -> bytes:
     if branch:
         code += b"\x75\x01"
     return code + b"\xc3"
+
+
+def timing_pair(iat_rva: int) -> bytes:
+    """Two direct timing API calls in one bounded function."""
+    def one(call_rva: int) -> bytes:
+        disp = iat_rva - (call_rva + 6)
+        return b"\xff\x15" + struct.pack("<i", disp)
+
+    return one(0x1000) + one(0x1006) + b"\xc3"
 
 
 def rtl_veh_trap() -> bytes:
@@ -177,6 +192,14 @@ def peb_process_heap_flags() -> bytes:
 def peb_process_heap_pointer_only() -> bytes:
     # The same ProcessHeap derivation without reading or testing Flags.
     return bytes.fromhex("65488b042560000000488b4830c3")
+
+
+def set_thread_context_debug_registers() -> bytes:
+    # lea rdx,[rip+0x2300] (the CONTEXT pointer, second argument), then call
+    # SetThreadContext through the first IAT slot.
+    context_disp = 0x2300 - (0x1000 + 7)
+    call_disp = 0x2050 - (0x1000 + 7 + 6)
+    return b"\x48\x8d\x15" + struct.pack("<i", context_disp) + b"\xff\x15" + struct.pack("<i", call_disp) + b"\xc3"
 
 
 def run(binary: Path, payload: bytes) -> dict:
@@ -274,6 +297,25 @@ def main() -> None:
     heap_bait = run(binary, pe64(code=peb_process_heap_pointer_only()))
     assert not any(x["variant"].startswith("PEB.ProcessHeap/") for x in anti(heap_bait)), anti(heap_bait)
 
+    # SetThreadContext is also used by malware to clear or install hardware
+    # breakpoints.  An imported name alone remains bait; a call whose second
+    # argument resolves to a file-backed CONTEXT with CONTEXT_DEBUG_REGISTERS
+    # is localized and reported with the ContextFlags range.
+    context_bait = run(binary, pe64(code=b"\xc3", imports=("SetThreadContext",),
+                                    context_flags=0x00100010))
+    assert not anti(context_bait), context_bait
+    context_arch_bait = run(binary, pe64(code=set_thread_context_debug_registers(),
+                                         imports=("SetThreadContext",), context_flags=0x10))
+    assert not any(x["variant"] == "SetThreadContext/DebugRegisters" for x in anti(context_arch_bait)), context_arch_bait
+    context = run(binary, pe64(code=set_thread_context_debug_registers(),
+                               imports=("SetThreadContext",),
+                               context_flags=0x00100010))
+    findings = anti(context)
+    context_findings = [x for x in findings
+                        if x["variant"] == "SetThreadContext/DebugRegisters"]
+    assert context_findings and context_findings[0]["state"] == "CONFIRMED", findings
+    assert context_findings[0]["fields"]["context_flags"] == "0x100010", findings
+
     # Native ntdll exports the same VEH registration primitive under the Rtl
     # prefix.  It must receive the same trap/callback correlation as the
     # kernel32-facing AddVectoredExceptionHandler spelling.
@@ -293,6 +335,16 @@ def main() -> None:
     diagnostic = run(binary, pe64(code=b"\xc3", imports=("QueryPerformanceCounter",),
                                   pdb_marker=True))
     assert not anti(diagnostic), diagnostic.get("findings", [])
+
+    # A repeated timing source remains a weak clue, but its two concrete
+    # callsites must still be directly inspectable in the report.
+    timed = run(binary, pe64(code=timing_pair(0x2050),
+                             imports=("QueryPerformanceCounter",)))
+    timing = [x for x in anti(timed)
+              if x["variant"] == "QueryPerformanceCounter timing pair"]
+    assert len(timing) == 1, timing
+    assert timing[0]["fields"]["sample_callsites"] == "0x1000,0x1006", timing
+    assert [x["offset"] for x in timing[0]["ranges"]] == [0x200, 0x206], timing
     print("[PASS] anti-debug marker bait stays silent; real call and PEB access are localized")
 
 

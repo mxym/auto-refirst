@@ -43,6 +43,7 @@ A nearby branch or output-value use is additional evidence, not required to ackn
 These are meaningful only when multiple facts line up:
 
 - `GetThreadContext` / `NtGetContextThread` with `CONTEXT_DEBUG_REGISTERS`-compatible flags is at least a context probe; when the same stack-resident x64 `CONTEXT` is subsequently read at Dr0/Dr1/Dr2/Dr3/Dr6/Dr7 offsets, the hardware-breakpoint-register inspection itself is `CONFIRMED`.
+- `SetThreadContext` / `NtSetContextThread` / `ZwSetContextThread` is `CONFIRMED` when its second argument resolves to a file-backed `CONTEXT` whose `ContextFlags` includes `CONTEXT_DEBUG_REGISTERS (0x10)`. The report localizes the `ContextFlags` bytes while leaving the runtime Dr0-Dr7 values unresolved.
 - `CloseHandle` on an invalid/pseudo handle. This can intentionally exploit debugger exception behavior, but can also be a bug or diagnostic path.
 - `RaiseException` with debugger-specific `DBG_*` status codes.
 - `INT3` only when a local exception-handler registration (`AddVectoredExceptionHandler`, native `RtlAddVectoredExceptionHandler`, or `SetUnhandledExceptionFilter`) is nearby in the same function. A distant CRT failure-path `INT3` is deliberately ignored.
