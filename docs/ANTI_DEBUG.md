@@ -34,7 +34,7 @@ These have debugger-specific semantics once the call/instruction and required pa
   - `ProcessDebugFlags = 31`
 - `NtSetInformationThread` / `ZwSetInformationThread` with `ThreadHideFromDebugger = 17`.
 - `NtCreateThreadEx` with the actual seventh Win64 argument `CreateFlags` containing `THREAD_CREATE_FLAGS_HIDE_FROM_DEBUGGER = 0x4`. The stack argument is recovered from the callsite; the constant merely appearing elsewhere is insufficient.
-- x64 direct PEB access `GS:[0x60] -> PEB + 2` (`BeingDebugged`).
+- x64 direct PEB access `GS:[0x60] -> PEB + 2` (`BeingDebugged`), including the optimized direct-segment form `GS:[0x60+2]`.
 
 A nearby branch or output-value use is additional evidence, not required to acknowledge that the debugger-state query happened.
 

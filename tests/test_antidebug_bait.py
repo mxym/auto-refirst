@@ -181,6 +181,17 @@ def peb_being_debugged() -> bytes:
     return b"\x65\x48\x8b\x04\x25\x60\x00\x00\x00\x0f\xb6\x40\x02\xc3"
 
 
+def peb_being_debugged_direct() -> bytes:
+    # cmp byte ptr gs:[0x60+2], 0; jne +1; ret
+    return bytes.fromhex("65803c2562000000007501c3")
+
+
+def peb_being_debugged_direct_write_bait() -> bytes:
+    # mov byte ptr gs:[0x60+2], al; ret — a segment-relative write must not
+    # be promoted to a debugger-state read.
+    return bytes.fromhex("6588042562000000c3")
+
+
 def peb_process_heap_flags() -> bytes:
     # mov rax, gs:[0x60]; mov rcx, [rax+0x30] (ProcessHeap);
     # mov edx, [rcx+0x70] (HEAP.Flags); test edx, 0x70; ret.
@@ -295,6 +306,12 @@ def main() -> None:
     findings = anti(peb)
     assert any(x["variant"] == "PEB.BeingDebugged" and x["state"] == "CONFIRMED"
                for x in findings), findings
+    peb_direct = run(binary, pe64(code=peb_being_debugged_direct()))
+    direct_findings = [x for x in anti(peb_direct)
+                       if x["variant"] == "PEB.BeingDebugged"]
+    assert direct_findings and direct_findings[0]["fields"]["access_pattern"] == "DIRECT_GS_SEGMENT", direct_findings
+    peb_direct_bait = run(binary, pe64(code=peb_being_debugged_direct_write_bait()))
+    assert not any(x["variant"] == "PEB.BeingDebugged" for x in anti(peb_direct_bait)), anti(peb_direct_bait)
 
     # The heap metadata route is accepted only when ProcessHeap is derived
     # from the PEB and the Flags field is actually tested.  A bare PEB heap
