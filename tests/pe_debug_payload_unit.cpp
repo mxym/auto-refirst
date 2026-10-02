@@ -35,6 +35,14 @@ int main(){
     put32(d,dir+16,24+10+1);d[tail]=0;
     auto ordinary=prts::detect_pe_debug_payload(d,pe);
     if(!ordinary.empty())return 3;
+    put32(d,dir+12,4);put32(d,dir+16,8);put32(d,dir+24,payload);
+    std::fill(d.begin()+payload,d.begin()+payload+8,std::uint8_t(0));
+    const std::uint8_t zip_magic[4]={'P','K',3,4};std::memcpy(d.data()+payload+2,zip_magic,4);
+    auto non_codeview=prts::detect_pe_debug_payload(d,pe);
+    if(non_codeview.size()!=1||non_codeview.front().fields["embedded_file_offset"]!=std::to_string(payload+2)||
+       non_codeview.front().ranges.back().offset!=payload+2||non_codeview.front().ranges.back().size!=4)return 8;
+    put32(d,dir+12,2);put32(d,dir+16,24+10+1);std::memcpy(d.data()+payload,"RSDS",4);
+    std::memcpy(d.data()+payload+24,"normal.pdb",10);d[payload+34]=0;
     // Some linkers retain AddressOfRawData while leaving PointerToRawData
     // unset.  Recover the file-backed RVA, but never treat offset zero as a
     // debug payload when neither coordinate is present.
