@@ -69,7 +69,7 @@ The root is bound to the input path by an ownership marker; unrelated existing d
 - Directory-scale prioritization and bounded report/artifact output.
 - Opt-in runtime materialization, reconstruction and independently validated transactional installation on supported host backends.
 
-See [docs/CAPABILITIES.md](docs/CAPABILITIES.md) for detailed boundaries.
+See [docs/CAPABILITIES.md](docs/CAPABILITIES.md) for detailed boundaries. The project scope and development guardrails are recorded in [docs/PROJECT_EXPECTATIONS.md](docs/PROJECT_EXPECTATIONS.md).
 
 ## Optional Qt drag-and-drop workspace
 

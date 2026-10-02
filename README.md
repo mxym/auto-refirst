@@ -144,6 +144,7 @@ cmake --build build-gui --target auto_refirst_gui --parallel
 ## 文档
 
 - [能力与支持边界](docs/CAPABILITIES.md)
+- [项目实际预期与开发约束](docs/PROJECT_EXPECTATIONS.md)
 - [架构与证据模型](docs/ARCHITECTURE.md)
 - [外部验证与已知缺口](docs/VALIDATION.md)
 - [CLI 与安全授权](docs/CLI.md)
