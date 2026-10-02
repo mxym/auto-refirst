@@ -89,7 +89,9 @@ std::vector<Finding> detect_pe_debug_payload(std::span<const std::uint8_t> data,
                 f.evidence={"a validated CodeView record contains non-path bytes after the NUL-terminated PDB path","the trailing bytes begin with a recognized PE/ELF/ZIP/DEX container magic"};
                 f.negative_evidence={"the embedded bytes are reported as data in the debug record; execution or intent is not inferred"};
                 out.push_back(std::move(f));
-            }else if(tail>=16){
+            }else if(tail>=16&&std::any_of(data.begin()+static_cast<std::ptrdiff_t>(tail_off),
+                                           data.begin()+static_cast<std::ptrdiff_t>(tail_off+tail),
+                                           [](std::uint8_t b){return b!=0;})){
                 auto f=make_finding("CodeView trailing data","LIKELY",type,off,tail_off,tail,signature,{});
                 f.evidence={"a validated CodeView record contains a bounded non-zero region after the NUL-terminated PDB path"};
                 f.negative_evidence={"extended producer metadata can legally exist; no known container magic was found in the trailing region"};

@@ -1,4 +1,5 @@
 #include "prts/pe_debug.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -24,8 +25,12 @@ int main(){
     const std::size_t tail=payload+35;d[tail]=0x7f;d[tail+1]='E';d[tail+2]='L';d[tail+3]='F';
     auto suspicious=prts::detect_pe_debug_payload(d,pe);
     if(suspicious.size()!=1||suspicious.front().state!="CONFIRMED"||suspicious.front().variant!="CodeView trailing embedded ELF")return 1;
+    put32(d,dir+16,24+10+1+16);
+    std::fill(d.begin()+tail,d.begin()+tail+16,std::uint8_t(0));
+    auto padding=prts::detect_pe_debug_payload(d,pe);
+    if(!padding.empty())return 2;
     put32(d,dir+16,24+10+1);d[tail]=0;
     auto ordinary=prts::detect_pe_debug_payload(d,pe);
-    if(!ordinary.empty())return 2;
+    if(!ordinary.empty())return 3;
     std::cout<<"PASS\n";return 0;
 }
