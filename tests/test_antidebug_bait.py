@@ -127,6 +127,14 @@ def peb_being_debugged() -> bytes:
     return b"\x65\x48\x8b\x04\x25\x60\x00\x00\x00\x0f\xb6\x40\x02\xc3"
 
 
+def peb_process_heap_flags() -> bytes:
+    # mov rax, gs:[0x60]; mov rcx, [rax+0x30] (ProcessHeap);
+    # mov edx, [rcx+0x70] (HEAP.Flags); test edx, 0x70; ret.
+    return bytes.fromhex(
+        "65488b042560000000488b48308b517048f7c270000000c3"
+    )
+
+
 def run(binary: Path, payload: bytes) -> dict:
     with tempfile.TemporaryDirectory(prefix="ar-antidebug-bait-") as raw:
         sample = Path(raw) / "sample.exe"
@@ -167,6 +175,15 @@ def main() -> None:
     peb = run(binary, pe64(code=peb_being_debugged()))
     findings = anti(peb)
     assert any(x["variant"] == "PEB.BeingDebugged" and x["state"] == "CONFIRMED"
+               for x in findings), findings
+
+    # The heap metadata route is accepted only when ProcessHeap is derived
+    # from the PEB and the Flags field is actually tested.  A bare PEB heap
+    # pointer therefore remains a non-finding; this fixture closes the full
+    # access-and-test shape and checks the newly localized result.
+    heap = run(binary, pe64(code=peb_process_heap_flags()))
+    findings = anti(heap)
+    assert any(x["variant"] == "PEB.ProcessHeap/Flags" and x["state"] == "LIKELY"
                for x in findings), findings
 
     # Ordinary timing/diagnostic imports and a PDB marker remain below the
