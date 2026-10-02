@@ -443,6 +443,11 @@ std::string render_text(const AnalysisReport& r) {
         o << "ELF ordinary dynamic: state=" << r.elf.dynamic.state << " symbols=" << r.elf.dynamic.symbols.size() << " relocations=" << r.elf.dynamic.relocations.size() << "\n";
         if(!r.elf.dynamic.error.empty())o<<"  dynamic error: "<<r.elf.dynamic.error<<"\n";
         if (!r.elf.needed.empty()){o<<"Needed libraries:";for(const auto&n:r.elf.needed)o<<" "<<n;o<<"\n";}
+        if(!r.elf.abi.filters.empty()||!r.elf.abi.auxiliary.empty()){
+            o<<"Loader indirection:\n";
+            for(std::size_t i=0;i<r.elf.abi.filters.size();++i)o<<"  DT_FILTER["<<i<<"] "<<r.elf.abi.filters[i]<<" file+0x"<<std::hex<<r.elf.abi.filter_file_offsets[i]<<std::dec<<"\n";
+            for(std::size_t i=0;i<r.elf.abi.auxiliary.size();++i)o<<"  DT_AUXILIARY["<<i<<"] "<<r.elf.abi.auxiliary[i]<<" file+0x"<<std::hex<<r.elf.abi.auxiliary_file_offsets[i]<<std::dec<<"\n";
+        }
         o << "Program headers: " << r.elf.program_header_count << ", section headers: " << r.elf.section_header_count << "\n";
         if(!r.elf.segments.empty()){o<<"Segments:\n  Type Flags Address          Offset      File        Memory      Entropy\n";for(const auto&seg:r.elf.segments){o<<"  "<<std::setw(4)<<seg.type<<" 0x"<<std::hex<<std::setw(2)<<seg.flags<<" "<<std::setw(16)<<seg.address<<"  "<<std::setw(10)<<seg.offset<<"  "<<std::setw(10)<<seg.file_size<<"  "<<std::setw(10)<<seg.memory_size<<std::dec<<"  "<<std::fixed<<std::setprecision(3)<<seg.entropy<<"\n";}}
         o << "Sections:\n"
@@ -1926,6 +1931,7 @@ void render_json_impl(std::ostream& o,const AnalysisReport& r,bool automatic_chi
     render_pe_json(o,r,automatic_child_summary);
     o << "  \"elf_segments\": [";for(std::size_t i=0;i<r.elf.segments.size();++i){if(i)o<<',';const auto&s=r.elf.segments[i];o<<"{\"type\":"<<s.type<<",\"flags\":"<<s.flags<<",\"address\":"<<s.address<<",\"offset\":"<<s.offset<<",\"file_size\":"<<s.file_size<<",\"memory_size\":"<<s.memory_size<<",\"align\":"<<s.align<<",\"used_size\":"<<s.used_size<<",\"entropy\":"<<std::fixed<<std::setprecision(4)<<s.entropy<<'}';}o<<"],\n";
     o << "  \"elf_needed\": [";for(std::size_t i=0;i<r.elf.needed.size();++i){if(i)o<<',';o<<"\""<<esc(r.elf.needed[i])<<"\"";}o<<"],\n";
+    o << "  \"elf_loader_indirection\": {\"filters\":[";for(std::size_t i=0;i<r.elf.abi.filters.size();++i){if(i)o<<',';o<<"{\"name\":\""<<esc(r.elf.abi.filters[i])<<"\",\"file_offset\":"<<r.elf.abi.filter_file_offsets[i]<<"}";}o<<"],\"auxiliary\":[";for(std::size_t i=0;i<r.elf.abi.auxiliary.size();++i){if(i)o<<',';o<<"{\"name\":\""<<esc(r.elf.abi.auxiliary[i])<<"\",\"file_offset\":"<<r.elf.abi.auxiliary_file_offsets[i]<<"}";}o<<"]},\n";
     o << "  \"elf_dynamic\": {\"state\":\""<<esc(r.elf.dynamic.state)<<"\",\"error\":\""<<esc(r.elf.dynamic.error)<<"\",\"symbol_count_source\":\""<<esc(r.elf.dynamic.symbol_count_source)<<"\",\"symbol_count\":"<<r.elf.dynamic.symbols.size()<<",\"relocation_count\":"<<r.elf.dynamic.relocations.size()<<"},\n";
     o << "  \"elf_extraction\": {\"dynamic\":{\"success\":"<<(r.elf_extract.success?"true":"false")<<",\"symbols_csv\":\""<<esc(path_utf8(r.elf_extract.symbols_csv))<<"\",\"symbol_count\":"<<r.elf_extract.symbol_count<<",\"relocations_csv\":\""<<esc(path_utf8(r.elf_extract.relocations_csv))<<"\",\"relocation_count\":"<<r.elf_extract.relocation_count<<",\"error\":\""<<esc(r.elf_extract.error)<<"\"},\"unwind\":{\"success\":"<<(r.elf_unwind_extract.success?"true":"false")<<",\"cies_csv\":\""<<esc(path_utf8(r.elf_unwind_extract.cies_csv))<<"\",\"cie_count\":"<<r.elf_unwind_extract.cie_count<<",\"fdes_csv\":\""<<esc(path_utf8(r.elf_unwind_extract.fdes_csv))<<"\",\"fde_count\":"<<r.elf_unwind_extract.fde_count<<",\"error\":\""<<esc(r.elf_unwind_extract.error)<<"\"}},\n";
     o << "  \"macho_slices\": [";

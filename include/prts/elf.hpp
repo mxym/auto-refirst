@@ -63,6 +63,11 @@ struct ElfAbiInfo {
     std::string state="NOT_PRESENT",error;
     std::string soname,rpath,runpath,build_id,build_id_source;
     std::uint64_t soname_file_offset=0,rpath_file_offset=0,runpath_file_offset=0;
+    // DT_FILTER/DT_AUXILIARY redirect symbol lookup through an alternate
+    // object.  Keep every bounded occurrence: duplicate tags are legal and
+    // one entry is not enough to reconstruct the loader path.
+    std::vector<std::string> filters,auxiliary;
+    std::vector<std::uint64_t> filter_file_offsets,auxiliary_file_offsets;
     std::uint64_t build_id_file_offset=0;
     std::uint32_t build_id_size=0;
     std::uint64_t versym_va=0,versym_file_offset=0,verdef_va=0,verdef_file_offset=0,verneed_va=0,verneed_file_offset=0;

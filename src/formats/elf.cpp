@@ -885,8 +885,17 @@ ElfInfo parse_elf(std::span<const std::uint8_t> d) {
         for(const auto&s:out.segments)if(s.type==4){if(!note_build_id(s.offset,s.file_size,"PT_NOTE")){fail("malformed PT_NOTE while scanning GNU Build ID");break;}}
         if(abi_ok&&ab.build_id.empty()){for(const auto&s:out.sections)if(s.name==".note.gnu.build-id"){if(!note_build_id(s.offset,s.size,"SHT_NOTE")){fail("malformed .note.gnu.build-id section");break;}}}
 
-        std::map<std::int64_t,std::uint64_t> tags;bool dyn_seen=false,dyn_terminated=false,dyn_bad=false;std::size_t dyn_sources=0;
-        auto keep_tag=[&](std::int64_t tag,std::uint64_t value){switch(tag){case 5:case 10:break;case 14:case 15:case 29:case 0x6ffffff0:case 0x6ffffffc:case 0x6ffffffd:case 0x6ffffffe:case 0x6fffffff:abi_seen=true;break;default:return;}auto[it,ins]=tags.emplace(tag,value);if(!ins&&it->second!=value)fail("conflicting ABI dynamic tag "+std::to_string(tag));};
+        std::map<std::int64_t,std::uint64_t> tags;std::vector<std::uint64_t> filter_offsets,auxiliary_offsets;bool dyn_seen=false,dyn_terminated=false,dyn_bad=false;std::size_t dyn_sources=0;
+        constexpr std::size_t max_loader_redirects=1024;
+        auto keep_tag=[&](std::int64_t tag,std::uint64_t value){
+            // DT_FILTER and DT_AUXILIARY are repeatable loader directives;
+            // retain their complete ordered set instead of collapsing them
+            // into the singleton tag map used by the other ABI fields.
+            if(tag==0x7fffffff){if(filter_offsets.size()>=max_loader_redirects)fail("DT_FILTER entry count exceeds limit");else filter_offsets.push_back(value);abi_seen=true;return;}
+            if(tag==0x7ffffffd){if(auxiliary_offsets.size()>=max_loader_redirects)fail("DT_AUXILIARY entry count exceeds limit");else auxiliary_offsets.push_back(value);abi_seen=true;return;}
+            switch(tag){case 5:case 10:break;case 14:case 15:case 29:case 0x6ffffff0:case 0x6ffffffc:case 0x6ffffffd:case 0x6ffffffe:case 0x6fffffff:abi_seen=true;break;default:return;}
+            auto[it,ins]=tags.emplace(tag,value);if(!ins&&it->second!=value)fail("conflicting ABI dynamic tag "+std::to_string(tag));
+        };
         auto scan_abi_dynamic=[&](std::uint64_t off,std::uint64_t size,std::uint64_t entsz)->bool{
             const auto expected=out.elf64?16u:8u;if(entsz!=expected||off>d.size()||size>d.size()-off||size%entsz)return false;
             for(std::uint64_t p=0;p<=size&&entsz<=size-p;p+=entsz){
@@ -903,7 +912,7 @@ ElfInfo parse_elf(std::span<const std::uint8_t> d) {
         if(dyn_seen&&(!dyn_terminated||dyn_bad)){if(abi_ok)partial("dynamic table geometry prevents complete ABI metadata scan");}
         auto tagv=[&](std::int64_t tag)->std::uint64_t{auto it=tags.find(tag);return it==tags.end()?0:it->second;};
         const auto strva=tagv(5),strsz=tagv(10);std::optional<std::pair<std::uint64_t,std::uint64_t>> strex;
-        const bool need_dynstr=tagv(14)||tagv(15)||tagv(29)||tagv(0x6ffffffc)||tagv(0x6ffffffe);
+        const bool need_dynstr=tagv(14)||tagv(15)||tagv(29)||tagv(0x6ffffffc)||tagv(0x6ffffffe)||!filter_offsets.empty()||!auxiliary_offsets.empty();
         if(abi_ok&&need_dynstr){if(!strva||!strsz)fail("ABI metadata requires DT_STRTAB/DT_STRSZ");else{strex=vaddr_file_extent(strva);if(!strex||strsz>strex->second)fail("ABI DT_STRTAB is not bounded by PT_LOAD file range");}}
         auto read_abi_string=[&](std::uint64_t nameoff,const char*what,std::uint64_t*fileoff)->std::optional<std::string>{
             if(!strex||nameoff>=strsz){fail(std::string(what)+" string offset outside DT_STRTAB");return std::nullopt;}const auto remain=strsz-nameoff;const auto limit=std::min<std::uint64_t>(remain,max_abi_string+1);auto x=zstr_bounded(d,strex->first+nameoff,limit);if(!x){fail(std::string(what)+(remain>max_abi_string?" string exceeds 1 MiB limit":" string is not terminated within DT_STRSZ"));return std::nullopt;}if(abi_string_bytes>max_abi_strings_total-x->size()){fail("ABI copied-string budget exceeded");return std::nullopt;}abi_string_bytes+=x->size();if(fileoff)*fileoff=strex->first+nameoff;return x;
@@ -911,6 +920,10 @@ ElfInfo parse_elf(std::span<const std::uint8_t> d) {
         if(abi_ok&&tagv(14)){if(auto x=read_abi_string(tagv(14),"DT_SONAME",&ab.soname_file_offset))ab.soname=std::move(*x);}
         if(abi_ok&&tagv(15)){if(auto x=read_abi_string(tagv(15),"DT_RPATH",&ab.rpath_file_offset))ab.rpath=std::move(*x);}
         if(abi_ok&&tagv(29)){if(auto x=read_abi_string(tagv(29),"DT_RUNPATH",&ab.runpath_file_offset))ab.runpath=std::move(*x);}
+        if(abi_ok){
+            for(const auto off:filter_offsets){std::uint64_t fileoff=0;if(auto x=read_abi_string(off,"DT_FILTER",&fileoff)){ab.filters.push_back(std::move(*x));ab.filter_file_offsets.push_back(fileoff);}else break;}
+            for(const auto off:auxiliary_offsets){std::uint64_t fileoff=0;if(auto x=read_abi_string(off,"DT_AUXILIARY",&fileoff)){ab.auxiliary.push_back(std::move(*x));ab.auxiliary_file_offsets.push_back(fileoff);}else break;}
+        }
 
         ab.versym_va=tagv(0x6ffffff0);ab.verdef_va=tagv(0x6ffffffc);ab.verdef_count=static_cast<std::uint32_t>(tagv(0x6ffffffd));ab.verneed_va=tagv(0x6ffffffe);ab.verneed_count=static_cast<std::uint32_t>(tagv(0x6fffffff));
         if(tagv(0x6ffffffd)>std::numeric_limits<std::uint32_t>::max()||tagv(0x6fffffff)>std::numeric_limits<std::uint32_t>::max())fail("GNU version-table count exceeds uint32 range");

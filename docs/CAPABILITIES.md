@@ -21,7 +21,7 @@
 
 ### ELF / Linux
 
-- ELF32/64 基础结构、Program/Section Header、动态段、符号、REL/RELA/RELR、解释器与 ABI 关系。
+- ELF32/64 基础结构、Program/Section Header、动态段、符号、REL/RELA/RELR、解释器与 ABI 关系；对会改变符号查找对象的 `DT_FILTER`/`DT_AUXILIARY` 保留每个条目的名称与文件偏移。
 - unwind / exception metadata 和函数范围相关结构。
 - Linux x86-64 运行时后端可对适合的 executable/PIE 目标进行显式 `--run` 分析。
 
