@@ -75,14 +75,18 @@ bool argument_loads_stack_field(std::span<const std::uint8_t>d,const PeInfo&pe,c
 
 struct DebugRegisterUse{std::uint32_t count=0,first_rva=0;std::string names;};
 DebugRegisterUse debug_register_context_use(std::span<const std::uint8_t>d,const PeInfo&pe,const ImportedCall&c){DebugRegisterUse out;auto ref=stack_pointer_arg(d,pe,c,1);if(!ref)return out;auto ins=decode_range(d,pe,{c.func_begin,c.func_end});std::size_t idx=ins.size();for(std::size_t i=0;i<ins.size();++i)if(ins[i].rva==c.callsite){idx=i;break;}if(idx==ins.size())return out;static constexpr std::array<std::pair<std::int64_t,const char*>,6>dr={{{0x48,"Dr0"},{0x50,"Dr1"},{0x58,"Dr2"},{0x60,"Dr3"},{0x68,"Dr6"},{0x70,"Dr7"}}};std::set<std::string>seen;for(std::size_t i=idx+1;i<ins.size()&&i<=idx+96;++i){const auto&x=ins[i];for(std::uint8_t k=0;k<x.zi.operand_count_visible;++k){const auto&o=x.ops[k];if(o.type!=ZYDIS_OPERAND_TYPE_MEMORY||o.mem.index!=ZYDIS_REGISTER_NONE||large(o.mem.base)!=ref->base||!o.mem.disp.has_displacement)continue;for(auto [off,name]:dr)if(o.mem.disp.value==ref->disp+off){if(seen.insert(name).second){if(!out.first_rva)out.first_rva=x.rva;++out.count;}}}if(x.zi.meta.category==ZYDIS_CATEGORY_RET)break;}for(const auto&n:seen){if(!out.names.empty())out.names+=",";out.names+=n;}return out;}
-struct DebugContextFlags{std::uint32_t value=0,rva=0;std::uint64_t file_offset=0;};
+struct DebugContextFlags{std::uint32_t value=0,rva=0,instruction_size=0;std::uint64_t file_offset=0;bool stack_local=false;ZydisRegister stack_base=ZYDIS_REGISTER_NONE;std::int64_t stack_disp=0;};
 std::optional<DebugContextFlags> debug_context_flags(std::span<const std::uint8_t>d,const PeInfo&pe,const ImportedCall&c){
     // SetThreadContext/NtSetContextThread receive the CONTEXT pointer as the
     // second argument.  Resolve only a file-backed pointer and read the
     // ContextFlags field at offset zero; this keeps a bare API import from
     // becoming a finding while still catching the common static CONTEXT
     // object used to clear or install hardware breakpoints.
-    auto p=pointer_rva_arg(d,pe,c,1);if(!p)return{};auto off=rvaoff(pe,p->rva,d.size());if(!off||*off+4>d.size())return{};std::uint32_t flags=0;std::memcpy(&flags,d.data()+*off,4);return DebugContextFlags{flags,p->rva,*off};
+    if(auto p=pointer_rva_arg(d,pe,c,1)){auto off=rvaoff(pe,p->rva,d.size());if(off&&*off+4<=d.size()){std::uint32_t flags=0;std::memcpy(&flags,d.data()+*off,4);return DebugContextFlags{flags,p->rva,4,*off,false,ZYDIS_REGISTER_NONE,0};}}
+    // Optimized/native samples commonly initialize CONTEXT on the stack:
+    // `mov dword ptr [rsp+N], CONTEXT_DEBUG_REGISTERS; lea rdx,[rsp+N]`.
+    // Keep this path exact to one stack slot and one immediate initializer.
+    auto ref=stack_pointer_arg(d,pe,c,1);if(!ref)return{};auto ins=decode_range(d,pe,{c.func_begin,c.func_end});std::size_t idx=ins.size();for(std::size_t i=0;i<ins.size();++i)if(ins[i].rva==c.callsite){idx=i;break;}if(idx==ins.size())return{};for(std::size_t z=idx,seen=0;z-->0&&seen<160;++seen){const auto&x=ins[z];if(x.zi.mnemonic!=ZYDIS_MNEMONIC_MOV||x.zi.operand_count_visible<2||x.ops[0].type!=ZYDIS_OPERAND_TYPE_MEMORY||x.ops[1].type!=ZYDIS_OPERAND_TYPE_IMMEDIATE)continue;const auto&m=x.ops[0].mem;if(m.index!=ZYDIS_REGISTER_NONE||large(m.base)!=large(ref->base)||!m.disp.has_displacement||m.disp.value!=ref->disp)continue;auto off=fileoff(pe,x.rva);if(!off)continue;return DebugContextFlags{static_cast<std::uint32_t>(x.ops[1].imm.value.u),x.rva,x.zi.length,*off,true,large(ref->base),ref->disp};}return{};
 }
 bool postcall_conditional(std::span<const std::uint8_t>d,const PeInfo&pe,const ImportedCall&c){if(!c.func_end)return false;auto ins=decode_range(d,pe,{c.func_begin,c.func_end});std::size_t idx=ins.size();for(std::size_t i=0;i<ins.size();++i)if(ins[i].rva==c.callsite){idx=i;break;}if(idx==ins.size())return false;bool ret_test=false;for(std::size_t i=idx+1;i<ins.size()&&i<=idx+7;++i){const auto&x=ins[i];if(x.zi.mnemonic==ZYDIS_MNEMONIC_TEST||x.zi.mnemonic==ZYDIS_MNEMONIC_CMP){for(std::uint8_t k=0;k<x.zi.operand_count_visible;++k)if(x.ops[k].type==ZYDIS_OPERAND_TYPE_REGISTER&&large(x.ops[k].reg.value)==ZYDIS_REGISTER_RAX)ret_test=true;}if(ret_test&&x.zi.meta.category==ZYDIS_CATEGORY_COND_BR)return true;if(x.zi.meta.category==ZYDIS_CATEGORY_CALL||x.zi.meta.category==ZYDIS_CATEGORY_RET)break;}return false;}
 bool function_has_imm(std::span<const std::uint8_t>d,const PeInfo&pe,const ImportedCall&c,std::initializer_list<std::uint64_t>vals){if(!c.func_end)return false;auto ins=decode_range(d,pe,{c.func_begin,c.func_end});for(const auto&x:ins)for(std::uint8_t k=0;k<x.zi.operand_count_visible;++k)if(x.ops[k].type==ZYDIS_OPERAND_TYPE_IMMEDIATE&&!x.ops[k].imm.is_relative)for(auto v:vals)if(x.ops[k].imm.value.u==v)return true;return false;}
@@ -218,11 +222,12 @@ std::vector<Finding> detect_antidebug(std::span<const std::uint8_t>d,const PeInf
             if(auto ctx=debug_context_flags(d,pe,c);(ctx&&((ctx->value&0x00100010u)==0x00100010u))){
                 auto f=mk(c.name+"/DebugRegisters","CONFIRMED",0.995,"hardware-breakpoint control","write a CONTEXT containing CONTEXT_DEBUG_REGISTERS",c.callsite,c.func_begin,c.name);
                 std::ostringstream flags,rva;flags<<"0x"<<std::hex<<ctx->value;rva<<"0x"<<std::hex<<ctx->rva;
-                f.fields["context_flags"]=flags.str();f.fields["context_rva"]=rva.str();f.fields["debug_registers_bit"]="0x10";f.fields["context_flags_source"]="FILE_BACKED_CONTEXT_STRUCTURE";
-                f.evidence.push_back("the actual SetThreadContext-family call receives a file-backed CONTEXT whose ContextFlags includes CONTEXT_DEBUG_REGISTERS (0x10)");
+                f.fields["context_flags"]=flags.str();f.fields["debug_registers_bit"]="0x10";
+                if(ctx->stack_local){std::ostringstream disp;disp<<"0x"<<std::hex<<ctx->stack_disp;f.fields["context_storage"]="STACK_LOCAL";f.fields["context_stack_base"]="RSP_OR_RBP";f.fields["context_stack_offset"]=disp.str();f.fields["context_flags_source"]="STACK_CONTEXT_INITIALIZER";f.evidence.push_back("the actual SetThreadContext-family call receives a stack-local CONTEXT whose ContextFlags initializer includes CONTEXT_DEBUG_REGISTERS (0x10)");}
+                else{f.fields["context_rva"]=rva.str();f.fields["context_storage"]="FILE_BACKED";f.fields["context_flags_source"]="FILE_BACKED_CONTEXT_STRUCTURE";f.evidence.push_back("the actual SetThreadContext-family call receives a file-backed CONTEXT whose ContextFlags includes CONTEXT_DEBUG_REGISTERS (0x10)");}
                 f.evidence.push_back("the write can alter x64 hardware-breakpoint state (Dr0-Dr7), a common debugger evasion or execution-control surface");
                 f.negative_evidence.push_back("the static CONTEXT bytes do not prove which Dr0-Dr7 values are applied at runtime");
-                annotate_import_call(f,pe,c);f.ranges.push_back({ctx->file_offset,4,"CONTEXT.ContextFlags"});out.push_back(std::move(f));
+                annotate_import_call(f,pe,c);f.ranges.push_back({ctx->file_offset,ctx->instruction_size,ctx->stack_local?"stack CONTEXT.ContextFlags initializer":"CONTEXT.ContextFlags"});out.push_back(std::move(f));
             }
             continue;
         }

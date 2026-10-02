@@ -202,6 +202,16 @@ def set_thread_context_debug_registers() -> bytes:
     return b"\x48\x8d\x15" + struct.pack("<i", context_disp) + b"\xff\x15" + struct.pack("<i", call_disp) + b"\xc3"
 
 
+def set_thread_context_debug_registers_stack() -> bytes:
+    # sub rsp,28h; mov dword ptr [rsp+20h],100010h; lea rdx,[rsp+20h];
+    # call SetThreadContext through the first IAT slot.
+    code = bytearray(bytes.fromhex("4883ec28c744242010001000488d542420"))
+    call_rva = 0x1000 + len(code)
+    code += b"\xff\x15" + struct.pack("<i", 0x2050 - (call_rva + 6))
+    code += bytes.fromhex("4883c428c3")
+    return bytes(code)
+
+
 def run(binary: Path, payload: bytes) -> dict:
     with tempfile.TemporaryDirectory(prefix="ar-antidebug-bait-") as raw:
         sample = Path(raw) / "sample.exe"
@@ -315,6 +325,11 @@ def main() -> None:
                         if x["variant"] == "SetThreadContext/DebugRegisters"]
     assert context_findings and context_findings[0]["state"] == "CONFIRMED", findings
     assert context_findings[0]["fields"]["context_flags"] == "0x100010", findings
+    context_stack = run(binary, pe64(code=set_thread_context_debug_registers_stack(),
+                                     imports=("SetThreadContext",)))
+    stack_findings = [x for x in anti(context_stack)
+                      if x["variant"] == "SetThreadContext/DebugRegisters"]
+    assert stack_findings and stack_findings[0]["fields"]["context_storage"] == "STACK_LOCAL", stack_findings
 
     # Native ntdll exports the same VEH registration primitive under the Rtl
     # prefix.  It must receive the same trap/callback correlation as the
