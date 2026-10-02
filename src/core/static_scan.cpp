@@ -118,8 +118,22 @@ EmbeddedScanPart scan_embedded_part(std::span<const std::uint8_t>d){EmbeddedScan
         // Every embedded/crypto signature below has one of these leading bytes.
         // Reject all other bytes before entering the exact per-signature checks.
         switch(c){case 'M':case 0x7f:case 'P':case 'G':case 'K':case 0x6b:case 0xb9:case 0x20:case 0x81:case 0x3d:case 0x0f:case 0xff:case 0xfb:case 0xfa:case 0xf0:case 0xf1:break;default:continue;}
-        if(o&&c=='M'&&d[o+1]=='Z'){std::uint64_t sz=0;if(valid_pe_at(d,o,sz))r.embedded.push_back({"PE",o,sz,true,"CONFIRMED",std::nullopt,"validated MZ/PE headers and sections"});}
-        else if(o&&c==0x7f&&d[o+1]=='E'&&d[o+2]=='L'&&d[o+3]=='F'&&valid_elf_at(d,o))r.embedded.push_back({"ELF",o,4,true,"CONFIRMED",std::nullopt,"validated ELF ident"});
+        if(o&&c=='M'&&d[o+1]=='Z'){
+            std::uint64_t sz=0;
+            // This pass only closes the candidate's MZ/PE signature, section
+            // table, and raw ranges.  Optional-header semantics and the exact
+            // executable extent belong to the bounded nested-PE validator;
+            // keeping the marker route-only avoids presenting a malformed
+            // payload as a confirmed child in the static report.
+            if(valid_pe_at(d,o,sz))r.embedded.push_back({"PE",o,sz,false,"SUSPECTED",0.30,"MZ/PE marker candidate; nested executable geometry requires independent validation"});
+        }
+        // An ELF identification header is only a candidate at this stage.  The
+        // full nested-image validator must check the program-header geometry,
+        // PT_LOAD/entry relation, and exact file extent before the object can
+        // be called validated.  Treating four magic bytes as CONFIRMED caused
+        // malformed/truncated payloads to look like ready-to-analyze children
+        // in the static report.
+        else if(o&&c==0x7f&&d[o+1]=='E'&&d[o+2]=='L'&&d[o+3]=='F'&&valid_elf_at(d,o))r.embedded.push_back({"ELF",o,4,false,"SUSPECTED",0.30,"ELF identification marker candidate; nested executable geometry requires independent validation"});
         else if(c=='P'&&d[o+1]=='Y'&&d[o+2]=='Z'&&d[o+3]==0){r.hints.pyinstaller=true;r.embedded.push_back({"PYZ",o,4,false,"SUSPECTED",0.55,"PYZ magic candidate; container parser must validate"});}
         else if(c=='G'&&d[o+1]=='D'&&d[o+2]=='P'&&d[o+3]=='C'){r.hints.godot=true;r.embedded.push_back({"GodotPCK",o,4,false,"SUSPECTED",0.55,"Godot PCK magic candidate; PCK parser must validate"});}
         else if(c=='K'&&d[o+1]=='A'&&(d[o+2]=='X'||d[o+2]=='Y'))r.hints.nuitka=true;

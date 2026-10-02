@@ -78,6 +78,32 @@ int main() {
     auto gdpc_scan=scan(gdpc_text);
     if(!gdpc_scan.hints.godot||gdpc_scan.embedded.size()!=1||gdpc_scan.embedded[0].kind!="GodotPCK"||gdpc_scan.embedded[0].state!="SUSPECTED"||gdpc_scan.embedded[0].size!=4)fail("raw GDPC marker lost its exact magic range");
 
+    // The four-byte ELF ident marker alone is not enough to claim a validated
+    // child: a truncated/otherwise malformed payload must stay route-only
+    // until the bounded nested-ELF validator closes its geometry and extent.
+    std::string elf_candidate("xx",2);
+    elf_candidate.push_back(char(0x7f));
+    elf_candidate.append("ELF",3);
+    elf_candidate.push_back(char(2));
+    elf_candidate.push_back(char(1));
+    elf_candidate.push_back(char(1));
+    elf_candidate.push_back(char(0));
+    elf_candidate.append(56,'\0');
+    const auto elf_scan=scan(elf_candidate);
+    if(elf_scan.embedded.size()!=1||elf_scan.embedded[0].kind!="ELF"||elf_scan.embedded[0].state!="SUSPECTED"||elf_scan.embedded[0].validated||elf_scan.embedded[0].size!=4)fail("raw ELF marker was promoted above route-only candidate state");
+
+    // Likewise, a marker with a plausible section table but no PE optional
+    // header must remain a candidate until the full nested validator runs.
+    std::string pe_candidate(0x300,'\0');
+    pe_candidate[2]='M'; pe_candidate[3]='Z';
+    pe_candidate[2+0x3c]=0x40;
+    pe_candidate[2+0x40]='P'; pe_candidate[2+0x41]='E';
+    pe_candidate[2+0x46]=1; // one section
+    pe_candidate[2+0x58+16]=0x10; // section raw size
+    pe_candidate[2+0x58+20]=char(0x80); // section raw offset
+    const auto pe_scan=scan(pe_candidate);
+    if(pe_scan.embedded.size()!=1||pe_scan.embedded[0].kind!="PE"||pe_scan.embedded[0].state!="SUSPECTED"||pe_scan.embedded[0].validated)fail("raw PE marker was promoted above route-only candidate state");
+
     std::cout << "PASS\n";
     return 0;
 }

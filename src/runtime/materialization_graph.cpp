@@ -53,6 +53,14 @@ bool same_runtime_path(const std::string& a,const std::string& b){
 #endif
 }
 
+std::string runtime_path_key(const std::string& value){
+#ifdef _WIN32
+    return lower_ascii(value);
+#else
+    return value;
+#endif
+}
+
 bool runtime_backing_kind(const std::string& value){
     const auto k=lower_ascii(value);
     return k.find("runtime_released_file")!=std::string::npos||
@@ -349,15 +357,23 @@ void append_runtime_actionable_findings(AnalysisReport&report,const Materializat
     // reverse-engineering step. The complete event/timeline and graph remain
     // available as detail artifacts.
     if(!has_family(report,"Runtime-created module load")){
-        std::size_t emitted=0;
+        struct Aggregate {
+            Finding finding;
+            std::uint64_t last_load_seq=0;
+        };
+        std::map<std::string,std::size_t> active;
+        std::vector<Aggregate> aggregates;
         for(const auto&load:report.runtime.timeline){
-            if(emitted>=32)break;
             if(load.kind!=TimelineKind::ModuleLoad||load.subject.empty())continue;
             const TimelineEvent* create=nullptr;bool runtime_backing=false;
             for(const auto&e:report.runtime.timeline){
                 if(e.seq>load.seq)continue;
+                // Directory-watch events are intentionally process-neutral
+                // (uid 0). An attributed write from an unrelated process must
+                // not make an existing path look like this module's payload.
+                if(e.process_uid!=0&&e.process_uid!=load.process_uid)continue;
                 if((e.kind==TimelineKind::FileCreate||e.kind==TimelineKind::FileWrite)&&same_runtime_path(e.subject,load.subject)){
-                    create=&e;
+                    if(!create)create=&e;
                     if(auto bk=field(e.fields,"backing_kind"))runtime_backing=runtime_backing||runtime_backing_kind(*bk);
                     if(auto op=field(e.fields,"operation"))runtime_backing=runtime_backing||runtime_backing_kind(*op);
                 }
@@ -365,10 +381,29 @@ void append_runtime_actionable_findings(AnalysisReport&report,const Materializat
             if(!create)continue;
             Finding f;f.kind="runtime";f.family="Runtime-created module load";f.variant=runtime_backing?"runtime_backing":"created_file";f.state="CONFIRMED";
             f.evidence.push_back("a file created or written during execution was loaded as a module");
-            f.fields["path"]=load.subject;f.fields["process_uid"]=std::to_string(load.process_uid);f.fields["load_event_seq"]=std::to_string(load.seq);f.fields["create_event_seq"]=std::to_string(create->seq);
+            f.fields["path"]=load.subject;f.fields["process_uid"]=std::to_string(load.process_uid);f.fields["load_event_seq"]=std::to_string(load.seq);f.fields["first_load_event_seq"]=std::to_string(load.seq);f.fields["last_load_event_seq"]=std::to_string(load.seq);f.fields["load_event_count"]="1";f.fields["create_event_seq"]=std::to_string(create->seq);
             if(auto base=fu64(load.fields,"base")){f.fields["module_base"]=hex_text(*base);f.ranges.push_back(va_range(*base,1,"runtime-created module base",CoordinateBasis::PROCESS_IMAGE,load.subject,load.process_uid));}
-            report.findings.push_back(std::move(f));++emitted;
+            const std::string key=std::to_string(load.process_uid)+"|"+f.variant+"|"+runtime_path_key(load.subject);
+            auto it=active.find(key);
+            if(it==active.end()){
+                if(aggregates.size()>=32)continue;
+                active.emplace(key,aggregates.size());aggregates.push_back({std::move(f),load.seq});
+                continue;
+            }
+            auto&aggregate=aggregates[it->second];
+            aggregate.last_load_seq=load.seq;
+            aggregate.finding.fields["last_load_event_seq"]=std::to_string(load.seq);
+            auto count=parse_u64(aggregate.finding.fields["load_event_count"]).value_or(0)+1;
+            aggregate.finding.fields["load_event_count"]=std::to_string(count);
+            // Keep the earliest creation evidence and retain every distinct
+            // observed module base as a precise range.
+            if(auto old_create=parse_u64(aggregate.finding.fields["create_event_seq"]);!old_create||create->seq<*old_create)aggregate.finding.fields["create_event_seq"]=std::to_string(create->seq);
+            for(const auto&range:f.ranges){
+                const auto duplicate=std::any_of(aggregate.finding.ranges.begin(),aggregate.finding.ranges.end(),[&](const auto&existing){return existing.coordinate_space==range.coordinate_space&&existing.offset==range.offset&&existing.size==range.size&&existing.process_uid==range.process_uid;});
+                if(!duplicate)aggregate.finding.ranges.push_back(range);
+            }
         }
+        for(auto&aggregate:aggregates)report.findings.push_back(std::move(aggregate.finding));
     }
 
     if(!has_family(report,"Runtime-created executable")){
@@ -386,9 +421,11 @@ void append_runtime_actionable_findings(AnalysisReport&report,const Materializat
     }
 
     if(!has_family(report,"Runtime executable mutation")){
-        std::size_t emitted=0;
+        struct Aggregate { Finding finding; std::uint64_t last_seq=0; };
+        std::map<std::string,std::size_t> active;
+        std::vector<Aggregate> aggregates;
         for(const auto&e:report.runtime.timeline){
-            if(e.kind!=TimelineKind::MemoryWrite||emitted>=32)continue;
+            if(e.kind!=TimelineKind::MemoryWrite)continue;
             const auto changed=fu64(e.fields,"changed_bytes").value_or(0);
             const bool candidate=field_is(e.fields,"runtime_mutation_generation_candidate","true")||
                 field_is(e.fields,"image_mutation_state","CHANGED_SINCE_PROCESS_CREATE")||
@@ -396,7 +433,7 @@ void append_runtime_actionable_findings(AnalysisReport&report,const Materializat
             if(!candidate||!changed)continue;
             Finding f;f.kind="runtime";f.family="Runtime executable mutation";f.state="CONFIRMED";
             f.evidence.push_back("executable bytes changed after the process image or materialized region had been observed");
-            f.fields["process_uid"]=std::to_string(e.process_uid);f.fields["event_seq"]=std::to_string(e.seq);f.fields["changed_bytes"]=std::to_string(changed);
+            f.fields["process_uid"]=std::to_string(e.process_uid);f.fields["event_seq"]=std::to_string(e.seq);f.fields["first_event_seq"]=std::to_string(e.seq);f.fields["last_event_seq"]=std::to_string(e.seq);f.fields["event_count"]="1";f.fields["changed_bytes"]=std::to_string(changed);
             if(auto source=field(e.fields,"source"))f.fields["source"]=*source;
             if(auto trigger=field(e.fields,"trigger"))f.fields["trigger"]=*trigger;
             if(auto ranges=field(e.fields,"changed_ranges")){for(auto&r:parse_runtime_rva_ranges(*ranges,e.process_image,e.process_uid))f.ranges.push_back(std::move(r));}
@@ -405,8 +442,27 @@ void append_runtime_actionable_findings(AnalysisReport&report,const Materializat
                 if(start&&end&&*end>*start)f.ranges.push_back(va_range(*start,*end-*start,"runtime-changed executable region",CoordinateBasis::MEMORY_REGION,e.process_image,e.process_uid));
                 else if(auto first=fu64(e.fields,"first_changed_rva"))f.ranges.push_back(rva_range(*first,1,"first runtime-changed executable byte",CoordinateBasis::PROCESS_IMAGE,e.process_image,e.process_uid));
             }
-            report.findings.push_back(std::move(f));++emitted;
+            // Keep the event source and full coordinate identity in the key. A
+            // process can legitimately write the same numeric RVA in separate
+            // images or through different evidence paths; merging those would
+            // hide the distinction needed to decide which bytes to inspect.
+            std::ostringstream key;key<<e.process_uid<<'|';
+            if(auto source=field(e.fields,"source"))key<<*source;
+            key<<'|';
+            for(const auto&r:f.ranges){
+                key<<static_cast<int>(r.coordinate_space)<<':'<<static_cast<int>(r.basis)<<':'<<r.offset<<':'<<r.size<<':'<<r.artifact_identity<<':'
+                   <<(r.process_uid?std::to_string(*r.process_uid):std::string{})<<':'<<(r.image_base?std::to_string(*r.image_base):std::string{})<<';';
+            }
+            // Without a concrete range there is no safe identity to prove that
+            // two writes touch the same bytes; keep such events separate.
+            if(f.ranges.empty())key<<"unknown:"<<e.seq;
+            auto it=active.find(key.str());
+            if(it!=active.end()&&aggregates[it->second].last_seq+1==e.seq){
+                auto&a=aggregates[it->second];a.last_seq=e.seq;
+                auto n=parse_u64(a.finding.fields["event_count"]).value_or(0)+1;a.finding.fields["event_count"]=std::to_string(n);a.finding.fields["last_event_seq"]=std::to_string(e.seq);a.finding.fields["changed_bytes"]=std::to_string(parse_u64(a.finding.fields["changed_bytes"]).value_or(0)+changed);
+            }else if(aggregates.size()<32){active[key.str()]=aggregates.size();aggregates.push_back({std::move(f),e.seq});}
         }
+        for(auto&a:aggregates)report.findings.push_back(std::move(a.finding));
     }
 }
 
