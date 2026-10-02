@@ -1322,6 +1322,11 @@ std::string render_summary_text(const AnalysisReport& r) {
             o << "  [" << a.state << "] " << a.kind;
             if (!a.path.empty()) o << ": " << path_utf8(a.path);
             o << "\n";
+            // Keep runtime priority locations available in the concise view.
+            // Most artifacts have no ranges, so the compact output remains
+            // unchanged for ordinary runtime metadata.
+            for (const auto& range : a.priority_ranges)
+                render_range_text(o,r,range,"    priority_range: ",&a);
         }
     }
     if (r.runtime.requested && changed(r.runtime)!="unchanged")
@@ -1380,7 +1385,16 @@ void render_summary_json(std::ostream& o,const AnalysisReport& r) {
         if(!first) o<<',';
         first=false;
         o << "{\"kind\":\"" << esc(a.kind) << "\",\"state\":\"" << esc(a.state)
-          << "\",\"path\":\"" << esc(path_utf8(a.path)) << "\"}";
+          << "\",\"path\":\"" << esc(path_utf8(a.path)) << "\"";
+        if (!a.priority_ranges.empty()) {
+            o << ",\"ranges\":[";
+            for (std::size_t j=0;j<a.priority_ranges.size();++j) {
+                if (j) o << ',';
+                render_range_json(o,r,a.priority_ranges[j],&a);
+            }
+            o << ']';
+        }
+        o << '}';
     }
     o << "]\n}\n";
 }

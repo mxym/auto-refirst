@@ -98,6 +98,37 @@ def main() -> int:
         assert fields["static_child_format"] == "ELF"
         assert pathlib.Path(fields["static_child_report"]).is_file()
         assert not report["replacement"]["performed"]
+
+        # The concise views must retain the runtime artifact's precise review
+        # locations.  These ranges are present on the full runtime artifact
+        # (the recovered ELF header here) and are needed to inspect a dump
+        # without reopening the full report.
+        summary_root = root / "summary-artifacts"
+        cp = subprocess.run(
+            [str(binary), str(fixture), "--run", "--timeout=3000",
+             f"--artifact-root={summary_root}", "--summary", "--json"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if cp.returncode:
+            raise AssertionError(cp.stderr)
+        summary = json.loads(cp.stdout)
+        summary_candidates = [
+            item for item in summary["runtime_artifacts"]
+            if item.get("kind") == "runtime_backing_elf"
+        ]
+        assert summary_candidates and any(item.get("ranges") for item in summary_candidates), summary
+        ranges = next(item["ranges"] for item in summary_candidates if item.get("ranges"))
+        assert ranges[0]["coordinate_space"] == "FILE_OFFSET", ranges
+        assert ranges[0]["basis"] == "ARTIFACT_FILE", ranges
+
+        cp = subprocess.run(
+            [str(binary), str(fixture), "--run", "--timeout=3000",
+             f"--artifact-root={root / 'summary-text-artifacts'}", "--summary"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if cp.returncode:
+            raise AssertionError(cp.stderr)
+        assert "priority_range: coordinate_space=FILE_OFFSET" in cp.stdout, cp.stdout
     print("[PASS] released-file ELF runtime reingest and static child handoff")
     return 0
 
