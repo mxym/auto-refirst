@@ -176,6 +176,32 @@ def rtl_veh_trap() -> bytes:
     return bytes(body)
 
 
+def guard_page_probe(*, guard: bool = True, handler: bool = True,
+                     target_rva: int = 0x1000) -> bytes:
+    """Register an executable VEH then guard a statically resolved PE range."""
+    body = bytearray(b"\x90" * 0x100)
+    code = bytearray()
+    if handler:
+        # mov rdx, 0x140001080 (executable callback); mov ecx,1;
+        # call AddVectoredExceptionHandler through IAT[0].
+        code += b"\x48\xba" + struct.pack("<Q", 0x140001080)
+        code += b"\xb9\x01\x00\x00\x00"
+        call_rva = 0x1000 + len(code)
+        code += b"\xff\x15" + struct.pack("<i", 0x2050 - (call_rva + 6))
+    # VirtualProtect(lpAddress=current PE, dwSize=0x10,
+    #                flNewProtect=PAGE_READWRITE|PAGE_GUARD, ...).
+    code += b"\x48\xb9" + struct.pack("<Q", 0x140000000 + target_rva)
+    code += b"\xba\x10\x00\x00\x00"
+    code += b"\x41\xb8" + struct.pack("<I", (0x104 if guard else 0x04))
+    code += b"\x45\x33\xc9"  # xor r9d,r9d (old-protection output omitted)
+    call_rva = 0x1000 + len(code)
+    code += b"\xff\x15" + struct.pack("<i", 0x2058 - (call_rva + 6))
+    code += b"\xc3"
+    body[:len(code)] = code
+    body[0x80] = 0xC3
+    return bytes(body)
+
+
 def peb_being_debugged() -> bytes:
     # mov rax, gs:[0x60]; movzx eax, byte ptr [rax+2]; ret
     return b"\x65\x48\x8b\x04\x25\x60\x00\x00\x00\x0f\xb6\x40\x02\xc3"
@@ -450,6 +476,35 @@ def main() -> None:
                                                        imports=("AddVectoredContinueHandler",)))
     assert "AddVectoredContinueHandler" in continue_flow, continue_flow
     assert "TRIGGER_HANDLER_CORRELATED" in continue_flow, continue_flow
+
+    # A PAGE_GUARD request is only promoted when it targets current-PE
+    # executable bytes and follows an executable VEH registration in the same
+    # bounded function.  The flag/API/import alone, a non-guard protection,
+    # and a non-executable target remain silent.
+    guard = run(binary, pe64(code=guard_page_probe(),
+                             imports=("AddVectoredExceptionHandler", "VirtualProtect")))
+    guard_findings = [x for x in anti(guard)
+                      if x["variant"] == "VirtualProtect/PAGE_GUARD"]
+    assert len(guard_findings) == 1, guard
+    gf = guard_findings[0]
+    assert gf["state"] == "LIKELY", gf
+    assert gf["fields"]["protection_flags"] == "0x104", gf
+    assert gf["fields"]["protected_rva"] == "0x1000", gf
+    assert gf["fields"]["handler_registration_api"] == "AddVectoredExceptionHandler", gf
+    assert gf["fields"]["registration_precedes_protection"] == "true", gf
+    assert any("PAGE_GUARD" in x for x in gf["evidence"]), gf
+    guard_no_handler = run(binary, pe64(code=guard_page_probe(handler=False),
+                                        imports=("AddVectoredExceptionHandler", "VirtualProtect")))
+    assert not any(x["variant"] == "VirtualProtect/PAGE_GUARD"
+                   for x in anti(guard_no_handler)), guard_no_handler
+    guard_non_guard = run(binary, pe64(code=guard_page_probe(guard=False),
+                                       imports=("AddVectoredExceptionHandler", "VirtualProtect")))
+    assert not any(x["variant"] == "VirtualProtect/PAGE_GUARD"
+                   for x in anti(guard_non_guard)), guard_non_guard
+    guard_non_exec = run(binary, pe64(code=guard_page_probe(target_rva=0x300),
+                                      imports=("AddVectoredExceptionHandler", "VirtualProtect")))
+    assert not any(x["variant"] == "VirtualProtect/PAGE_GUARD"
+                   for x in anti(guard_non_exec)), guard_non_exec
 
     # Ordinary timing/diagnostic imports and a PDB marker remain below the
     # anti-debug contract when no callsite or data-flow is present.

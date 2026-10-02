@@ -56,6 +56,7 @@ These are meaningful only when multiple facts line up:
 - x64 `PEB.NtGlobalFlag` is recognized only when the PEB is derived from `GS:[0x60]`, offset `+0xBC` is accessed, and the canonical debug-heap mask `0x70` is explicitly tested/masked. The internal offset is reported as version-sensitive and is not treated like a public ABI.
 - x64 `PEB.ProcessHeap` is recognized only when `GS:[0x60] -> PEB + 0x30` is recovered and the resulting heap pointer reaches a bounded `Flags` (`+0x70`) or `ForceFlags` (`+0x74`) `TEST`/`CMP`/`AND` operation. A bare `+0x30`, `+0x70`, or `+0x74` load is ignored.
 - `CPUID/hypervisor-present` is recognized only when the same bounded function loads `EAX=1`, executes `CPUID`, tests `ECX[31]` (`0x80000000`, or `BT ECX,31`), and feeds a nearby conditional branch. Ordinary CPUID feature dispatch is ignored; the result identifies a virtualized environment and does not by itself establish debugger intent.
+- `VirtualProtect/PAGE_GUARD` is recognized only when a same-function executable VEH/SEH callback registration precedes `VirtualProtect`, the protection argument contains `PAGE_GUARD (0x100)`, and the protected address/size resolve to current-PE executable/file-backed bytes. A guard-page import or flag without this protocol remains silent.
 - `RFLAGS.TrapFlag` is recognized only when `PUSHFQ` is immediately followed by `POP` into a tracked register, RFLAGS bit 8 is tested (`TEST/AND/CMP` with `0x100` or `BT` with `8`), and a nearby conditional branch consumes the result. Bit 0 is Carry Flag and is deliberately ignored. A plain flags save/restore sequence is ignored. The bit assignment follows Intel SDM Vol. 1 §3.4.3.1 and the public `PUSHFQ` reference: <https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html>, <https://www.felixcloutier.com/x86/pushf:pushfd:pushfq>.
 
 ### Weak/ambiguous — normally `SUSPECTED`
@@ -109,7 +110,8 @@ Implemented now:
 19. separate `Self-integrity` findings for bounded current-PE executable-range ADD32/XOR32/FNV-1a32 byte checksums, with scanner/direct-caller reference comparison, immediate/RIP-global references, exact target range recovery, and current-reference match/mismatch recomputation.
 20. x64 PEB `ProcessHeap` `Flags`/`ForceFlags` probes, requiring PEB-to-heap data flow and a concrete field test rather than magic-offset co-occurrence.
 21. CPUID leaf-1 hypervisor-present bit checks with a localized compare and conditional branch.
-22. x64 RFLAGS trap-flag reads through `PUSHFQ`/`POP` with a localized bit test and branch.
+22. x64 RFLAGS trap-flag reads through `PUSHFQ`/`POP` with a localized bit-8 test and branch.
+23. PE64 guard-page exception probes when a prior same-function executable VEH/SEH callback, a PAGE_GUARD protection request, and a current-PE executable/file-backed target all resolve.
 
 ## Research backlog / planned detectors
 
