@@ -66,7 +66,7 @@
 
 `--apply` 不代表一定发生安装；最终报告会记录计划选择、验证状态、备份和替换结果。
 
-Linux 运行时物化会保留创建者、句柄、映射权限和首次执行之间的 provenance。`memfd`、`O_TMPFILE`、严格创建的释放文件以及本次新建的 POSIX shared memory 都按 backing 分开记录；普通文件和运行前已存在的 shared memory 不会仅因被映射就升级为运行时载荷。`write`、`pwrite` 与向量写入的内核返回字节数只作为写入证据，首次执行仍需独立的执行断点或 NX guard 证据。
+Linux 运行时物化会保留创建者、句柄、映射权限和首次执行之间的 provenance。`memfd`、`O_TMPFILE`、严格创建的释放文件以及本次新建的 POSIX shared memory 都按 backing 分开记录；普通文件和运行前已存在的 shared memory 不会仅因被映射就升级为运行时载荷。`write`、`pwrite`、向量写入与 `copy_file_range` 的内核返回字节数只作为写入证据；后者按目标 fd 归因并保留源 fd，首次执行仍需独立的执行断点或 NX guard 证据。
 
 ## 泛化纪律
 
