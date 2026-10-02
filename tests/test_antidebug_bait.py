@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""Small PE64 anti-debug contract and marker-bait regression.
+
+The fixture intentionally uses a valid exception directory and a real x64
+RUNTIME_FUNCTION so the detector has a function boundary.  It is never
+executed.  In particular, an imported anti-debug name (or an embedded PDB
+marker) must not be promoted to a finding until a call/instruction is
+localized.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import struct
+import subprocess
+import sys
+import tempfile
+
+
+def p16(buf: bytearray, off: int, value: int) -> None:
+    struct.pack_into("<H", buf, off, value)
+
+
+def p32(buf: bytearray, off: int, value: int) -> None:
+    struct.pack_into("<I", buf, off, value)
+
+
+def p64(buf: bytearray, off: int, value: int) -> None:
+    struct.pack_into("<Q", buf, off, value)
+
+
+def pe64(*, code: bytes, imports: tuple[str, ...] = (), pdb_marker: bool = False) -> bytes:
+    """Build one bounded PE64 image containing code/imports/.pdata.
+
+    All RVA-bearing structures live in one raw section.  This keeps the
+    fixture readable while still exercising the production parser's import,
+    exception and instruction-coordinate paths.
+    """
+
+    image = bytearray(0x3200)
+    image[:2] = b"MZ"
+    p32(image, 0x3C, 0x80)
+    image[0x80:0x84] = b"PE\0\0"
+    p16(image, 0x84, 0x8664)  # AMD64
+    p16(image, 0x86, 1)
+    p16(image, 0x94, 240)
+    p16(image, 0x96, 0x2022)
+
+    opt = 0x98
+    p16(image, opt, 0x20B)
+    p32(image, opt + 4, 0x3000)
+    p32(image, opt + 16, 0x1000)
+    p32(image, opt + 20, 0x1000)
+    p64(image, opt + 24, 0x140000000)
+    p32(image, opt + 32, 0x1000)
+    p32(image, opt + 36, 0x200)
+    p32(image, opt + 56, 0x4000)
+    p32(image, opt + 60, 0x200)
+    p16(image, opt + 68, 3)
+    p32(image, opt + 72, 0x100000)
+    p32(image, opt + 76, 0x1000)
+    p32(image, opt + 80, 0x100000)
+    p32(image, opt + 84, 0x1000)
+    p32(image, opt + 108, 16)
+
+    # Section: executable and readable; raw offset 0x200 maps RVA 0x1000.
+    section = opt + 240
+    image[section:section + 8] = b".all\0\0\0\0"
+    p32(image, section + 8, 0x3000)
+    p32(image, section + 12, 0x1000)
+    p32(image, section + 16, 0x3000)
+    p32(image, section + 20, 0x200)
+    p32(image, section + 36, 0x60000020)
+
+    raw = lambda rva: 0x200 + (rva - 0x1000)
+    image[raw(0x1000):raw(0x1000) + len(code)] = code
+
+    # Exception directory: one RUNTIME_FUNCTION [0x1000, 0x1100), followed by
+    # a minimal version-1 unwind record.  The detector will decode only the
+    # file-backed function bytes.
+    p32(image, opt + 112 + 3 * 8, 0x3000)
+    p32(image, opt + 112 + 3 * 8 + 4, 12)
+    p32(image, raw(0x3000) + 0, 0x1000)
+    p32(image, raw(0x3000) + 4, 0x1100)
+    p32(image, raw(0x3000) + 8, 0x3100)
+    image[raw(0x3100):raw(0x3100) + 4] = b"\x01\x00\x00\x00"
+
+    if imports:
+        # One kernel32 descriptor and 8-byte PE64 INT/IAT entries.
+        p32(image, opt + 112 + 1 * 8, 0x2000)
+        p32(image, opt + 112 + 1 * 8 + 4, 0x80)
+        desc = raw(0x2000)
+        p32(image, desc + 0, 0x2040)
+        p32(image, desc + 12, 0x2060)
+        p32(image, desc + 16, 0x2050)
+        image[raw(0x2060):raw(0x2060) + 13] = b"kernel32.dll\0"
+        for i, name in enumerate(imports):
+            hint_name_rva = 0x2080 + i * 0x40
+            p64(image, raw(0x2040) + i * 8, hint_name_rva)
+            p64(image, raw(0x2050) + i * 8, hint_name_rva)
+            p16(image, raw(hint_name_rva), 0)
+            encoded = name.encode("ascii") + b"\0"
+            image[raw(hint_name_rva) + 2:raw(hint_name_rva) + 2 + len(encoded)] = encoded
+        # Explicit terminators for INT and IAT.
+        p64(image, raw(0x2040) + len(imports) * 8, 0)
+        p64(image, raw(0x2050) + len(imports) * 8, 0)
+
+    if pdb_marker:
+        marker = b"C:\\build\\release\\sample.pdb\0"
+        image[raw(0x2200):raw(0x2200) + len(marker)] = marker
+
+    return bytes(image)
+
+
+def call_iat(iat_rva: int, *, branch: bool = True) -> bytes:
+    # call qword ptr [rip + (IAT - next_ip)]; test eax,eax; jne +1; ret
+    disp = iat_rva - (0x1000 + 6)
+    code = b"\xff\x15" + struct.pack("<i", disp) + b"\x85\xc0"
+    if branch:
+        code += b"\x75\x01"
+    return code + b"\xc3"
+
+
+def peb_being_debugged() -> bytes:
+    # mov rax, gs:[0x60]; movzx eax, byte ptr [rax+2]; ret
+    return b"\x65\x48\x8b\x04\x25\x60\x00\x00\x00\x0f\xb6\x40\x02\xc3"
+
+
+def run(binary: Path, payload: bytes) -> dict:
+    with tempfile.TemporaryDirectory(prefix="ar-antidebug-bait-") as raw:
+        sample = Path(raw) / "sample.exe"
+        sample.write_bytes(payload)
+        cp = subprocess.run([str(binary), str(sample), "--json"], check=True,
+                            capture_output=True, timeout=30)
+        return json.loads(cp.stdout.decode("utf-8"))
+
+
+def anti(report: dict) -> list[dict]:
+    return [f for f in report.get("findings", []) if f.get("family") == "Anti-debug"]
+
+
+def main() -> None:
+    binary = Path(sys.argv[1]).resolve()
+
+    # Import and strings alone are bait.  This is intentionally the same
+    # anti-debug API plus a PDB path, with no callsite or GS:[0x60] access.
+    bait = run(binary, pe64(code=b"\xc3", imports=("IsDebuggerPresent",), pdb_marker=True))
+    assert not anti(bait), bait.get("findings", [])
+
+    # A real callsite is confirmed and localized to the current image.  The
+    # branch is useful evidence but not required to recognize the API call.
+    real = run(binary, pe64(code=call_iat(0x2050), imports=("IsDebuggerPresent",)))
+    findings = anti(real)
+    assert len(findings) == 1, findings
+    finding = findings[0]
+    assert finding["variant"] == "IsDebuggerPresent"
+    assert finding["state"] == "CONFIRMED"
+    assert finding["fields"]["callsite_rva"] == "0x1000"
+    assert finding["fields"]["result_controls_branch"] == "true"
+    # The summary field is the stable RVA contract.  The legacy anti-debug
+    # range serializer is file-offset based (0x200 is RVA 0x1000 here).
+    assert finding["ranges"] and finding["ranges"][0]["offset"] == 0x200
+
+    # Direct PEB access is recognized without an import.  This catches a
+    # common custom-loader/hand-written anti-debug shape.
+    peb = run(binary, pe64(code=peb_being_debugged()))
+    findings = anti(peb)
+    assert any(x["variant"] == "PEB.BeingDebugged" and x["state"] == "CONFIRMED"
+               for x in findings), findings
+
+    # Ordinary timing/diagnostic imports and a PDB marker remain below the
+    # anti-debug contract when no callsite or data-flow is present.
+    diagnostic = run(binary, pe64(code=b"\xc3", imports=("QueryPerformanceCounter",),
+                                  pdb_marker=True))
+    assert not anti(diagnostic), diagnostic.get("findings", [])
+    print("[PASS] anti-debug marker bait stays silent; real call and PEB access are localized")
+
+
+if __name__ == "__main__":
+    main()

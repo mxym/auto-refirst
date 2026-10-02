@@ -227,6 +227,9 @@ def p0_formats(binary: pathlib.Path, td: pathlib.Path) -> None:
     cp=run([sys.executable,ROOT/"tests/test_native_hook_surface.py",binary],timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log("[PASS P0] bounded native IAT/code-write hook surface and bridge/negative boundaries")
+    cp=run([sys.executable,ROOT/"tests/test_antidebug_bait.py",binary],timeout=180)
+    assert "[PASS]" in cp.stdout,cp.stdout
+    log("[PASS P0] anti-debug marker bait stays silent; real call and PEB access are localized")
     cp=run([sys.executable,ROOT/"tests/test_nested_pe_loader_route.py",binary],timeout=180)
     assert "[PASS]" in cp.stdout,cp.stdout
     log("[PASS P0] bounded parent-PE resource/bridge to exact embedded-PE route hint")
