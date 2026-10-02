@@ -69,6 +69,22 @@ def main() -> int:
         assert fields.get("address", "").startswith("0x"), hit
         assert int(fields.get("size", "0")) > 0, hit
         assert int(fields.get("module_inode", "0")) > 0, hit
+        dynamic_findings = [
+            f for f in report.get("findings", [])
+            if f.get("family") == "Runtime dynamic module load"
+        ]
+        assert len(dynamic_findings) == 1, dynamic_findings
+        finding = dynamic_findings[0]
+        assert finding.get("variant") == "runtime_dynamic_loader", finding
+        assert finding.get("state") == "CONFIRMED", finding
+        assert finding.get("fields", {}).get("path") == str(lib), finding
+        assert finding["fields"].get("file_offset") == fields.get("file_offset"), finding
+        ranges = finding.get("ranges", [])
+        assert len(ranges) == 1, finding
+        assert ranges[0]["coordinate_space"] == "VA", finding
+        assert ranges[0]["basis"] == "PROCESS_IMAGE", finding
+        assert ranges[0]["offset"] == int(fields["address"], 16), finding
+        assert ranges[0]["size"] == int(fields["size"]), finding
         assert report["runtime"]["stdout"].find("loaded") >= 0
     print("[PASS] late dlopen executable mapping is retained as ModuleLoad with identity/range")
     return 0

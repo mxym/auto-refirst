@@ -406,6 +406,59 @@ void append_runtime_actionable_findings(AnalysisReport&report,const Materializat
         for(auto&aggregate:aggregates)report.findings.push_back(std::move(aggregate.finding));
     }
 
+    // A late executable mmap of an existing file (for example dlopen) has no
+    // preceding FileCreate/FileWrite event to attach to. Keep that loader
+    // evidence as its own compact finding rather than dropping it from the
+    // actionable report. The runtime backend already filters startup system
+    // libraries and de-duplicates identities before emitting these events.
+    if(!has_family(report,"Runtime dynamic module load")){
+        std::set<std::string> emitted;
+        for(const auto&load:report.runtime.timeline){
+            if(load.kind!=TimelineKind::ModuleLoad||load.subject.empty()||
+               !field_is(load.fields,"source","runtime_dynamic_loader"))continue;
+            const auto address=fu64(load.fields,"address");
+            const auto size=fu64(load.fields,"size");
+            if(!address||!*address||!size||!*size)continue;
+
+            // If a backend ever supplies both loader identity and explicit
+            // create/write provenance, keep the richer created-file finding
+            // instead of emitting two rows for one module.
+            const bool created=std::any_of(report.findings.begin(),report.findings.end(),[&](const auto&f){
+                if(f.family!="Runtime-created module load")return false;
+                const auto path=f.fields.find("path");
+                const auto uid=f.fields.find("process_uid");
+                return path!=f.fields.end()&&uid!=f.fields.end()&&same_runtime_path(path->second,load.subject)&&
+                       uid->second==std::to_string(load.process_uid);
+            });
+            if(created)continue;
+
+            std::ostringstream key;
+            key<<load.process_uid<<'|'<<runtime_path_key(load.subject)<<'|';
+            if(auto device=field(load.fields,"module_device"))key<<*device;
+            key<<'|';
+            if(auto inode=field(load.fields,"module_inode"))key<<*inode;
+            if(!emitted.insert(key.str()).second)continue;
+
+            Finding f;f.kind="runtime";f.family="Runtime dynamic module load";f.variant="runtime_dynamic_loader";f.state="CONFIRMED";
+            f.evidence.push_back("an executable file mapping appeared after the initial process image through the runtime loader");
+            f.fields["path"]=load.subject;
+            f.fields["process_uid"]=std::to_string(load.process_uid);
+            f.fields["load_event_seq"]=std::to_string(load.seq);
+            f.fields["source"]="runtime_dynamic_loader";
+            f.fields["module_address"]=hex_text(*address);
+            f.fields["module_size"]=std::to_string(*size);
+            if(auto value=field(load.fields,"file_offset"))f.fields["file_offset"]=*value;
+            if(auto value=field(load.fields,"module_path"))f.fields["module_path"]=*value;
+            if(auto value=field(load.fields,"module_device"))f.fields["module_device"]=*value;
+            if(auto value=field(load.fields,"module_inode"))f.fields["module_inode"]=*value;
+            if(auto value=field(load.fields,"mapping_prot"))f.fields["mapping_prot"]=*value;
+            f.fields["initial_image"]=field_is(load.fields,"initial_image","true")?"true":"false";
+            f.ranges.push_back(va_range(*address,*size,"late runtime dynamic-loader executable mapping",CoordinateBasis::PROCESS_IMAGE,load.subject,load.process_uid));
+            report.findings.push_back(std::move(f));
+            if(emitted.size()>=32)break;
+        }
+    }
+
     if(!has_family(report,"Runtime-created executable")){
         std::size_t emitted=0;
         for(const auto&e:g.edges){
