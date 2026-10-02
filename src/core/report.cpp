@@ -1337,12 +1337,14 @@ void render_summary_json(std::ostream& o,const AnalysisReport& r) {
     o << ",\n  \"artifacts\": [";
     bool first=true;
     for (const auto& a : r.artifacts) {
-        if(!first)o<<','; first=false;
+        if(!first) o<<',';
+        first=false;
         o << "{\"kind\":\"" << esc(a.kind) << "\",\"role\":\"" << esc(a.role)
           << "\",\"state\":\"" << esc(a.state) << "\",\"path\":\"" << esc(path_utf8(a.path)) << "\"}";
     }
     if (r.replacement.performed) {
-        if(!first)o<<','; first=false;
+        if(!first) o<<',';
+        first=false;
         o << "{\"kind\":\"unpacked_source\",\"role\":\"replacement\",\"state\":\""
           << esc(r.replacement.validation.empty()?"MATERIALIZED":r.replacement.validation)
           << "\",\"path\":\"" << esc(path_utf8(r.replacement.unpacked_source)) << "\"}";
@@ -1351,7 +1353,8 @@ void render_summary_json(std::ostream& o,const AnalysisReport& r) {
     first=true;
     for (const auto& f : r.findings) {
         if(!summary_actionable(f))continue;
-        if(!first)o<<','; first=false;
+        if(!first) o<<',';
+        first=false;
         o << "{\"family\":\"" << esc(f.family) << "\",\"variant\":\"" << esc(f.variant)
           << "\",\"state\":\"" << esc(f.state) << "\",\"ranges\":[";
         for(std::size_t i=0;i<f.ranges.size();++i){
@@ -1368,7 +1371,8 @@ void render_summary_json(std::ostream& o,const AnalysisReport& r) {
     o << "],\n  \"runtime_artifacts\": [";
     first=true;
     for (const auto& a : r.runtime.artifacts) {
-        if(!first)o<<','; first=false;
+        if(!first) o<<',';
+        first=false;
         o << "{\"kind\":\"" << esc(a.kind) << "\",\"state\":\"" << esc(a.state)
           << "\",\"path\":\"" << esc(path_utf8(a.path)) << "\"}";
     }
