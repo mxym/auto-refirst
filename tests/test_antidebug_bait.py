@@ -30,7 +30,8 @@ def p64(buf: bytearray, off: int, value: int) -> None:
     struct.pack_into("<Q", buf, off, value)
 
 
-def pe64(*, code: bytes, imports: tuple[str, ...] = (), pdb_marker: bool = False) -> bytes:
+def pe64(*, code: bytes, imports: tuple[str, ...] = (), pdb_marker: bool = False,
+         tls_callback: bool = False) -> bytes:
     """Build one bounded PE64 image containing code/imports/.pdata.
 
     All RVA-bearing structures live in one raw section.  This keeps the
@@ -85,6 +86,21 @@ def pe64(*, code: bytes, imports: tuple[str, ...] = (), pdb_marker: bool = False
     p32(image, raw(0x3000) + 4, 0x1100)
     p32(image, raw(0x3000) + 8, 0x3100)
     image[raw(0x3100):raw(0x3100) + 4] = b"\x01\x00\x00\x00"
+
+    if tls_callback:
+        # IMAGE_TLS_DIRECTORY64 and a null-terminated callback VA array.
+        # The callback points at the same bounded code function; the fixture
+        # is static-only and does not claim that this callback is benign.
+        p32(image, opt + 112 + 9 * 8, 0x2400)
+        p32(image, opt + 112 + 9 * 8 + 4, 40)
+        p64(image, raw(0x2400) + 0, 0x140001000)
+        p64(image, raw(0x2400) + 8, 0x140001000)
+        p64(image, raw(0x2400) + 16, 0x140002480)
+        p64(image, raw(0x2400) + 24, 0x140002500)
+        p32(image, raw(0x2400) + 32, 0)
+        p32(image, raw(0x2400) + 36, 0)
+        p64(image, raw(0x2500), 0x140001000)
+        p64(image, raw(0x2500) + 8, 0)
 
     if imports:
         # One kernel32 descriptor and 8-byte PE64 INT/IAT entries.
@@ -169,6 +185,15 @@ def main() -> None:
     # The summary field is the stable RVA contract.  The legacy anti-debug
     # range serializer is file-offset based (0x200 is RVA 0x1000 here).
     assert finding["ranges"] and finding["ranges"][0]["offset"] == 0x200
+
+    # TLS is an execution-before-entry surface.  Its presence is retained in
+    # the format facts while the anti-debug result remains tied to the actual
+    # callsite; a TLS marker alone must not manufacture an anti-debug finding.
+    tls = run(binary, pe64(code=call_iat(0x2050),
+                           imports=("IsDebuggerPresent",), tls_callback=True))
+    assert tls["pe"]["tls"]["present"] is True
+    assert tls["pe"]["tls"]["callback_count"] == 1
+    assert any(x["variant"] == "IsDebuggerPresent" for x in anti(tls)), anti(tls)
 
     # Direct PEB access is recognized without an import.  This catches a
     # common custom-loader/hand-written anti-debug shape.
