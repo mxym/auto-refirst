@@ -90,6 +90,7 @@
 namespace {
 struct Options {
     bool json=false;
+    bool summary=false;
     bool json_envelope=false;
     prts::ReportLanguage report_language=prts::ReportLanguage::English;
     bool extract=false;
@@ -195,9 +196,12 @@ int finish_standard_output(ExitCode code){
     return exit_code(code);
 }
 
-void render_report_set_json(std::ostream&o,const std::vector<prts::AnalysisReport>&reports){
+void render_report_set_json(std::ostream&o,const std::vector<prts::AnalysisReport>&reports,bool summary=false){
     o<<"{\n  \"report_schema_version\": \""<<prts::kReportSchemaVersion<<"\",\n  \"reports\": [";
-    for(std::size_t i=0;i<reports.size();++i){if(i)o<<",\n";prts::render_json(o,reports[i]);}
+    for(std::size_t i=0;i<reports.size();++i){
+        if(i)o<<",\n";
+        if(summary)prts::render_summary_json(o,reports[i]);else prts::render_json(o,reports[i]);
+    }
     o<<"]\n}\n";
 }
 
@@ -215,6 +219,7 @@ void print_help(std::ostream& o){
       << "  -h, --help                 Show this help and exit\n"
       << "  --version                  Show version and exit\n"
       << "  --json                     Emit structured JSON\n"
+      << "  --summary                 Emit a concise action-oriented report (full output remains the default)\n"
       << "  --json-errors              Emit a stable JSON error envelope on stderr for exit codes 2/3/4\n"
       << "  --json-envelope            With --json, wrap file/report-set output in a stable reports[] object\n"
       << "  --report-lang=en|zh        Human-readable report language\n"
@@ -656,6 +661,7 @@ bool parse_options(int argc,char**argv,Options&opt){
         if(arg=="-h"||arg=="--help")opt.help=true;
         else if(arg=="--version")opt.version=true;
         else if(arg=="--json")opt.json=true;
+        else if(arg=="--summary")opt.summary=true;
         else if(arg=="--json-errors")opt.json_errors=true;
         else if(arg=="--json-envelope")opt.json_envelope=true;
         else if(arg.rfind("--report-lang=",0)==0){auto v=arg.substr(14);if(v=="en")opt.report_language=prts::ReportLanguage::English;else if(v=="zh")opt.report_language=prts::ReportLanguage::Chinese;else return fail("unsupported report language (use en or zh): "+v);}
@@ -2369,6 +2375,7 @@ int main(int argc,char**argv){
     if(!opt.search.empty()){prts::SearchOptions so;so.needle=opt.search;so.ignore_case=opt.search_ignore_case;so.recursive=true;so.max_depth=opt.directory_max_depth;so.json_lines=opt.json;auto st=prts::search_tree_streaming(input,so);if(!opt.json)std::cout<<"Search complete: files="<<st.files<<" bytes="<<st.bytes<<" matches="<<st.matches<<"\n";if(!st.files)return emit_cli_error(ExitCode::Input,"search","no readable regular input files found",opt.json_errors,prts::path_utf8(input));return finish_standard_output(st.matches?ExitCode::Success:ExitCode::SearchNoMatch);}
     if(opt.recursive&&opt.extract&&opt.run_requested)return emit_cli_error(ExitCode::Usage,"argument_validation","recursive extracted-artifact analysis remains static-only; run root inputs without --extract --recursive so extracted children are never executed automatically",opt.json_errors,prts::path_utf8(input));
     if(is_dir&&opt.run_mode=="unpack")return emit_cli_error(ExitCode::Usage,"argument_validation","deprecated --run=unpack is single-file compatibility only; for a directory use --run or --run --apply explicitly",opt.json_errors,prts::path_utf8(input));
+    if(is_dir&&opt.summary)return emit_cli_error(ExitCode::Usage,"argument_validation","--summary currently applies to single-file reports; directory output retains its aggregate report contract",opt.json_errors,prts::path_utf8(input));
     if(is_dir&&!(opt.recursive&&opt.extract))return analyze_directory_default(input,opt);
     std::vector<std::filesystem::path> files;
     if(is_dir){auto inv=prts::inventory_directory(input,opt.directory_max_depth);for(const auto&c:inv.candidates)if(c.readable)files.push_back(c.path);}
@@ -2427,13 +2434,13 @@ int main(int argc,char**argv){
 
     if(!successful_root_inputs)return emit_cli_error(ExitCode::Input,"analysis","no readable regular input files found",opt.json_errors,prts::path_utf8(input));
     if(opt.json){
-        if(opt.json_envelope)render_report_set_json(std::cout,reports);
-        else if(reports.size()==1)std::cout<<prts::render_json(reports.front());
+        if(opt.json_envelope)render_report_set_json(std::cout,reports,opt.summary);
+        else if(reports.size()==1){if(opt.summary)prts::render_summary_json(std::cout,reports.front());else std::cout<<prts::render_json(reports.front());}
         else{
-            std::cout<<"[\n";for(std::size_t i=0;i<reports.size();++i){if(i)std::cout<<",\n";auto j=prts::render_json(reports[i]);while(!j.empty()&&(j.back()=='\n'||j.back()=='\r'))j.pop_back();std::cout<<j;}std::cout<<"\n]\n";
+            std::cout<<"[\n";for(std::size_t i=0;i<reports.size();++i){if(i)std::cout<<",\n";auto j=opt.summary?([&]{std::ostringstream x;prts::render_summary_json(x,reports[i]);return x.str();})():prts::render_json(reports[i]);while(!j.empty()&&(j.back()=='\n'||j.back()=='\r'))j.pop_back();std::cout<<j;}std::cout<<"\n]\n";
         }
     }else{
-        for(std::size_t i=0;i<reports.size();++i){if(i)std::cout<<"\n============================================================\n\n";std::cout<<prts::render_text(reports[i],opt.report_language);}
+        for(std::size_t i=0;i<reports.size();++i){if(i)std::cout<<"\n============================================================\n\n";std::cout<<(opt.summary?prts::render_summary_text(reports[i],opt.report_language):prts::render_text(reports[i],opt.report_language));}
     }
     return finish_standard_output(ExitCode::Success);
     } catch(const std::exception& e) {

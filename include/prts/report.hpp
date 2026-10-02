@@ -72,7 +72,14 @@ struct AnalysisReport { std::filesystem::path input; FileSnapshot input_snapshot
 enum class ReportLanguage { English, Chinese };
 std::string render_text(const AnalysisReport& r);
 std::string render_text(const AnalysisReport& r,ReportLanguage language);
+// Concise, action-oriented view for interactive use. The full text/JSON
+// renderers remain the compatibility default; summary rendering intentionally
+// omits hashes, sizes, provenance and parser inventories unless they are
+// represented by an actionable finding or materialized artifact.
+std::string render_summary_text(const AnalysisReport& r);
+std::string render_summary_text(const AnalysisReport& r,ReportLanguage language);
 void render_json(std::ostream& out,const AnalysisReport& r);
+void render_summary_json(std::ostream& out,const AnalysisReport& r);
 bool automatic_child_json_uses_summary(const AnalysisReport& r);
 void render_automatic_child_json(std::ostream& out,const AnalysisReport& r);
 std::string render_json(const AnalysisReport& r);

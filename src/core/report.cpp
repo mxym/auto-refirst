@@ -1228,6 +1228,152 @@ std::string render_text(const AnalysisReport& r) {
 }
 
 namespace {
+std::string localize_text_zh(std::string_view text);
+// Keep the summary's format label deliberately small.  Format routing is an
+// implementation detail; the summary only needs enough context to identify
+// which downstream analysis profile produced the actionable results.
+std::string summary_format_label(const AnalysisReport& r) {
+    if (r.pe.valid) return std::string("PE") + (r.pe.pe64 ? "64" : "32");
+    if (r.elf.valid) return std::string("ELF") + (r.elf.elf64 ? "64" : "32");
+    if (r.macho.valid) return "Mach-O";
+    if (r.apk.valid) return "APK";
+    if (r.dex.valid) return "DEX";
+    if (r.jvm_class.valid) return "JVM class";
+    if (r.python_bytecode.valid) return "CPython bytecode";
+    if (r.dotnet.valid) return ".NET";
+    if (r.unity.valid || r.unity.metadata_valid) return "Unity";
+    if (r.pyinstaller.valid) return "PyInstaller";
+    if (r.nuitka.valid) return "Nuitka";
+    if (r.godot.valid) return "Godot PCK";
+    if (r.wasm.valid) return "WebAssembly";
+    if (r.hermes.valid) return "Hermes bytecode";
+    if (r.dart.valid) return "Dart";
+    if (r.flutter_asset_manifest.valid) return "Flutter asset manifest";
+    if (r.jar.valid) return "JAR";
+    if (r.asar.valid) return "ASAR";
+    if (r.autoit.valid) return "AutoIt";
+    if (r.renpy_rpyc.valid || r.renpy_rpa.valid) return "Ren'Py";
+    if (r.wxapkg.valid) return "wxapkg";
+    if (r.v8_code_cache.valid) return "V8 code cache";
+    return "unknown";
+}
+
+bool summary_actionable(const Finding& f) {
+    // A finding without a family is an internal routing placeholder.  Keep
+    // failed/partial family findings because they tell the analyst why a
+    // transformation or profile could not be handed off.
+    return !f.family.empty();
+}
+
+void render_summary_finding_text(std::ostringstream& o,const AnalysisReport& r,const Finding& f) {
+    o << "  [" << f.state << "] " << f.family;
+    if (!f.variant.empty()) o << " / " << f.variant;
+    o << "\n";
+    for (const auto& range : f.ranges) render_range_text(o,r,range,"    range: ");
+    for (const auto& action : f.suggested_actions) o << "    -> " << action << "\n";
+}
+
+void render_summary_format_json(std::ostream& o,const AnalysisReport& r) {
+    const auto label=summary_format_label(r);
+    o << "{\"kind\":\"" << esc(label) << "\"";
+    if (r.pe.valid) o << ",\"bits\":" << (r.pe.pe64?64:32);
+    else if (r.elf.valid) o << ",\"bits\":" << (r.elf.elf64?64:32);
+    o << "}";
+}
+}
+
+std::string render_summary_text(const AnalysisReport& r) {
+    std::ostringstream o;
+    o << "auto-refirst Analysis\n"
+      << "Input: " << path_utf8(r.input) << "\n"
+      << "Format: " << summary_format_label(r) << "\n";
+
+    if (!r.artifacts.empty() || r.replacement.performed) {
+        o << "Artifacts:\n";
+        for (const auto& a : r.artifacts) {
+            o << "  [" << a.state << "] " << a.kind;
+            if (!a.role.empty()) o << " (" << a.role << ")";
+            if (!a.path.empty()) o << ": " << path_utf8(a.path);
+            o << "\n";
+        }
+        if (r.replacement.performed) {
+            o << "  [" << (r.replacement.validation.empty()?"MATERIALIZED":r.replacement.validation)
+              << "] unpacked source: " << path_utf8(r.replacement.unpacked_source) << "\n";
+        }
+    }
+
+    bool any_finding=false;
+    for (const auto& f : r.findings) if (summary_actionable(f)) { any_finding=true; break; }
+    if (any_finding) {
+        o << "Findings:\n";
+        for (const auto& f : r.findings) if (summary_actionable(f)) render_summary_finding_text(o,r,f);
+    }
+
+    if (r.runtime.requested && !r.runtime.artifacts.empty()) {
+        o << "Runtime artifacts:\n";
+        for (const auto& a : r.runtime.artifacts) {
+            o << "  [" << a.state << "] " << a.kind;
+            if (!a.path.empty()) o << ": " << path_utf8(a.path);
+            o << "\n";
+        }
+    }
+    if (r.runtime.requested && changed(r.runtime)!="unchanged")
+        o << "Runtime file after run: " << changed(r.runtime) << "\n";
+    return o.str();
+}
+
+std::string render_summary_text(const AnalysisReport& r,ReportLanguage language) {
+    auto text=render_summary_text(r);
+    if(language==ReportLanguage::Chinese)return localize_text_zh(text);
+    return text;
+}
+
+void render_summary_json(std::ostream& o,const AnalysisReport& r) {
+    o << "{\n  \"report_schema_version\": \"" << kReportSchemaVersion
+      << "\",\n  \"view\": \"summary\",\n  \"input\": \"" << esc(path_utf8(r.input)) << "\",\n  \"format\": ";
+    render_summary_format_json(o,r);
+    o << ",\n  \"artifacts\": [";
+    bool first=true;
+    for (const auto& a : r.artifacts) {
+        if(!first)o<<','; first=false;
+        o << "{\"kind\":\"" << esc(a.kind) << "\",\"role\":\"" << esc(a.role)
+          << "\",\"state\":\"" << esc(a.state) << "\",\"path\":\"" << esc(path_utf8(a.path)) << "\"}";
+    }
+    if (r.replacement.performed) {
+        if(!first)o<<','; first=false;
+        o << "{\"kind\":\"unpacked_source\",\"role\":\"replacement\",\"state\":\""
+          << esc(r.replacement.validation.empty()?"MATERIALIZED":r.replacement.validation)
+          << "\",\"path\":\"" << esc(path_utf8(r.replacement.unpacked_source)) << "\"}";
+    }
+    o << "],\n  \"findings\": [";
+    first=true;
+    for (const auto& f : r.findings) {
+        if(!summary_actionable(f))continue;
+        if(!first)o<<','; first=false;
+        o << "{\"family\":\"" << esc(f.family) << "\",\"variant\":\"" << esc(f.variant)
+          << "\",\"state\":\"" << esc(f.state) << "\",\"ranges\":[";
+        for(std::size_t i=0;i<f.ranges.size();++i){
+            if(i)o<<',';
+            const auto& x=f.ranges[i];
+            o << "{\"value\":" << x.offset << ",\"size\":" << x.size
+              << ",\"coordinate_space\":\"" << coordinate_space_name(x.coordinate_space)
+              << "\",\"label\":\"" << esc(x.label) << "\"}";
+        }
+        o << "],\"suggested_actions\":[";
+        for(std::size_t i=0;i<f.suggested_actions.size();++i){if(i)o<<',';o<<"\""<<esc(f.suggested_actions[i])<<"\"";}
+        o << "]}";
+    }
+    o << "],\n  \"runtime_artifacts\": [";
+    first=true;
+    for (const auto& a : r.runtime.artifacts) {
+        if(!first)o<<','; first=false;
+        o << "{\"kind\":\"" << esc(a.kind) << "\",\"state\":\"" << esc(a.state)
+          << "\",\"path\":\"" << esc(path_utf8(a.path)) << "\"}";
+    }
+    o << "]\n}\n";
+}
+
+namespace {
 std::string localize_semantic_zh(std::string_view text) {
     static constexpr std::pair<std::string_view,std::string_view> exact[] = {
         {"declared entry remains the default hypothesis", "声明入口仍是默认分析假设"},
