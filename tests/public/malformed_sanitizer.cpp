@@ -24,6 +24,11 @@ void put64(std::vector<std::uint8_t>& data,std::size_t off,std::uint64_t value) 
     if (off+8>data.size()) return;
     for (std::size_t i=0;i<8;++i) data[off+i]=static_cast<std::uint8_t>(value>>(i*8));
 }
+void put16(std::vector<std::uint8_t>& data,std::size_t off,std::uint16_t value) {
+    if (off+2>data.size()) return;
+    data[off]=static_cast<std::uint8_t>(value);
+    data[off+1]=static_cast<std::uint8_t>(value>>8);
+}
 std::size_t unity_raw(const prts::PeInfo& pe,std::uint64_t va) {
     return static_cast<std::size_t>(0x200+(va-(pe.image_base+0x1000)));
 }
@@ -77,6 +82,33 @@ bool unity_profile_sanitizer_contract() {
            gclass_v108&&*gclass_v108==prts::UnityGenericClassLayoutProfile::Compact24&&!gclass_ambiguous&&
            dispatch_contract.valid&&dispatch_contract.invoker_resolved==1&&dispatch_contract.invoker_missing==1;
 }
+
+bool boundary_parser_sanitizer_contract() {
+    // Table offsets are 64-bit ELF fields.  Keep the image tiny while placing
+    // the declared program/section table at UINT64_MAX; this used to wrap the
+    // size_t conversion and make the parser read outside the span.
+    auto malformed_elf = [](bool program_headers) {
+        std::vector<std::uint8_t> image(128, 0);
+        image[0]=0x7f; image[1]='E'; image[2]='L'; image[3]='F';
+        image[4]=2; image[5]=1; image[6]=1;
+        put16(image,16,2); put16(image,18,62);
+        put64(image,24,0); put64(image,32,program_headers?UINT64_MAX:0);
+        put64(image,40,program_headers?0:UINT64_MAX);
+        if (program_headers) { put16(image,54,56); put16(image,56,1); }
+        else { put16(image,60,64); put16(image,62,1); }
+        return image;
+    };
+    const auto ph=prts::parse_elf(malformed_elf(true));
+    const auto sh=prts::parse_elf(malformed_elf(false));
+    if (!ph.segments.empty() || !sh.sections.empty()) return false;
+
+    // The PE e_lfanew field is only 32-bit, but still must be rejected before
+    // pointer arithmetic when it points beyond the supplied image.
+    std::vector<std::uint8_t> pe(128, 0); pe[0]='M'; pe[1]='Z';
+    put64(pe,0x3c,UINT64_MAX);
+    const auto parsed_pe=prts::parse_pe(pe);
+    return !parsed_pe.valid;
+}
 }
 
 int main(int argc, char** argv) {
@@ -93,6 +125,7 @@ int main(int argc, char** argv) {
     const auto dex = prts::parse_dex(bytes);
     const auto lua = prts::parse_luac(bytes);
     if (!unity_profile_sanitizer_contract()) return 4;
+    if (!boundary_parser_sanitizer_contract()) return 5;
     // Also feed the malformed corpus through the profile probe using a synthetic writable section.
     // Small/truncated inputs should simply classify as non-file-backed or unresolved without UB/OOB.
     prts::PeInfo probe_pe;probe_pe.valid=true;probe_pe.pe64=true;probe_pe.machine=0x8664;probe_pe.image_base=0x180000000ull;

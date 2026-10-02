@@ -28,7 +28,10 @@ T bswapv(T v) {
 
 template <typename T>
 bool rd(std::span<const std::uint8_t> d, std::size_t off, bool le, T& v) {
-    if (off + sizeof(T) > d.size()) return false;
+    // Keep the bounds check subtraction based: malformed ELF fields are
+    // attacker controlled and `off + sizeof(T)` can wrap at SIZE_MAX before
+    // the comparison on 32/64-bit hosts.
+    if (off > d.size() || sizeof(T) > d.size() - off) return false;
     std::memcpy(&v, d.data()+off, sizeof(T));
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
     if (!le) v = bswapv(v);
@@ -133,7 +136,7 @@ EhReadResult eh_read_encoded(std::span<const std::uint8_t>d,std::size_t&off,std:
     if(app!=0&&app!=0x10&&app!=0x20&&app!=0x30&&app!=0x40&&app!=0x50){r.state=EhReadState::Unsupported;r.error="unsupported DW_EH_PE application";return r;}
     if(off>end){r.error="DW_EH_PE value offset exceeds record";return r;}
     if(app==0x50&&fmt!=0){r.state=EhReadState::Unsupported;r.error="DW_EH_PE_aligned with non-absptr format is unsupported";return r;}
-    if(app==0x50){const auto pad=static_cast<std::size_t>((8-(field_va&7))&7);if(pad>end-off){r.error="aligned DW_EH_PE value exceeds record";return r;}off+=pad;field_va+=pad;}
+    if(app==0x50){const auto pad=static_cast<std::size_t>((8-(field_va&7))&7);if(pad>end-off){r.error="aligned DW_EH_PE value exceeds record";return r;}if(field_va>std::numeric_limits<std::uint64_t>::max()-pad){r.error="aligned DW_EH_PE field address overflows";return r;}off+=pad;field_va+=pad;}
     bool signed_value=false;std::uint64_t u=0;std::int64_t sv=0;auto room=[&](std::size_t n){return off<=end&&n<=end-off;};
     switch(fmt){
         case 0x00:if(!room(8)||!rd(d,off,le,u)){r.error="truncated DW_EH_PE_absptr";return r;}off+=8;break;
@@ -170,6 +173,14 @@ ElfInfo parse_elf(std::span<const std::uint8_t> d) {
     const unsigned cls=d[4], data=d[5];
     if(cls!=1 && cls!=2){out.error="unsupported ELF class";return out;}
     if(data!=1 && data!=2){out.error="unsupported ELF endian";return out;}
+    // ELF32 has a 52-byte header while ELF64 has a 64-byte header.  The
+    // initial common-size check above is not enough for an ELF64 header and
+    // would otherwise leave truncated fields at zero, allowing later table
+    // arithmetic to operate on attacker-controlled near-SIZE_MAX values.
+    if ((cls==2 && d.size()<64) || (cls==1 && d.size()<52)) {
+        out.error="truncated ELF header";
+        return out;
+    }
     out.elf64 = cls==2;
     out.little_endian = data==1;
     const bool le=out.little_endian;
@@ -193,8 +204,11 @@ ElfInfo parse_elf(std::span<const std::uint8_t> d) {
     std::uint64_t file_end=0;
     const std::size_t min_phentsize=out.elf64?56:32;
     for(std::uint16_t i=0;i<phnum && phentsize>=min_phentsize;i++){
-        const std::size_t o=static_cast<std::size_t>(phoff)+static_cast<std::size_t>(i)*phentsize;
-        if(o+min_phentsize>d.size()) break;
+        const auto delta=std::uint64_t(i)*std::uint64_t(phentsize);
+        if(phoff>d.size() || delta>std::uint64_t(d.size())-phoff) break;
+        const auto entry_off=phoff+delta;
+        if(min_phentsize>std::uint64_t(d.size())-entry_off) break;
+        const std::size_t o=static_cast<std::size_t>(entry_off);
         ElfSegment s;
         rd(d,o,le,s.type);
         if(out.elf64){
@@ -211,7 +225,10 @@ ElfInfo parse_elf(std::span<const std::uint8_t> d) {
             std::size_t used=n;while(used&&(d[s.offset+used-1]==0||d[s.offset+used-1]==0xcc))--used;s.used_size=used;
         }
         if(s.type==3 && s.offset<d.size()) out.interpreter=zstr(d,static_cast<std::size_t>(s.offset)); // PT_INTERP
-        file_end=std::max(file_end,s.offset+s.file_size);
+        if(s.file_size>std::numeric_limits<std::uint64_t>::max()-s.offset)
+            file_end=std::numeric_limits<std::uint64_t>::max();
+        else
+            file_end=std::max(file_end,s.offset+s.file_size);
         out.segments.push_back(std::move(s));
     }
     out.program_header_count=static_cast<std::uint16_t>(std::min<std::size_t>(out.segments.size(),0xffff));
@@ -220,12 +237,22 @@ ElfInfo parse_elf(std::span<const std::uint8_t> d) {
         for(const auto&s:out.segments){
             if(s.type!=1||va<s.address)continue; // PT_LOAD
             const auto delta=va-s.address;
-            if(delta<s.file_size && s.offset+delta<d.size())return s.offset+delta;
+            if(delta<s.file_size) {
+                if(s.offset>d.size() || delta>std::uint64_t(d.size())-s.offset) continue;
+                return s.offset+delta;
+            }
         }
         return std::nullopt;
     };
     auto vaddr_file_extent=[&](std::uint64_t va)->std::optional<std::pair<std::uint64_t,std::uint64_t>>{
-        for(const auto&s:out.segments){if(s.type!=1||va<s.address)continue;const auto delta=va-s.address;if(delta>=s.file_size||s.offset+delta>=d.size())continue;const auto off=s.offset+delta;return std::pair<std::uint64_t,std::uint64_t>{off,std::min<std::uint64_t>(s.file_size-delta,d.size()-off)};}return std::nullopt;
+        for(const auto&s:out.segments){
+            if(s.type!=1||va<s.address)continue;
+            const auto delta=va-s.address;
+            if(delta>=s.file_size||s.offset>d.size()||delta>std::uint64_t(d.size())-s.offset)continue;
+            const auto off=s.offset+delta;
+            return std::pair<std::uint64_t,std::uint64_t>{off,std::min<std::uint64_t>(s.file_size-delta,d.size()-static_cast<std::size_t>(off))};
+        }
+        return std::nullopt;
     };
     auto vaddr_in_load_memory=[&](std::uint64_t va)->bool{
         for(const auto&s:out.segments)if(s.type==1&&va>=s.address&&va-s.address<s.memory_size)return true;
@@ -237,21 +264,32 @@ ElfInfo parse_elf(std::span<const std::uint8_t> d) {
     raw.reserve(shnum);
     const std::size_t min_shentsize=out.elf64?64:40;
     for(std::uint16_t i=0;i<shnum && shentsize>=min_shentsize;i++){
-        const std::size_t o=static_cast<std::size_t>(shoff)+static_cast<std::size_t>(i)*shentsize;
-        if(o+min_shentsize>d.size()) break;
+        const auto delta=std::uint64_t(i)*std::uint64_t(shentsize);
+        if(shoff>d.size() || delta>std::uint64_t(d.size())-shoff) break;
+        const auto entry_off=shoff+delta;
+        if(min_shentsize>std::uint64_t(d.size())-entry_off) break;
+        const std::size_t o=static_cast<std::size_t>(entry_off);
         RawSec s; rd(d,o,le,s.name); rd(d,o+4,le,s.type);
         if(out.elf64){rd(d,o+8,le,s.flags);rd(d,o+16,le,s.addr);rd(d,o+24,le,s.off);rd(d,o+32,le,s.size);rd(d,o+40,le,s.link);rd(d,o+56,le,s.entsize);}
         else {std::uint32_t a=0,b=0,c=0,e=0,en=0;rd(d,o+8,le,a);rd(d,o+12,le,b);rd(d,o+16,le,c);rd(d,o+20,le,e);rd(d,o+24,le,s.link);rd(d,o+36,le,en);s.flags=a;s.addr=b;s.off=c;s.size=e;s.entsize=en;}
         raw.push_back(s);
-        if(s.type!=8) file_end=std::max(file_end,s.off+s.size); // SHT_NOBITS has no file bytes
+        if(s.type!=8) {
+            if(s.size>std::numeric_limits<std::uint64_t>::max()-s.off)
+                file_end=std::numeric_limits<std::uint64_t>::max();
+            else
+                file_end=std::max(file_end,s.off+s.size); // SHT_NOBITS has no file bytes
+        }
     }
     out.section_header_count=static_cast<std::uint16_t>(std::min<std::size_t>(raw.size(),0xffff));
 
     std::size_t shstr_off=0,shstr_size=0;
-    if(shstrndx<raw.size()) { shstr_off=static_cast<std::size_t>(raw[shstrndx].off); shstr_size=static_cast<std::size_t>(raw[shstrndx].size); }
+    if(shstrndx<raw.size() && raw[shstrndx].off<=d.size()) {
+        shstr_off=static_cast<std::size_t>(raw[shstrndx].off);
+        shstr_size=static_cast<std::size_t>(std::min<std::uint64_t>(raw[shstrndx].size,d.size()-shstr_off));
+    }
     for(const auto& rs:raw){
         ElfSection s; s.type=rs.type;s.flags=rs.flags;s.address=rs.addr;s.offset=rs.off;s.size=rs.size;
-        if(shstr_off<d.size() && rs.name<shstr_size) s.name=zstr(d,shstr_off+rs.name);
+        if(shstr_off<d.size() && rs.name<shstr_size && rs.name<=d.size()-shstr_off) s.name=zstr(d,shstr_off+rs.name);
         if(rs.type!=8 && rs.off<d.size()){
             const auto n=static_cast<std::size_t>(std::min<std::uint64_t>(rs.size,d.size()-rs.off));
             s.entropy=entropy.get(static_cast<std::size_t>(rs.off),n);
@@ -272,10 +310,15 @@ ElfInfo parse_elf(std::span<const std::uint8_t> d) {
         switch(tag){case 12:out.init.dt_init=val;break;case 13:out.init.dt_fini=val;break;case 32:out.init.dt_preinit_array=val;break;case 33:out.init.dt_preinit_arraysz=val;break;case 25:out.init.dt_init_array=val;break;case 27:out.init.dt_init_arraysz=val;break;case 26:out.init.dt_fini_array=val;break;case 28:out.init.dt_fini_arraysz=val;break;default:break;}
     };
     // Section-backed SHT_DYNAMIC remains useful when present.
-    for(const auto& rs:raw){ if(rs.type!=6||rs.off>=d.size()) continue; const std::size_t entsz=rs.entsize?static_cast<std::size_t>(rs.entsize):(out.elf64?16:8); auto n=std::min<std::uint64_t>(rs.size,d.size()-rs.off);
+    for(const auto& rs:raw){ if(rs.type!=6||rs.off>=d.size()) continue;
+        if(rs.entsize>std::numeric_limits<std::size_t>::max()) continue;
+        const auto expected_entsz=out.elf64?std::uint64_t(16):std::uint64_t(8);
+        const auto declared_entsz=rs.entsize?rs.entsize:expected_entsz;
+        if(declared_entsz!=expected_entsz) continue;
+        const std::size_t entsz=static_cast<std::size_t>(declared_entsz); auto n=std::min<std::uint64_t>(rs.size,d.size()-rs.off);
         std::uint64_t dynstr_off=0,dynstr_size=0;if(rs.link<raw.size()){dynstr_off=raw[rs.link].off;dynstr_size=raw[rs.link].size;}
-        for(std::size_t p=0;p+entsz<=n;p+=entsz){std::int64_t tag=0;std::uint64_t val=0;if(out.elf64){std::uint64_t t=0;rd(d,rs.off+p,le,t);rd(d,rs.off+p+8,le,val);tag=static_cast<std::int64_t>(t);}else{std::uint32_t t=0,v=0;rd(d,rs.off+p,le,t);rd(d,rs.off+p+4,le,v);tag=static_cast<std::int32_t>(t);val=v;} if(tag==0)break;
-            if(tag==1&&dynstr_off<d.size()&&val<dynstr_size){auto lib=zstr(d,static_cast<std::size_t>(dynstr_off+val));if(!lib.empty()&&std::find(out.needed.begin(),out.needed.end(),lib)==out.needed.end())out.needed.push_back(std::move(lib));}
+        for(std::size_t p=0;p<=n&&entsz<=n-p;p+=entsz){std::int64_t tag=0;std::uint64_t val=0;if(out.elf64){std::uint64_t t=0;rd(d,rs.off+p,le,t);rd(d,rs.off+p+8,le,val);tag=static_cast<std::int64_t>(t);}else{std::uint32_t t=0,v=0;rd(d,rs.off+p,le,t);rd(d,rs.off+p+4,le,v);tag=static_cast<std::int32_t>(t);val=v;} if(tag==0)break;
+            if(tag==1&&dynstr_off<d.size()&&val<dynstr_size&&val<=std::uint64_t(d.size())-dynstr_off){auto lib=zstr(d,static_cast<std::size_t>(dynstr_off+val));if(!lib.empty()&&std::find(out.needed.begin(),out.needed.end(),lib)==out.needed.end())out.needed.push_back(std::move(lib));}
             apply_dynamic_tag(tag,val);
         }
     }
@@ -284,9 +327,9 @@ ElfInfo parse_elf(std::span<const std::uint8_t> d) {
     for(const auto& seg:out.segments){if(seg.type!=2||seg.offset>=d.size())continue; // PT_DYNAMIC
         const std::size_t entsz=out.elf64?16:8;const auto n=std::min<std::uint64_t>(seg.file_size,d.size()-seg.offset);
         std::vector<std::pair<std::int64_t,std::uint64_t>> tags;std::uint64_t strva=0,strsz=0;
-        for(std::size_t p=0;p+entsz<=n;p+=entsz){std::int64_t tag=0;std::uint64_t val=0;if(out.elf64){std::uint64_t t=0;rd(d,seg.offset+p,le,t);rd(d,seg.offset+p+8,le,val);tag=static_cast<std::int64_t>(t);}else{std::uint32_t t=0,v=0;rd(d,seg.offset+p,le,t);rd(d,seg.offset+p+4,le,v);tag=static_cast<std::int32_t>(t);val=v;}if(tag==0)break;if(tags.size()>=65536)break;tags.emplace_back(tag,val);if(tag==5)strva=val;else if(tag==10)strsz=val;apply_dynamic_tag(tag,val);}
+        for(std::size_t p=0;p<=n&&entsz<=n-p;p+=entsz){std::int64_t tag=0;std::uint64_t val=0;if(out.elf64){std::uint64_t t=0;rd(d,seg.offset+p,le,t);rd(d,seg.offset+p+8,le,val);tag=static_cast<std::int64_t>(t);}else{std::uint32_t t=0,v=0;rd(d,seg.offset+p,le,t);rd(d,seg.offset+p+4,le,v);tag=static_cast<std::int32_t>(t);val=v;}if(tag==0)break;if(tags.size()>=65536)break;tags.emplace_back(tag,val);if(tag==5)strva=val;else if(tag==10)strsz=val;apply_dynamic_tag(tag,val);}
         auto stroff=vaddr_to_file(strva);
-        if(stroff){for(auto[tag,val]:tags)if(tag==1&&(!strsz||val<strsz)&&*stroff+val<d.size()){auto lib=zstr(d,static_cast<std::size_t>(*stroff+val));if(!lib.empty()&&std::find(out.needed.begin(),out.needed.end(),lib)==out.needed.end())out.needed.push_back(std::move(lib));}}
+        if(stroff){for(auto[tag,val]:tags)if(tag==1&&(!strsz||val<strsz)&&val<=std::uint64_t(d.size())-*stroff){auto lib=zstr(d,static_cast<std::size_t>(*stroff+val));if(!lib.empty()&&std::find(out.needed.begin(),out.needed.end(),lib)==out.needed.end())out.needed.push_back(std::move(lib));}}
     }
     // Loader-facing deep dynamic plane. PT_DYNAMIC wins; SHT_DYNAMIC is fallback only.
     {
@@ -294,7 +337,14 @@ ElfInfo parse_elf(std::span<const std::uint8_t> d) {
         auto scan_dynamic=[&](std::uint64_t off,std::uint64_t size,std::uint64_t entsz)->bool{
             if(entsz!=16||off>d.size()||size>d.size()-off||size%entsz)return false;
             dy.table_file_offset=off;dy.table_size=size;
-            for(std::uint64_t p=0;p+entsz<=size;p+=entsz){std::uint64_t rt=0,v=0;if(!rd(d,static_cast<std::size_t>(off+p),le,rt)||!rd(d,static_cast<std::size_t>(off+p+8),le,v))return false;const auto tag=static_cast<std::int64_t>(rt);if(tag==0){terminated=true;return true;}if(deep_tags.size()>=65536)return false;deep_tags.emplace_back(tag,v);}return false;
+            if (off>d.size() || size>std::uint64_t(d.size())-off) return false;
+            for(std::uint64_t p=0;p<=size&&entsz<=size-p;p+=entsz){
+                const auto entry=off+p;
+                std::uint64_t rt=0,v=0;
+                if(!rd(d,static_cast<std::size_t>(entry),le,rt)||!rd(d,static_cast<std::size_t>(entry+8),le,v))return false;
+                const auto tag=static_cast<std::int64_t>(rt);if(tag==0){terminated=true;return true;}if(deep_tags.size()>=65536)return false;deep_tags.emplace_back(tag,v);
+            }
+            return false;
         };
         for(const auto&seg:out.segments)if(seg.type==2){dynamic_source_seen=true;++pt_dynamic_count;if(pt_dynamic_count==1&&!scan_dynamic(seg.offset,seg.file_size,16))source_bad=true;}
         if(pt_dynamic_count>1){source_bad=true;dy.error="multiple PT_DYNAMIC segments";}
@@ -471,7 +521,14 @@ ElfInfo parse_elf(std::span<const std::uint8_t> d) {
             auto scan_dyn=[&](std::uint64_t off,std::uint64_t va,std::uint64_t size)->bool{
                 if(off>d.size()||size>d.size()-off||size%16)return false;
                 dyn_off=off;dyn_va=va;dyn_size=size;
-                for(std::uint64_t p=0;p+16<=size&&dr.size()<65536;p+=16){std::uint64_t rt=0,v=0;if(!rd(d,static_cast<std::size_t>(off+p),le,rt)||!rd(d,static_cast<std::size_t>(off+p+8),le,v))return false;const auto tag=static_cast<std::int64_t>(rt);if(tag==0){dyn_terminated=true;return true;}dr.push_back({tag,v,off+p,va+p});}
+                for(std::uint64_t p=0;p<=size&&16<=size-p&&dr.size()<65536;p+=16){
+                    const auto entry=off+p;
+                    std::uint64_t rt=0,v=0;
+                    if(!rd(d,static_cast<std::size_t>(entry),le,rt)||!rd(d,static_cast<std::size_t>(entry+8),le,v))return false;
+                    const auto tag=static_cast<std::int64_t>(rt);if(tag==0){dyn_terminated=true;return true;}
+                    if (va>std::numeric_limits<std::uint64_t>::max()-p) return false;
+                    dr.push_back({tag,v,entry,va+p});
+                }
                 return false;
             };
             for(const auto&s:out.segments)if(s.type==2){++dyn_sources;if(dyn_sources==1&&!scan_dyn(s.offset,s.address,s.file_size))plane_partial=true;}
@@ -832,7 +889,13 @@ ElfInfo parse_elf(std::span<const std::uint8_t> d) {
         auto keep_tag=[&](std::int64_t tag,std::uint64_t value){switch(tag){case 5:case 10:break;case 14:case 15:case 29:case 0x6ffffff0:case 0x6ffffffc:case 0x6ffffffd:case 0x6ffffffe:case 0x6fffffff:abi_seen=true;break;default:return;}auto[it,ins]=tags.emplace(tag,value);if(!ins&&it->second!=value)fail("conflicting ABI dynamic tag "+std::to_string(tag));};
         auto scan_abi_dynamic=[&](std::uint64_t off,std::uint64_t size,std::uint64_t entsz)->bool{
             const auto expected=out.elf64?16u:8u;if(entsz!=expected||off>d.size()||size>d.size()-off||size%entsz)return false;
-            for(std::uint64_t p=0;p+entsz<=size;p+=entsz){std::int64_t tag=0;std::uint64_t value=0;if(out.elf64){std::uint64_t rt=0;if(!rd(d,static_cast<std::size_t>(off+p),le,rt)||!rd(d,static_cast<std::size_t>(off+p+8),le,value))return false;tag=static_cast<std::int64_t>(rt);}else{std::uint32_t rt=0,v=0;if(!rd(d,static_cast<std::size_t>(off+p),le,rt)||!rd(d,static_cast<std::size_t>(off+p+4),le,v))return false;tag=static_cast<std::int32_t>(rt);value=v;}if(tag==0){dyn_terminated=true;return true;}keep_tag(tag,value);}return false;
+            for(std::uint64_t p=0;p<=size&&entsz<=size-p;p+=entsz){
+                const auto entry=off+p;std::int64_t tag=0;std::uint64_t value=0;
+                if(out.elf64){std::uint64_t rt=0;if(!rd(d,static_cast<std::size_t>(entry),le,rt)||!rd(d,static_cast<std::size_t>(entry+8),le,value))return false;tag=static_cast<std::int64_t>(rt);}
+                else{std::uint32_t rt=0,v=0;if(!rd(d,static_cast<std::size_t>(entry),le,rt)||!rd(d,static_cast<std::size_t>(entry+4),le,v))return false;tag=static_cast<std::int32_t>(rt);value=v;}
+                if(tag==0){dyn_terminated=true;return true;}keep_tag(tag,value);
+            }
+            return false;
         };
         for(const auto&s:out.segments)if(s.type==2){dyn_seen=true;++dyn_sources;if(dyn_sources==1&&!scan_abi_dynamic(s.offset,s.file_size,out.elf64?16:8))dyn_bad=true;}
         if(dyn_sources>1){dyn_bad=true;fail("multiple PT_DYNAMIC segments while scanning ABI metadata");}

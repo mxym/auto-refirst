@@ -14,9 +14,25 @@
 #include <string_view>
 #include <vector>
 namespace prts { namespace {
-template<class T> bool rd(std::span<const std::uint8_t>d,std::size_t o,T&v){if(o+sizeof(T)>d.size())return false;std::memcpy(&v,d.data()+o,sizeof(T));return true;}
+template<class T> bool rd(std::span<const std::uint8_t>d,std::size_t o,T&v){
+    // Use subtraction so a malformed offset near SIZE_MAX cannot wrap the
+    // addition in the bounds check before memcpy.
+    if(o>d.size()||sizeof(T)>d.size()-o)return false;
+    std::memcpy(&v,d.data()+o,sizeof(T));return true;
+}
 double entropy(const std::uint8_t* p,std::size_t n){if(!n)return 0;std::array<std::size_t,256>c{};for(std::size_t i=0;i<n;i++)c[p[i]]++;double e=0;for(auto x:c)if(x){double q=double(x)/double(n);e-=q*std::log2(q);}return e;}
-std::optional<std::size_t> rva_off(const PeInfo& pe,std::uint32_t rva,std::size_t file_size){if(rva<pe.headers_size&&rva<file_size)return std::size_t(rva);for(const auto&s:pe.sections){auto span=std::max(s.vsize,s.raw_size);if(rva>=s.rva&&std::uint64_t(rva)<std::uint64_t(s.rva)+span){auto delta=std::uint64_t(rva)-s.rva;if(delta>=s.raw_size)return std::nullopt;auto o=std::uint64_t(s.raw_offset)+delta;if(o<file_size)return std::size_t(o);}}return std::nullopt;}
+std::optional<std::size_t> rva_off(const PeInfo& pe,std::uint32_t rva,std::size_t file_size){
+    if(rva<pe.headers_size&&rva<file_size)return std::size_t(rva);
+    for(const auto&s:pe.sections){
+        const auto span=std::max(s.vsize,s.raw_size);
+        if(rva<s.rva||std::uint64_t(rva)-s.rva>=span)continue;
+        const auto delta=std::uint64_t(rva)-s.rva;
+        if(delta>=s.raw_size||s.raw_offset>file_size||delta>std::uint64_t(file_size)-s.raw_offset)continue;
+        const auto o=std::uint64_t(s.raw_offset)+delta;
+        if(o<file_size)return static_cast<std::size_t>(o);
+    }
+    return std::nullopt;
+}
 std::string zstr(std::span<const std::uint8_t>d,std::size_t o,std::size_t max=4096){if(o>=d.size())return{};std::string s;while(o<d.size()&&s.size()<max&&d[o]){auto c=d[o++];if(c<0x20&&c!='\t')return{};s.push_back(char(c));}return s;}
 bool contains_ascii(std::span<const std::uint8_t>d,std::string_view s){return std::search(d.begin(),d.end(),s.begin(),s.end())!=d.end();}
 struct Dir {std::uint32_t rva=0,size=0;};
@@ -24,29 +40,31 @@ struct Dir {std::uint32_t rva=0,size=0;};
 PeInfo parse_pe(std::span<const std::uint8_t>d){
     PeInfo out;
     if(d.size()<0x40||d[0]!='M'||d[1]!='Z'){out.error="not MZ";return out;}
-    std::uint32_t lfanew=0;if(!rd(d,0x3c,lfanew)||std::size_t(lfanew)+24>d.size()){out.error="invalid e_lfanew";return out;}
-    if(std::memcmp(d.data()+lfanew,"PE\0\0",4)){out.error="missing PE signature";return out;}
+    std::uint32_t lfanew=0;if(!rd(d,0x3c,lfanew)||std::uint64_t(lfanew)>d.size()||24>d.size()-lfanew){out.error="invalid e_lfanew";return out;}
+    if(std::memcmp(d.data()+static_cast<std::size_t>(lfanew),"PE\0\0",4)){out.error="missing PE signature";return out;}
     std::uint16_t nsec=0,opt=0;rd(d,lfanew+4,out.machine);rd(d,lfanew+6,nsec);rd(d,lfanew+20,opt);rd(d,lfanew+22,out.coff_characteristics);out.dll=(out.coff_characteristics&0x2000u)!=0;
-    auto oo=std::size_t(lfanew)+24;if(oo+opt>d.size()){out.error="truncated optional header";return out;}
+    const auto oo64=std::uint64_t(lfanew)+24;if(oo64>d.size()||opt>std::uint64_t(d.size())-oo64){out.error="truncated optional header";return out;}const auto oo=static_cast<std::size_t>(oo64);
     std::uint16_t magic=0;rd(d,oo,magic);out.pe64=magic==0x20b;if(!(magic==0x10b||magic==0x20b)){out.error="unknown optional header";return out;}
     rd(d,oo+16,out.entry_rva);rd(d,oo+56,out.image_size);rd(d,oo+60,out.headers_size);rd(d,oo+68,out.subsystem);
     if(out.pe64)rd(d,oo+24,out.image_base);else{std::uint32_t ib=0;rd(d,oo+28,ib);out.image_base=ib;}
-    auto so=oo+opt;if(so+std::size_t(nsec)*40>d.size()){out.error="truncated section table";return out;}
+    const auto so64=oo64+opt;const auto section_bytes=std::uint64_t(nsec)*40;if(so64>d.size()||section_bytes>std::uint64_t(d.size())-so64){out.error="truncated section table";return out;}const auto so=static_cast<std::size_t>(so64);
     std::uint64_t raw_end=out.headers_size;
     for(std::uint16_t i=0;i<nsec;i++){
         auto o=so+std::size_t(i)*40;PeSection s;char nm[9]{};std::memcpy(nm,d.data()+o,8);s.name=nm;
         rd(d,o+8,s.vsize);rd(d,o+12,s.rva);rd(d,o+16,s.raw_size);rd(d,o+20,s.raw_offset);rd(d,o+36,s.characteristics);
-        if(std::uint64_t(s.raw_offset)+s.raw_size<=d.size()&&s.raw_size){auto*base=d.data()+s.raw_offset;s.entropy=entropy(base,s.raw_size);std::size_t used=s.raw_size;while(used&&(base[used-1]==0x00||base[used-1]==0xCC))--used;s.used_size=static_cast<std::uint32_t>(used);}
+        if(s.raw_offset<=d.size()&&s.raw_size<=d.size()-s.raw_offset&&s.raw_size){auto*base=d.data()+s.raw_offset;s.entropy=entropy(base,s.raw_size);std::size_t used=s.raw_size;while(used&&(base[used-1]==0x00||base[used-1]==0xCC))--used;s.used_size=static_cast<std::uint32_t>(used);}
         raw_end=std::max<std::uint64_t>(raw_end,std::uint64_t(s.raw_offset)+s.raw_size);
         if(s.name.rfind(".CRT",0)==0){out.init.has_crt_section=true;out.init.crt_sections.push_back(s.name);}
         out.sections.push_back(std::move(s));
     }
     if(raw_end<d.size()){out.overlay_offset=raw_end;out.overlay_size=d.size()-raw_end;}
 
-    const std::size_t dd = oo + (out.pe64 ? 112 : 96);
+    const auto dd64=oo64+std::uint64_t(out.pe64 ? 112 : 96);
+    const std::size_t dd=dd64<=d.size()?static_cast<std::size_t>(dd64):d.size();
     std::uint32_t num_dirs=0; rd(d,oo+(out.pe64?108:92),num_dirs); num_dirs=std::min<std::uint32_t>(num_dirs,16);
     std::array<Dir,16> dirs{};
-    for(std::size_t i=0;i<num_dirs&&dd+(i+1)*8<=oo+opt;i++){rd(d,dd+i*8,dirs[i].rva);rd(d,dd+i*8+4,dirs[i].size);}
+    const auto directory_slots=(oo64+opt>=dd64)?(oo64+opt-dd64)/8:0;
+    for(std::size_t i=0;i<num_dirs&&i<directory_slots;i++){const auto at=dd+i*8;rd(d,at,dirs[i].rva);rd(d,at+4,dirs[i].size);}
     auto setdir=[](PeDirectoryInfo&x,const Dir&v){x.present=v.rva&&v.size;x.rva=v.rva;x.size=v.size;};
     setdir(out.resources,dirs[2]);setdir(out.relocations,dirs[5]);setdir(out.debug,dirs[6]);setdir(out.clr,dirs[14]);
 
