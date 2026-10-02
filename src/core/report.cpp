@@ -21,6 +21,7 @@ const char* timeline_kind_name(TimelineKind k) {
         case TimelineKind::MemoryAllocate: return "memory_allocate";
         case TimelineKind::MemoryProtect: return "memory_protect";
         case TimelineKind::MemoryWrite: return "memory_write";
+        case TimelineKind::DebuggerControl: return "debugger_control";
         case TimelineKind::MaterializedExecute: return "materialized_execute";
         case TimelineKind::PreEntryExecute: return "pre_entry_execute";
         case TimelineKind::OepCandidate: return "oep_candidate";

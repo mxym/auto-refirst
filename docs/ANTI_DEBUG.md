@@ -20,6 +20,8 @@ Each technique is emitted as an independent `Finding`:
 
 `CONFIRMED` means the debugger-probe/control behavior itself is structurally confirmed. It never means malicious intent is confirmed.
 
+Linux runtime tracing also emits a `debugger_control` timeline event for `prctl(PR_SET_DUMPABLE/PR_SET_PTRACER)` and `ptrace(PTRACE_TRACEME/PTRACE_ATTACH/PTRACE_SEIZE)` calls. The event keeps the operation, relevant PID/value, and syscall success or error status. A failed `PTRACE_TRACEME` under the product tracer remains useful evidence of a self-tracing attempt; the event does not infer intent or claim that a debugger was present.
+
 ## Confidence policy
 
 ### Strong semantic behavior — normally `CONFIRMED`

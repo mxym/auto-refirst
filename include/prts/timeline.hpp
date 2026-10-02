@@ -9,7 +9,7 @@ enum class TimelineKind {
  FileCreate, FileOpen, FileWrite, FileRename, FileDelete,
  MemoryAllocate, MemoryProtect, MemoryWrite, MaterializedExecute,
  PreEntryExecute, OepCandidate, DumpCreated,
- ConsoleStdout, ConsoleStderr
+ ConsoleStdout, ConsoleStderr, DebuggerControl
 };
 struct TimelineEvent {
  std::uint64_t seq=0;

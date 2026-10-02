@@ -70,6 +70,7 @@ Linux 运行时物化会保留创建者、句柄、映射权限和首次执行�
 
 `process_vm_writev` 只有在被跟踪进程返回正的写入字节数时才生成 `MemoryWrite` 事件。事件的 `pid`/`scope` 表示发起调用的进程，`target_pid` 单独记录内核目标，不能把目标进程误当作已经执行；子进程事件保持 `root_replacement_eligible=false`。local/remote iovec 指针和计数会在跟踪停止点做有界解析（最多 16 项、总字节最多 1 MiB），并记录 `*_iov_parse_state`、解析项数、字节数与 `iov_parse_complete`。空数组明确标为 `EMPTY`，合法零长度项保留计数；空基址、数组不可读、字节/项上限和 `base+len` 溢出分别产生非完整状态，溢出项不写入 `remote_ranges`。失败或未观测到的调用不生成该事件；即使事件存在，它也只证明跨进程写入闭包，不证明目标地址已执行。
 `ptrace(PTRACE_POKEDATA/PTRACE_POKETEXT)` 成功返回时也生成 `MemoryWrite` 事件，用于覆盖调试器/注入器按机器字写入目标进程内存的路径。事件保留请求名和值、`target_pid`、目标地址、数据字和写入宽度；只记录成功的写入，事件本身不替代目标地址的执行证据。
+`prctl(PR_SET_DUMPABLE/PR_SET_PTRACER)` 与 `ptrace(PTRACE_TRACEME/PTRACE_ATTACH/PTRACE_SEIZE)` 会生成独立的 `debugger_control` 事件，记录操作参数和成功/错误状态。这样可以区分“程序主动尝试改变调试关系”与普通内存写入；事件不推断调试器存在或恶意意图。
 
 ## 泛化纪律
 
