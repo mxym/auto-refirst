@@ -175,8 +175,15 @@ void exceptional_finish(ExceptionalExecutionInfo&out) {
 }
 std::string hx(std::uint64_t v){std::ostringstream o;o<<"0x"<<std::hex<<v;return o.str();}
 
+bool pe_vectored_handler_api(std::string_view n) {
+    return n=="AddVectoredExceptionHandler"||n=="RtlAddVectoredExceptionHandler"||
+           n=="AddVectoredContinueHandler"||n=="RtlAddVectoredContinueHandler";
+}
+bool pe_vectored_remove_api(std::string_view n) {
+    return n=="RemoveVectoredExceptionHandler"||n=="RemoveVectoredContinueHandler";
+}
 bool pe_interesting_exception_api(std::string_view n) {
-    return n=="AddVectoredExceptionHandler"||n=="RtlAddVectoredExceptionHandler"||n=="RemoveVectoredExceptionHandler"||
+    return pe_vectored_handler_api(n)||pe_vectored_remove_api(n)||
            n=="SetUnhandledExceptionFilter"||n=="RaiseException"||n=="SetThreadContext";
 }
 std::vector<PeApiCall> pe_api_calls(std::span<const std::uint8_t>d,const PeInfo&pe) {
@@ -1420,13 +1427,13 @@ ExceptionalExecutionInfo analyze_pe_exception_flow(
         struct Registration{const PeApiCall*call=nullptr;std::uint32_t handler=0;std::string mechanism;};
         std::vector<Registration>regs;
         for(const auto&c:calls){
-            if(c.name!="AddVectoredExceptionHandler"&&c.name!="RtlAddVectoredExceptionHandler"&&c.name!="SetUnhandledExceptionFilter")continue;
+            const bool vectored=pe_vectored_handler_api(c.name);if(!vectored&&c.name!="SetUnhandledExceptionFilter")continue;
             const int arg=c.name=="SetUnhandledExceptionFilter"?0:1;auto handler=pe_pointer_arg(data,pe,c,arg);
-            ExceptionalExecutionFact f;f.platform="WINDOWS_PE";f.mechanism=(c.name=="AddVectoredExceptionHandler"||c.name=="RtlAddVectoredExceptionHandler")?"VEH":"UNHANDLED_EXCEPTION_FILTER";f.trigger_kind="HANDLER_REGISTRATION";f.registration_site=pe_rva_ref(c.callsite,c.instruction_size,c.name+" callsite",artifact_identity);f.provenance="exact imported API call -> bounded x64 argument recovery";
+            ExceptionalExecutionFact f;f.platform="WINDOWS_PE";f.mechanism=vectored?"VEH":"UNHANDLED_EXCEPTION_FILTER";f.trigger_kind="HANDLER_REGISTRATION";f.registration_site=pe_rva_ref(c.callsite,c.instruction_size,c.name+" callsite",artifact_identity);f.provenance="exact imported API call -> bounded x64 argument recovery";
             if(!handler||!pe_executable_rva(pe,*handler)){
                 f.evidence_state="REFUSED";f.priority="INFORMATIONAL";f.priority_reason="registration API use without an exact executable callback is not hidden CFG";f.refusal_reason=!handler?"callback argument is not statically exact within the bounded calling convention trace":"exact callback argument does not name executable image code";exceptional_add(out,std::move(f));continue;
             }
-            const auto hf=pe_runtime_func(pe,*handler);f.handler=pe_rva_ref(*handler,hf.end&&hf.begin==*handler?hf.end-hf.begin:1,c.name+" exact callback",artifact_identity);f.protected_function=hx(c.func_begin);f.resume_semantics=(c.name=="AddVectoredExceptionHandler"||c.name=="RtlAddVectoredExceptionHandler")?"vectored handler participates before frame-based SEH; handler return controls continue-search/continue-execution":"top-level unhandled filter participates only after exception remains unhandled";f.evidence_state="REGISTRATION_HANDLER_EXACT";f.priority="REVIEW";f.priority_reason="exact registration->executable callback relation is control-relevant, but no concrete trigger in the same proven registration state is yet attached";f.detail="transfer="+c.transfer+", callback_rva="+hx(*handler);exceptional_add(out,std::move(f));regs.push_back({&c,*handler,(c.name=="AddVectoredExceptionHandler"||c.name=="RtlAddVectoredExceptionHandler")?"VEH":"UNHANDLED_EXCEPTION_FILTER"});
+            const auto hf=pe_runtime_func(pe,*handler);f.handler=pe_rva_ref(*handler,hf.end&&hf.begin==*handler?hf.end-hf.begin:1,c.name+" exact callback",artifact_identity);f.protected_function=hx(c.func_begin);f.resume_semantics=vectored?"vectored handler participates before frame-based SEH; handler return controls continue-search/continue-execution":"top-level unhandled filter participates only after exception remains unhandled";f.evidence_state="REGISTRATION_HANDLER_EXACT";f.priority="REVIEW";f.priority_reason="exact registration->executable callback relation is control-relevant, but no concrete trigger in the same proven registration state is yet attached";f.detail="transfer="+c.transfer+", callback_rva="+hx(*handler);exceptional_add(out,std::move(f));regs.push_back({&c,*handler,vectored?"VEH":"UNHANDLED_EXCEPTION_FILTER"});
         }
 
         std::map<std::uint32_t,PeCfg>cfgs;
@@ -1436,7 +1443,7 @@ ExceptionalExecutionInfo analyze_pe_exception_flow(
             auto ri=g.by_rva.find(c->callsite);if(ri==g.by_rva.end())continue;
             std::set<std::uint32_t>barriers;
             for(auto*q:by_func[c->func_begin]){
-                if(r.mechanism=="VEH"&&q->name=="RemoveVectoredExceptionHandler")barriers.insert(q->callsite);
+                if(r.mechanism=="VEH"&&pe_vectored_remove_api(q->name))barriers.insert(q->callsite);
                 if(r.mechanism=="UNHANDLED_EXCEPTION_FILTER"&&q->name=="SetUnhandledExceptionFilter"&&q->callsite!=c->callsite)barriers.insert(q->callsite);
             }
             struct Trigger{std::uint32_t rva=0;std::uint32_t size=0;std::string kind;};std::vector<Trigger>triggers;
@@ -1445,7 +1452,7 @@ ExceptionalExecutionInfo analyze_pe_exception_flow(
             std::sort(triggers.begin(),triggers.end(),[](const auto&a,const auto&b){return a.rva<b.rva;});
             for(const auto&t:triggers){auto ti=g.by_rva.find(t.rva);if(ti==g.by_rva.end()||ti->second==ri->second)continue;if(!pe_dominates(g,ri->second,ti->second)||!pe_reachable(g,ri->second,ti->second))continue;if(pe_barrier_between(g,ri->second,ti->second,barriers))continue;
                 ExceptionalExecutionFact f;f.platform="WINDOWS_PE";f.mechanism=r.mechanism;f.trigger_kind=t.kind;f.trigger_location=pe_rva_ref(t.rva,t.size,"concrete exception/trap trigger",artifact_identity);f.registration_site=pe_rva_ref(c->callsite,c->instruction_size,c->name+" dominating registration",artifact_identity);const auto hf=pe_runtime_func(pe,r.handler);f.handler=pe_rva_ref(r.handler,hf.end&&hf.begin==r.handler?hf.end-hf.begin:1,"registered exceptional handler",artifact_identity);f.protected_range=pe_rva_ref(c->func_begin,c->func_end-c->func_begin,"bounded caller CFG proving registration dominance",artifact_identity);f.protected_function=hx(c->func_begin);f.evidence_state="TRIGGER_HANDLER_CORRELATED";f.provenance="Zydis instruction boundaries + imported API identity + exact callback argument + bounded CFG dominance";f.resume_semantics=r.mechanism=="VEH"?"OS dispatches registered vectored handler if registration succeeded; handler result determines search/continue semantics":"filter is a candidate only if the exception reaches the unhandled-filter stage";
-                if(r.mechanism=="VEH"){f.priority="HIGH";f.priority_reason="concrete trigger is reachable only through the exact VEH registration in the same bounded function and no RemoveVectoredExceptionHandler path reaches the trigger";}else{f.priority="REVIEW";f.priority_reason="registration dominates a concrete trigger, but static analysis cannot prove the exception remains unhandled through frame-based SEH";}
+                if(r.mechanism=="VEH"){f.priority="HIGH";f.priority_reason="concrete trigger is reachable only through the exact VEH registration in the same bounded function and no vectored-handler removal path reaches the trigger";}else{f.priority="REVIEW";f.priority_reason="registration dominates a concrete trigger, but static analysis cannot prove the exception remains unhandled through frame-based SEH";}
                 f.detail="registration_success remains a runtime condition; no exception handler emulation is performed";exceptional_add(out,std::move(f));
             }
         }
@@ -1740,7 +1747,7 @@ std::vector<Finding> compose_exception_execution_surfaces(
     // allocation or exception dispatch succeeded at runtime.
     if(pe.valid&&pe.pe64&&pe.machine==0x8664&&!pe.tls.callbacks.empty()){
         bool has_exception_registration_import=false;
-        for(const auto&m:pe.imports)for(const auto&fn:m.functions)if(!fn.by_ordinal&&(fn.name=="AddVectoredExceptionHandler"||fn.name=="RtlAddVectoredExceptionHandler"||fn.name=="SetUnhandledExceptionFilter")){has_exception_registration_import=true;break;}
+        for(const auto&m:pe.imports)for(const auto&fn:m.functions)if(!fn.by_ordinal&&(pe_vectored_handler_api(fn.name)||fn.name=="SetUnhandledExceptionFilter")){has_exception_registration_import=true;break;}
         if(has_exception_registration_import){
             PeApiCall alloc;std::uint64_t protection=0;const PeTlsCallback*alloc_cb=nullptr;
             for(const auto&cb:pe.tls.callbacks)if(cb.target_file_backed&&pe_tls_contains_exec_allocation(data,pe,cb,alloc,protection)){alloc_cb=&cb;break;}

@@ -362,6 +362,21 @@ def main() -> None:
     assert "RtlAddVectoredExceptionHandler" in flow, flow
     assert "TRIGGER_HANDLER_CORRELATED" in flow, flow
 
+    # AddVectoredContinueHandler is the sibling vectored path used by some
+    # optimized/custom loaders.  Its callback ABI and trigger relation match
+    # VEH, while an import without a call remains inert.
+    continue_bait = run(binary, pe64(code=b"\xc3", imports=("AddVectoredContinueHandler",)))
+    assert not anti(continue_bait), continue_bait
+    continue_sample = run(binary, pe64(code=rtl_veh_trap(),
+                                       imports=("AddVectoredContinueHandler",)))
+    continue_findings = [x for x in anti(continue_sample)
+                         if x["variant"] == "exception/trap probe"]
+    assert continue_findings and continue_findings[0]["fields"]["handler_registration_api"] == "AddVectoredContinueHandler", continue_findings
+    continue_flow = exceptional_flow_csv(binary, pe64(code=rtl_veh_trap(),
+                                                       imports=("AddVectoredContinueHandler",)))
+    assert "AddVectoredContinueHandler" in continue_flow, continue_flow
+    assert "TRIGGER_HANDLER_CORRELATED" in continue_flow, continue_flow
+
     # Ordinary timing/diagnostic imports and a PDB marker remain below the
     # anti-debug contract when no callsite or data-flow is present.
     diagnostic = run(binary, pe64(code=b"\xc3", imports=("QueryPerformanceCounter",),
