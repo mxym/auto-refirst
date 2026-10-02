@@ -15,6 +15,7 @@
 - 对私有企业证书载荷中的重复 `SEQUENCE { INTEGER, OCTET STRING }` 模块表提供有界结构识别：保留 OID、模块 ID、每条记录和 OCTET STRING 的 `FILE_OFFSET`/长度、记录数量、排序/重复 ID 与截断状态，输出 `PE Authenticode module manifest`；模块字节保持不透明，不恢复解码算法、不解密、不执行，也不把 ID 顺序当作运行顺序。
 - 对 PE 导出表中指向导出目录的字符串提供有界 forwarder/API-set 关系线索：验证模块与符号/ordinal 几何，输出 `RVA`/`CURRENT_INPUT_IMAGE` 范围、API-set 与部分状态；只复用既有有界导出字符串解析，不解析系统 API-set 主机映射，也不宣称运行时 DLL 已被解析。
 - 对 PE `IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT` 提供有界 delay-load 关系线索：验证 RVA/VA 属性、DLL 名称、INT/IAT thunk 与 ordinal/name 几何，输出 `PE delay-load imports` finding 和 `RVA`/`CURRENT_INPUT_IMAGE` 范围；目录或 thunk 截断时保留 `PARTIAL`。delay-load helper 的首次调用、failure hook、搜索路径和最终 DLL 身份均不从静态描述器猜测。
+- 对 PE debug directory 做隐藏载荷初筛：普通 RSDS/NB10 PDB 记录保持静默；路径 NUL 之后的有界额外数据或非 CodeView 记录中可识别的 PE/ELF/ZIP/DEX 头会输出 `PE debug payload`，保留 debug entry、文件偏移、长度和下一步提取动作。这里只报告可复核的字节范围，不把 PDB 路径、载荷意图或可执行性直接当成结论。
 - x64 常见执行前置条件、手工解析器、反调试与运行时物化相关证据。手工 API 解析器在没有可用 `.pdata`/`RUNTIME_FUNCTION` 的保护器或自定义 loader 中，也会对入口可执行节的有界窗口复核完整 PEB → export 结构；FNV-1a32 保留精确算法字段，算术/位运算被替换的名称哈希标为 `MODIFIED_OR_UNKNOWN_NAME_HASH`，不强行映射 API 名称。无函数边界或算法未知的结果固定为 `SUSPECTED` 并标明 `ENTRY_SECTION_WINDOW`，不会把窗口边界当成真实函数边界。
 - Windows 运行时路径集成 libPeConv，用于受控的进程映像/重建工作流。
 
@@ -155,6 +156,7 @@
 - generic trace；
 - executable memory/materialization tracking；
 - runtime-generated/reconstructed PE/ELF candidate；
+- 对运行时创建的 backing 及完整可执行内存捕获做有界回流：必须同时有运行时 backing 来源、完整捕获标记和 PE/ELF/Mach-O 头部，才生成独立静态子报告；匿名代码片段不会因 `MZ` 等弱魔数被误当成映像，回流子报告永不再次执行。
 - reconstructed artifact 独立静态验证；
 - CPython compiler probe（仅在静态证据存在未决问题时选择）；
 - validated transactional install。

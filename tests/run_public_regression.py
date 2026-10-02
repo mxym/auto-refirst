@@ -320,7 +320,7 @@ def target_path(build:pathlib.Path,config:str|None,name:str) -> pathlib.Path:
 
 
 def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
-    targets=["auto_refirst_public_mapped_file_snapshot_unit","auto_refirst_public_directory_report_spool_unit","auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit","auto_refirst_public_nuitka_unit","auto_refirst_public_static_scan_unit","auto_refirst_public_pyinstaller_reference_unit","auto_refirst_public_unity_registration_profile_unit","auto_refirst_public_unity_metadata_usage_codec_unit","auto_refirst_public_unity_engine_version_unit","auto_refirst_public_unity_method_dispatch_profile_unit","auto_refirst_public_unity_generic_class_profile_unit","auto_refirst_public_dotnet_boundary_unit","auto_refirst_public_dotnet_dynamic_surface_unit","auto_refirst_public_readytorun_unit","auto_refirst_public_v8_code_cache_unit"]
+    targets=["auto_refirst_public_mapped_file_snapshot_unit","auto_refirst_public_directory_report_spool_unit","auto_refirst_public_materialization_graph_unit","auto_refirst_public_pe_debug_payload_unit","auto_refirst_public_model_trust_unit","auto_refirst_public_python_bytecode_unit","auto_refirst_public_flutter_codec_unit","auto_refirst_public_path_utf8_unit","auto_refirst_public_nuitka_unit","auto_refirst_public_static_scan_unit","auto_refirst_public_pyinstaller_reference_unit","auto_refirst_public_unity_registration_profile_unit","auto_refirst_public_unity_metadata_usage_codec_unit","auto_refirst_public_unity_engine_version_unit","auto_refirst_public_unity_method_dispatch_profile_unit","auto_refirst_public_unity_generic_class_profile_unit","auto_refirst_public_dotnet_boundary_unit","auto_refirst_public_dotnet_dynamic_surface_unit","auto_refirst_public_readytorun_unit","auto_refirst_public_v8_code_cache_unit"]
     assert len(targets)==len(set(targets)),targets
     build,config=cmake_build(binary,targets);seen:set[str]=set()
     def unit(name:str) -> pathlib.Path:
@@ -330,6 +330,8 @@ def p0_model_and_pyc(binary:pathlib.Path,td:pathlib.Path) -> None:
         return target_path(build,config,name)
     mapped=unit("auto_refirst_public_mapped_file_snapshot_unit"); assert run([mapped,td/"mapped-snapshot"]).stdout.strip()=="PASS"
     spool=unit("auto_refirst_public_directory_report_spool_unit"); assert run([spool]).stdout.strip()=="PASS"
+    graph=unit("auto_refirst_public_materialization_graph_unit"); assert run([graph]).stdout.strip()=="[PASS] runtime actionable findings"
+    debug_payload=unit("auto_refirst_public_pe_debug_payload_unit"); assert run([debug_payload]).stdout.strip()=="PASS"
     model=unit("auto_refirst_public_model_trust_unit"); assert run([model]).stdout.strip()=="PASS"
     pyunit=unit("auto_refirst_public_python_bytecode_unit"); p=td/"public.pyc"; p.write_bytes(pyc310())
     header_probe=run([sys.executable,ROOT/"tests/test_preflight_headers.py",pyunit])
@@ -646,4 +648,3 @@ def main() -> int:
 
 
 if __name__=="__main__": raise SystemExit(main())
-

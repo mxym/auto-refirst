@@ -90,6 +90,9 @@ jobs:
       - name: Runtime authorization boundary
         if: github.event_name != 'pull_request' && matrix.compiler == 'gcc-13'
         run: python3 tests/test_runtime_authorization.py build/auto-refirst
+      - name: Runtime released-file reingest
+        if: github.event_name != 'pull_request' && matrix.compiler == 'gcc-13'
+        run: python3 tests/test_runtime_reingest.py build/auto-refirst
       - name: Assert source remains clean
         run: |
           source_status="$(git status --porcelain=v1 --untracked-files=all)"
@@ -105,6 +108,17 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Assert exact clean checkout
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test -e .git
+          actual_sha="$(git rev-parse --verify HEAD)"
+          test "$actual_sha" = "$EXPECTED_SHA"
+          source_status="$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "$source_status"
+      - name: Public source hygiene
+        run: python3 tests/check_public_source_hygiene.py --require-clean
       - name: Install Qt Widgets development package
         run: |
           sudo apt-get update
@@ -117,4 +131,6 @@ jobs:
       - name: Build and run offscreen GUI smoke
         run: cmake --build build-qt-ui --target auto_refirst_public_qt_ui_smoke --parallel 2
       - name: Assert source remains clean
-        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
+        run: |
+          source_status="$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "$source_status"

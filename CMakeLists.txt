@@ -141,6 +141,7 @@ add_executable(auto_refirst
     src/detect/packed_pe.cpp
     src/detect/authenticode.cpp
     src/detect/antidebug.cpp
+    src/detect/pe_debug.cpp
     src/detect/execution_prerequisite.cpp
     src/detect/manual_resolver.cpp
     src/detect/pe_loader_surface.cpp
@@ -422,6 +423,15 @@ if(WIN32)
   target_compile_definitions(auto_refirst_public_materialization_graph_unit PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
+add_executable(auto_refirst_public_pe_debug_payload_unit EXCLUDE_FROM_ALL
+    tests/pe_debug_payload_unit.cpp
+    src/detect/pe_debug.cpp
+)
+target_include_directories(auto_refirst_public_pe_debug_payload_unit PRIVATE include)
+if(WIN32)
+  target_compile_definitions(auto_refirst_public_pe_debug_payload_unit PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 add_executable(auto_refirst_public_model_trust_unit EXCLUDE_FROM_ALL
     tests/model_trust_unit.cpp
     src/reference/model_trust.cpp
@@ -537,6 +547,7 @@ set(AUTO_REFIRST_PUBLIC_UNIT_TARGETS
     auto_refirst_public_mapped_file_snapshot_unit
     auto_refirst_public_directory_report_spool_unit
     auto_refirst_public_materialization_graph_unit
+    auto_refirst_public_pe_debug_payload_unit
     auto_refirst_public_model_trust_unit
     auto_refirst_public_python_bytecode_unit
     auto_refirst_public_flutter_codec_unit

@@ -44,6 +44,8 @@
 | P2 · 已实现 | PE 证书区载荷线索 | 对已验证的 Certificate Table 仅做 file-offset 坐标下的有界 DER 遍历；私有企业 OID 后接至少 256 字节 OCTET STRING 时输出 `SUSPECTED` 载荷线索，并在 AUTO_CORE/`--extract` 的预算内按原始字节物化为 `BULK` 不透明工件，带精确范围、负证据和后续检查建议；不递归解释、解密或执行嵌套内容。 |
 | P2 · 已实现 | PE 导出 forwarder/API-set 关系 | 对导出地址落入导出目录的字符串做既有有界解析，验证模块与符号/ordinal 几何并输出 `RVA`/`CURRENT_INPUT_IMAGE` 范围；API-set 仅标记命名空间，畸形目标降为 `PARTIAL`，不猜主机 DLL 或运行时加载结果。 |
 | P2 · 已实现 | PE delay-load 关系 | 对 `IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT` 有界验证 RVA/VA 属性、descriptor、INT/IAT thunk 及 DLL/name/ordinal 几何；首次调用与 helper 搜索路径保持静态未决，截断目录或 thunk 降为 `PARTIAL`。 |
+| P2 · 已实现 | PE debug directory 隐藏载荷初筛 | 对已验证 debug directory 有界遍历 CodeView RSDS/NB10 记录和非 CodeView payload；普通 PDB 路径保持静默，路径尾部额外字节或可识别 PE/ELF/ZIP/DEX 头输出精确 file-offset/长度与提取动作，不执行、不把调试路径本身当成载荷。 |
+| P2 · 已实现 | 运行时映像回流门槛 | 对运行时 backing 和完整可执行内存捕获重新验证有界映像头，只把带运行时来源、完整性标记及 PE/ELF/Mach-O 头的产物送入独立静态子报告；普通匿名代码片段保留为内存证据，回流子工件不自动执行。 |
 | P2 · 已实现 | PE structured JSON surface | 在 JSON 中增加有界 `pe` 对象，保留普通/延迟导入、导出、主要 PE 目录、TLS/异常/CRT 初始化和图像身份；每个列表明确 total/rendered/omitted/truncated，避免 GUI 依赖文本解析或无界输出。 |
 | P2 · 已实现 | 非标准分层/Polyglot 线索 | 在静态扫描上限内汇总非零偏移的 PDF、Mach-O/JVM、UDF、VHD 以及已知容器标记；至少两种不同格式同时出现时输出 `Layered/polyglot format markers`，附当前输入文件坐标、候选上限、负证据和后续结构检查建议，不将标记当作已验证子工件。 |
 | P2 · 已实现 | Wasm relocatable metadata | 对 `linking` 与 `reloc.*` custom section 做有界版本、subsection、目标 section 和 relocation entry geometry 检查；合法 linking 版本可标记 relocatable module，unsupported/truncated metadata 保留核心模块确认并显式报告 `FAILED`/`PARTIAL`，不推断完整链接语义。 |

@@ -91,6 +91,8 @@ auto-refirst target --run --json
 
 运行时观察会把影响后续静态分析的事实提升到 finding：例如运行期间创建或释放后被加载的模块、运行时 backing 首次进入执行，以及已观测可执行区域发生自修改。finding 会保留模块基址、首次执行地址或变化范围；完整时间线和物化因果图仍写入运行时产物，避免把每个系统调用都塞进主报告。
 
+对运行时创建的 backing 或完整可执行内存捕获，工具会在持久化后重新检查原生头部，并把确认的 PE/ELF/Mach-O 产物送回静态分析；只有有界完整捕获且具备运行时 backing 证据时才会接纳，普通代码片段继续只作为内存证据保留。回流子产物不会再次执行，报告中的 `runtime_reingest_state`、`runtime_candidate_format` 和 `static_child_report` 给出路径、格式与分析状态。
+
 ```sh
 auto-refirst target --run --apply --json
 ```

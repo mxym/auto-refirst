@@ -22,7 +22,7 @@ WORKFLOW_DIR = pathlib.Path(".github/workflows")
 REQUIRED = ("ci-linux.yml", "ci-sanitizers.yml", "ci-windows.yml")
 CHECKOUT_SHA = "11bd71901bbe5b1630ceea73d27597364c9af683"
 EXACT_EXPR = "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
-RUNTIME_TOKENS = ("--run", "--apply", "test_directory_orchestration.py", "test_runtime_authorization.py")
+RUNTIME_TOKENS = ("--run", "--apply", "test_directory_orchestration.py", "test_runtime_authorization.py", "test_runtime_reingest.py")
 
 
 class ContractError(RuntimeError):
@@ -161,6 +161,7 @@ def assert_job_boundaries(name: str, jobs: dict) -> None:
             approved_commands = {
                 "python3 tests/test_directory_orchestration.py build/auto-refirst",
                 "python3 tests/test_runtime_authorization.py build/auto-refirst",
+                "python3 tests/test_runtime_reingest.py build/auto-refirst",
             }
             if (name != "ci-linux.yml" or job_name != "public-static"
                     or command not in approved_commands
@@ -198,7 +199,7 @@ def assert_linux(document: dict) -> None:
         if token not in static_runs:
             fail(f"Linux static job is missing {token!r}")
     runtime_runs = static_runs
-    for token in ("test_directory_orchestration.py", "test_runtime_authorization.py"):
+    for token in ("test_directory_orchestration.py", "test_runtime_authorization.py", "test_runtime_reingest.py"):
         if token not in runtime_runs:
             fail(f"Linux runtime job is missing {token!r}")
     if "-DAUTO_REFIRST_WARNINGS_AS_ERRORS=ON" not in runtime_runs:

@@ -38,6 +38,7 @@
 #include "prts/interpreter_boundary.hpp"
 #include "prts/authenticode.hpp"
 #include "prts/antidebug.hpp"
+#include "prts/pe_debug.hpp"
 #include "prts/execution_prerequisite.hpp"
 #include "prts/manual_resolver.hpp"
 #include "prts/pe_loader_surface.hpp"
@@ -63,6 +64,7 @@
 #include "prts/directory_report_spool.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -416,18 +418,82 @@ void register_artifact_file(prts::AnalysisReport&report,const std::filesystem::p
     a.size=std::filesystem::file_size(path,ec);if(ec)a.size=0;a.sha256=prts::sha256_file(path);report.artifacts.push_back(std::move(a));
 }
 
-bool runtime_artifact_static_child(const prts::RuntimeArtifact&a){
+std::string runtime_image_magic(const std::filesystem::path&path){
+    std::ifstream in(path,std::ios::binary);
+    if(!in)return{};
+    std::array<unsigned char,4096> b{};
+    in.read(reinterpret_cast<char*>(b.data()),static_cast<std::streamsize>(b.size()));
+    const auto n=static_cast<std::size_t>(in.gcount());
+    if(n>=4&&b[0]==0x7f&&b[1]=='E'&&b[2]=='L'&&b[3]=='F')return "ELF";
+    // MZ alone is too weak for a memory dump: require a bounded PE signature
+    // at the DOS-header-declared offset before routing it to static analysis.
+    if(n>=0x40&&b[0]=='M'&&b[1]=='Z'){
+        const std::uint32_t peoff=std::uint32_t(b[0x3c])|(std::uint32_t(b[0x3d])<<8)|
+                                   (std::uint32_t(b[0x3e])<<16)|(std::uint32_t(b[0x3f])<<24);
+        if(peoff<=n-4&&b[peoff]=='P'&&b[peoff+1]=='E'&&b[peoff+2]==0&&b[peoff+3]==0)return "PE";
+    }
+    if(n>=4){
+        const std::uint32_t m=std::uint32_t(b[0])|(std::uint32_t(b[1])<<8)|
+                               (std::uint32_t(b[2])<<16)|(std::uint32_t(b[3])<<24);
+        if(m==0xfeedfaceu||m==0xcefaedfeu||m==0xfeedfacfu||m==0xcffaedfeu)return "Mach-O";
+    }
+    return{};
+}
+
+bool runtime_artifact_static_child(prts::RuntimeArtifact&a){
     if(a.path.empty())return false;
-    if(a.kind=="unpacked_pe")return a.state=="RECONSTRUCTED_STANDALONE_VALIDATED"||a.state=="UNPACKED_VALIDATED";
-    if(a.kind=="reconstructed_elf")return a.state=="RECONSTRUCTED_STANDALONE_VALIDATED"||a.state=="RECONSTRUCTED_NOT_STANDALONE_VALIDATED"||a.state=="UNPACKED_VALIDATED";
-    if(a.kind=="runtime_backing_elf")return a.state=="RUNTIME_BACKING_EXEC_HANDOFF_STANDALONE_VALIDATED"||a.state=="RUNTIME_BACKING_CHILD_EXEC_HANDOFF_STANDALONE_VALIDATED"||a.state=="RUNTIME_BACKING_EXEC_HANDOFF_CONFIRMED"||a.state=="RUNTIME_BACKING_CHILD_EXEC_HANDOFF_CONFIRMED"||a.state=="UNPACKED_VALIDATED";
-    return false;
+    std::error_code ec;
+    const auto status=std::filesystem::symlink_status(a.path,ec);
+    if(ec||status.type()!=std::filesystem::file_type::regular){
+        a.fields["runtime_reingest_state"]="WITHHELD_NONREGULAR_CAPTURE";
+        return false;
+    }
+    const bool unpacked_pe=a.kind=="unpacked_pe"&&
+        (a.state=="RECONSTRUCTED_STANDALONE_VALIDATED"||a.state=="UNPACKED_VALIDATED");
+    const bool reconstructed_elf=a.kind=="reconstructed_elf"&&
+        (a.state=="RECONSTRUCTED_STANDALONE_VALIDATED"||a.state=="RECONSTRUCTED_NOT_STANDALONE_VALIDATED"||a.state=="UNPACKED_VALIDATED");
+    const bool runtime_elf=a.kind=="runtime_backing_elf"&&
+        (a.state=="RUNTIME_BACKING_EXEC_HANDOFF_STANDALONE_VALIDATED"||a.state=="RUNTIME_BACKING_CHILD_EXEC_HANDOFF_STANDALONE_VALIDATED"||a.state=="RUNTIME_BACKING_EXEC_HANDOFF_CONFIRMED"||a.state=="RUNTIME_BACKING_CHILD_EXEC_HANDOFF_CONFIRMED"||a.state=="UNPACKED_VALIDATED");
+    if(unpacked_pe||reconstructed_elf||runtime_elf){
+        a.fields["runtime_candidate_format"]=unpacked_pe?"PE":"ELF";
+        a.fields["runtime_reingest_state"]="ELIGIBLE_VALIDATED_IMAGE";
+        return true;
+    }
+    // A MEMORY_DUMP is normally just a raw executable mapping.  Re-enter it
+    // only when the backend proved that the complete guarded mapping was
+    // persisted and its bytes have a self-describing native image header.
+    if(a.kind!="materialized_region"||a.state!="MEMORY_DUMP")return false;
+    const auto relation=a.fields.find("image_relation");
+    const auto backing=a.fields.find("backing_kind");
+    const bool runtime_backing=(relation!=a.fields.end()&&relation->second.rfind("runtime_created_",0)==0)||
+        (backing!=a.fields.end()&&(backing->second=="memfd"||backing->second=="tmpfile"||backing->second=="released_file"));
+    if(!runtime_backing)return false;
+    const auto complete=a.fields.find("dump_complete");
+    if(complete==a.fields.end()||complete->second!="true"){
+        a.fields["runtime_reingest_state"]="WITHHELD_INCOMPLETE_MEMORY_CAPTURE";
+        return false;
+    }
+    ec.clear();const auto size=std::filesystem::file_size(a.path,ec);
+    constexpr std::uintmax_t cap=64u*1024u*1024u;
+    if(ec||size==0||size>cap){
+        a.fields["runtime_reingest_state"]="WITHHELD_MEMORY_CAPTURE_BOUND";
+        return false;
+    }
+    const auto format=runtime_image_magic(a.path);
+    if(format.empty()){
+        a.fields["runtime_reingest_state"]="MEMORY_ONLY_NO_IMAGE_HEADER";
+        return false;
+    }
+    a.fields["runtime_candidate_format"]=format;
+    a.fields["runtime_reingest_state"]="ELIGIBLE_MAGIC_IDENTIFIED_STATIC_ONLY";
+    a.fields["runtime_reingest_validation"]="HEADER_MAGIC_ONLY_REQUIRES_CHILD_STATIC_VALIDATION";
+    return true;
 }
 
 void register_runtime_artifacts(prts::AnalysisReport&report,const std::filesystem::path&input){
-    for(const auto&a:report.runtime.artifacts){
+    for(auto&a:report.runtime.artifacts){
         if(a.path.empty())continue;
-        const bool native=a.kind=="unpacked_pe"||a.kind=="reconstructed_elf"||a.kind=="runtime_backing_elf";
+        const bool native=a.kind=="unpacked_pe"||a.kind=="reconstructed_elf"||a.kind=="runtime_backing_elf"||runtime_artifact_static_child(a);
         const bool map=a.kind=="materialization_graph";
         register_artifact_file(report,a.path,a.kind,native?"recovered_native_image":(map?"runtime_analysis_map":"runtime_materialization"),"runtime",input,native?"runtime_recovered_image":"runtime_artifact",native?"HIGH":(map?"ANALYSIS":"REVIEW"),false,true,a.state.empty()?"MATERIALIZED":a.state);
         if(map){auto it=a.fields.find("edges_path");if(it!=a.fields.end())register_artifact_file(report,std::filesystem::path(it->second),"materialization_graph_edges","runtime_analysis_map","runtime",input,"runtime_artifact","ANALYSIS",false,true,a.state.empty()?"MATERIALIZED":a.state);}
@@ -1477,8 +1543,9 @@ void analyze_runtime_children(prts::AnalysisReport&report,const std::filesystem:
     if(report.runtime.artifacts.empty())return;
     std::map<std::string,std::filesystem::path> analyzed_by_sha;
     if(!report.input_snapshot.sha256.empty())analyzed_by_sha.emplace(report.input_snapshot.sha256,input);
-    std::size_t completed=0,deduped=0,failed=0,root_reused=0;
+    std::size_t completed=0,deduped=0,failed=0,root_reused=0,magic_identified=0;
     for(auto&a:report.runtime.artifacts){
+        if(auto it=a.fields.find("runtime_reingest_state");it!=a.fields.end()&&it->second=="ELIGIBLE_MAGIC_IDENTIFIED_STATIC_ONLY")++magic_identified;
         if(!runtime_artifact_static_child(a))continue;
         if(same_regular_file(a.path,input)){
             a.fields["static_child_analysis"]="ROOT_REPORT_ALREADY_REANALYZED";a.fields["static_child_format"]=report_format_label(report);++root_reused;continue;
@@ -1490,22 +1557,23 @@ void analyze_runtime_children(prts::AnalysisReport&report,const std::filesystem:
         auto child_root=report.materialization.root/"children"/snap.sha256;
         std::string child_root_error;if(!ensure_artifact_subdirectory(report.materialization.root,child_root,child_root_error)){a.fields["static_child_analysis"]="FAILED_ARTIFACT_ROOT";a.fields["static_child_report_error"]=child_root_error;++failed;report.materialization.partial=true;report.materialization.reasons.push_back(child_root_error);continue;}
         Options child_opt=opt;child_opt.run_requested=false;child_opt.run_mode.clear();child_opt.apply=false;child_opt.run_all=false;child_opt.recursive=false;child_opt.extract=false;child_opt.artifact_graph_node=false;child_opt.artifact_root_override=child_root;
-        auto child=analyze_file(a.path,child_opt);child.artifact.graph_member=true;child.artifact.root=false;child.artifact.depth=1;child.artifact.parent=input;child.artifact.root_input=input;child.artifact.offset_basis=a.path;child.artifact.offset_space="current_input_file";child.artifact.relation="runtime_recovered_image";
+        const bool memory_reingest=a.kind=="materialized_region";
+        auto child=analyze_file(a.path,child_opt);child.artifact.graph_member=true;child.artifact.root=false;child.artifact.depth=1;child.artifact.parent=input;child.artifact.root_input=input;child.artifact.offset_basis=a.path;child.artifact.offset_space="current_input_file";child.artifact.relation=memory_reingest?"runtime_reingested_memory_image":"runtime_recovered_image";
         merge_child_artifacts(report,child);
         auto report_path=child_root/"analysis.json";std::string write_error;
         if(!write_artifact_report_json(report.materialization.root,report_path,child,write_error)){
             a.fields["static_child_analysis"]="COMPLETED_REPORT_WRITE_FAILED";a.fields["static_child_format"]=report_format_label(child);a.fields["static_child_report_error"]=write_error;++failed;report.materialization.partial=true;report.materialization.reasons.push_back(write_error);
-            register_artifact_file(report,a.path,a.kind,"recovered_native_image","runtime",input,"runtime_recovered_image","HIGH",false,true,"ANALYZED_STATIC_REPORT_WRITE_FAILED");continue;
+            register_artifact_file(report,a.path,a.kind,memory_reingest?"runtime_reingested_image":"recovered_native_image","runtime",input,memory_reingest?"runtime_reingested_memory_image":"runtime_recovered_image","HIGH",false,true,"ANALYZED_STATIC_REPORT_WRITE_FAILED");continue;
         }
         a.fields["static_child_analysis"]="COMPLETED";a.fields["static_child_format"]=report_format_label(child);a.fields["static_child_report"]=prts::path_utf8(report_path);a.fields["static_child_sha256"]=snap.sha256;
-        register_artifact_file(report,a.path,a.kind,"recovered_native_image","runtime",input,"runtime_recovered_image","HIGH",false,true,"ANALYZED_STATIC");
+        register_artifact_file(report,a.path,a.kind,memory_reingest?"runtime_reingested_image":"recovered_native_image","runtime",input,memory_reingest?"runtime_reingested_memory_image":"runtime_recovered_image","HIGH",false,true,"ANALYZED_STATIC");
         register_artifact_file(report,report_path,"analysis_report","static_child_report","auto-refirst",a.path,"analysis_of","ANALYSIS",false,true,"MATERIALIZED");++completed;
     }
     if(completed||deduped||failed||root_reused){
         prts::Finding f;f.kind="artifact";f.family="Runtime recovered artifact static analysis";f.state=failed?(completed||deduped||root_reused?"PARTIAL":"FAILED"):"CONFIRMED";
-        f.evidence.push_back("high-confidence persisted runtime recovered images are statically re-analyzed independently of --apply");
-        f.evidence.push_back("runtime-derived children are never automatically executed; --apply controls only validated transactional installation at the original input path");
-        f.fields["completed"]=std::to_string(completed);f.fields["deduplicated"]=std::to_string(deduped);f.fields["root_reused_after_apply"]=std::to_string(root_reused);f.fields["failed"]=std::to_string(failed);f.fields["artifact_root"]=prts::path_utf8(report.materialization.root);
+        f.evidence.push_back("persisted runtime images and complete runtime-created memory captures are re-identified and statically analyzed independently of runtime execution");
+        f.evidence.push_back("memory-capture admission requires a runtime backing provenance and a bounded native image header; runtime-derived children are never automatically executed");
+        f.fields["completed"]=std::to_string(completed);f.fields["deduplicated"]=std::to_string(deduped);f.fields["magic_identified_memory_captures"]=std::to_string(magic_identified);f.fields["root_reused_after_apply"]=std::to_string(root_reused);f.fields["failed"]=std::to_string(failed);f.fields["artifact_root"]=prts::path_utf8(report.materialization.root);
         if(failed)f.negative_evidence.push_back("one or more recovered runtime artifacts could not persist their mandatory static child report; see runtime artifact fields/materialization reasons");
         report.findings.push_back(std::move(f));
     }
@@ -1690,7 +1758,7 @@ prts::AnalysisReport analyze_file(const std::filesystem::path&input,const Option
             else add_validation_failure(report.findings,"Godot GDExtension descriptor",".gdextension filename extension",report.gdextension_descriptor.error.empty()?"descriptor did not pass strict configuration/libraries validation":report.gdextension_descriptor.error);
         }
         const bool unity_routed=route_unity(input,report.pe,report.static_scan);std::future<prts::UnityInfo> unity_future;if(unity_routed)unity_future=std::async(std::launch::async,[&](){return prts::detect_unity(input,mapped.bytes(),report.pe);});
-        if(report.pe.valid){auto anti=prts::detect_antidebug(mapped.bytes(),report.pe);report.findings.insert(report.findings.end(),std::make_move_iterator(anti.begin()),std::make_move_iterator(anti.end()));}
+        if(report.pe.valid){auto anti=prts::detect_antidebug(mapped.bytes(),report.pe);report.findings.insert(report.findings.end(),std::make_move_iterator(anti.begin()),std::make_move_iterator(anti.end()));auto debug_payload=prts::detect_pe_debug_payload(mapped.bytes(),report.pe);report.findings.insert(report.findings.end(),std::make_move_iterator(debug_payload.begin()),std::make_move_iterator(debug_payload.end()));}
         if(report.pe.valid){auto prereq=prts::detect_execution_prerequisites(mapped.bytes(),report.pe);report.findings.insert(report.findings.end(),std::make_move_iterator(prereq.begin()),std::make_move_iterator(prereq.end()));}
         if(report.pe.valid){auto manual=prts::detect_manual_resolvers(mapped.bytes(),report.pe);report.findings.insert(report.findings.end(),std::make_move_iterator(manual.begin()),std::make_move_iterator(manual.end()));}
         if(report.pe.valid){
