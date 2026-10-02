@@ -226,6 +226,17 @@ def trap_flag_save_restore_only() -> bytes:
     return bytes.fromhex("9c58c3")
 
 
+def rdtsc_pair_probe() -> bytes:
+    # rdtsc; mov r8,rax; rdtsc; cmp rax,1; jne +1; ret.  This deliberately
+    # leaves the delta arithmetic unresolved so it remains a weak timing clue.
+    return bytes.fromhex("0f314989c00f314883f8017501c3")
+
+
+def rdtsc_pair_without_branch() -> bytes:
+    # A pair used as a measurement with no local decision must remain quiet.
+    return bytes.fromhex("0f314989c00f31c3")
+
+
 def set_thread_context_debug_registers() -> bytes:
     # lea rdx,[rip+0x2300] (the CONTEXT pointer, second argument), then call
     # SetThreadContext through the first IAT slot.
@@ -366,6 +377,16 @@ def main() -> None:
     assert findings[0]["fields"]["branch_rva"] == "0x1007", findings
     trap_bait = run(binary, pe64(code=trap_flag_save_restore_only()))
     assert not any(x["variant"] == "RFLAGS.TrapFlag" for x in anti(trap_bait)), anti(trap_bait)
+
+    # Instruction-level timestamp probes are useful even when no timing API
+    # is imported.  Keep the result weak because profilers use the same shape.
+    rdtsc = run(binary, pe64(code=rdtsc_pair_probe()))
+    timing = [x for x in anti(rdtsc) if x["variant"] == "RDTSC timing pair"]
+    assert timing and timing[0]["fields"]["first_read_rva"] == "0x1000", timing
+    assert timing[0]["fields"]["second_read_rva"] == "0x1005", timing
+    assert timing[0]["fields"]["branch_rva"] == "0x100b", timing
+    rdtsc_bait = run(binary, pe64(code=rdtsc_pair_without_branch()))
+    assert not any(x["variant"] == "RDTSC timing pair" for x in anti(rdtsc_bait)), anti(rdtsc_bait)
 
     # SetThreadContext is also used by malware to clear or install hardware
     # breakpoints.  An imported name alone remains bait; a call whose second

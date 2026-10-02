@@ -97,7 +97,7 @@ Implemented now:
 7. `RaiseException(DBG_*)`.
 8. local exception handler + software trap correlation.
 9. QPC/GetTickCount/timeGetTime timing pairs (weak).
-10. RDTSC/RDTSCP timing pairs (weak).
+10. RDTSC/RDTSCP timing pairs (weak), with exact read/compare/branch ranges; explicit low32 delta threshold gates are reported separately by the Execution prerequisite detector.
 11. exact `FindWindowA` debugger-name arguments plus weaker uncorrelated process/window discovery.
 12. exact `GetProcAddress` anti-debug API-name arguments plus weak unresolved dynamic-resolution surfaces.
 13. `NtQuerySystemInformation(SystemKernelDebuggerInformation=35)` with internal-API caveat.
